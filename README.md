@@ -19,11 +19,9 @@
 📜 实时运行日志：控制面板内置带时间戳的实时状态日志栏，运行情况一目了然。
 
 📦 安装与使用 (Installation)首先确保你的浏览器已安装油猴插件（如 Tampermonkey）。点击访问你的脚本源码，或直接复制脚本内容。在油猴面板中新建脚本，将代码粘贴进去并保存即可。打开支持的网站（如 MissAV、Jable 视频播放页），即可在页面中看到控制面
-
 板与悬浮快捷栏。
 
 ⌨️ 默认快捷键 (Default Shortcuts)快捷键功能说明Space (空格)播放 / 暂停视频Z (可配)按住临时加速（松开恢复原速）X (可配)前进指定秒数C (可配)后退指定秒数双击视频左右侧左右两侧分别快退/快进 10 秒
 
 🎨 样式与透明度自定义 (Customization)如果你想调整 UI 的磨砂感或透明度，可以在脚本开头的 GM_addStyle 样式中修改：控制面板透明度与模糊度：修改 .custom-control-panel 中的 background（基础透明度）与 backdrop-filter: blur(4px)（背景模糊
-
 度）。悬浮快捷栏透明度与模糊度：修改 .custom-quick-controls 中的 background 与 backdrop-filter: blur(8px)。
