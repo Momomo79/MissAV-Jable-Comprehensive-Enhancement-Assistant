@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  PC端专用与环境检测、可拖拽隐藏式UI、广告清理、强大字幕加载、倍速与快进、便捷快捷键、实时日志栏、快捷控制栏
+// @version      4.0
+// @description  PC端专用、可拖拽可隐藏式UI、广告清理、强大字幕加载、倍速与快进、便捷快捷键、实时日志栏、快捷控制栏
 // @author       Momomo
 // @match        *://missav.ws/*
 // @match        *://missav.live/*
@@ -42,7 +42,11 @@
         },
         panelX: getNumber('panelX', 20, 0, 9999),
         panelY: getNumber('panelY', 100, 0, 9999),
-        isMinimized: localStorage.getItem(STORAGE + 'minimized') === 'true'
+        isMinimized: localStorage.getItem(STORAGE + 'minimized') === 'true',
+        opacity: getNumber('opacity', 0.3, 0, 1),
+        blur: getNumber('blur', 1, 0, 20),
+        hoverOpacity: getNumber('hoverOpacity', 0.9, 0, 1),
+        hoverBlur: getNumber('hoverBlur', 1, 0, 20)
     };
 
     let player = null;
@@ -53,6 +57,8 @@
     let controlPanel = null;
     let logElement = null;
     let playPauseButton = null;
+    let loopBtn = null;
+    let loopMenu = null;
 
     let subtitles = [];
     let originalSubtitleText = '';
@@ -63,6 +69,10 @@
     let playerReady = false;
     let subtitleRAF = 0;
     let quickHideTimer = 0;
+
+    let loopActive = false;
+    let loopStart = 0;
+    let loopDuration = 5;
 
     if (/^https:\/\/(missav|thisav)\.com/.test(location.href)) {
         location.replace(location.href.replace('missav.com', 'missav.live').replace('thisav.com', 'missav.live'));
@@ -110,14 +120,18 @@
         .custom-control-panel,
         .custom-control-panel * { box-sizing: border-box; }
         .custom-control-panel {
+            --ui-bg-opacity: 0.3;
+            --ui-blur: 1px;
+            --ui-hover-opacity: 0.9;
+            --ui-hover-blur: 1px;
             position: fixed;
             z-index: 99999;
             width: 310px;
             border: 1px solid rgba(255,255,255,.18);
             border-radius: 12px;
-            background: rgba(28,28,34,.3);
-            backdrop-filter: blur(1px) saturate(200%);
-            -webkit-backdrop-filter: blur(1px) saturate(200%);
+            background: rgba(28,28,34, var(--ui-bg-opacity));
+            backdrop-filter: blur(var(--ui-blur)) saturate(200%);
+            -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%);
             box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45);
             color: #f8fafc;
             font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -129,118 +143,29 @@
         }
         .custom-control-panel:hover,
         .custom-control-panel:focus-within {
-            background: rgba(28,28,34,.9);
+            background: rgba(28,28,34, var(--ui-hover-opacity));
+            backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%);
+            -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%);
             box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55);
         }
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 14px;
-            background: rgba(0,0,0,0.4);
-            cursor: move;
-            font-size: 14px;
-            font-weight: 700;
-            color: #f1f5f9;
-            border-bottom: 1px solid rgba(255,255,255,.15);
-            user-select: none;
-            letter-spacing: 0.5px;
-        }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: rgba(0,0,0,0.4); cursor: move; font-size: 14px; font-weight: 700; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; letter-spacing: 0.5px; }
         .panel-header:hover { color: #ffffff; }
-        .panel-header-btn {
-            cursor: pointer;
-            padding: 0 4px;
-            font-size: 14px;
-            text-shadow: none;
-        }
-        .panel-body {
-            padding: 12px 14px;
-        }
-        .panel-row {
-            display: flex !important;
-            flex-wrap: wrap !important;
-            justify-content: space-between !important;
-            gap: 8px 0 !important;
-            margin: 0 0 10px 0 !important;
-            width: 100% !important;
-        }
-        .input-group {
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            width: 48% !important;
-            margin: 0 !important;
-            color: #e2e8f0 !important;
-            font-size: 13px !important;
-            font-weight: 600 !important;
-            white-space: nowrap !important;
-            letter-spacing: 0.3px;
-        }
+        .panel-header-btn { cursor: pointer; padding: 0 4px; font-size: 14px; text-shadow: none; }
+        .panel-body { padding: 12px 14px; }
+        .panel-row { display: flex !important; flex-wrap: wrap !important; justify-content: space-between !important; gap: 8px 0 !important; margin: 0 0 10px 0 !important; width: 100% !important; }
+        .input-group { display: inline-flex !important; align-items: center !important; justify-content: space-between !important; width: 48% !important; margin: 0 !important; color: #e2e8f0 !important; font-size: 13px !important; font-weight: 600 !important; white-space: nowrap !important; letter-spacing: 0.3px; }
         .custom-control-panel input[type="number"]::-webkit-outer-spin-button,
         .custom-control-panel input[type="number"]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
         .custom-control-panel input[type="number"] { -moz-appearance:textfield; }
         .custom-control-panel input[type="text"],
-        .custom-control-panel input[type="number"] {
-            width: 50px;
-            height: 26px;
-            padding: 0 4px;
-            border: 1px solid rgba(255,255,255,.30);
-            border-radius: 6px;
-            outline: none;
-            background: rgba(255,255,255,.15);
-            color: #ffffff;
-            font-size: 13px;
-            font-weight: 700;
-            text-align: center;
-            text-shadow: none;
-            transition: border-color .2s;
-        }
+        .custom-control-panel input[type="number"] { width: 50px; height: 26px; padding: 0 4px; border: 1px solid rgba(255,255,255,.30); border-radius: 6px; outline: none; background: rgba(255,255,255,.15); color: #ffffff; font-size: 13px; font-weight: 700; text-align: center; text-shadow: none; transition: border-color .2s; }
         .custom-control-panel input:focus { border-color: #60a5fa; background: rgba(255,255,255,.2); }
-        .btn-group {
-            display: grid !important;
-            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-            gap: 8px !important;
-            width: 100% !important;
-        }
-        .btn-group button {
-            width: 100%;
-            min-height: 30px;
-            padding: 5px;
-            border: 1px solid rgba(255,255,255,.25);
-            border-radius: 6px;
-            background: rgba(255,255,255,.12);
-            color: #f8fafc;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.4);
-            transition: all .2s ease;
-        }
+        .btn-group { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; width: 100% !important; }
+        .btn-group button { width: 100%; min-height: 30px; padding: 5px; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; background: rgba(255,255,255,.12); color: #f8fafc; cursor: pointer; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; text-shadow: 0 1px 2px rgba(0,0,0,0.4); transition: all .2s ease; }
         .btn-group button:hover { background: rgba(255,255,255,.25); }
-        .btn-group button.btn-primary {
-            background: linear-gradient(135deg, #3b82f6, #2563eb);
-            border: 1px solid rgba(59,130,246,0.5);
-        }
+        .btn-group button.btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); border: 1px solid rgba(59,130,246,0.5); }
         .btn-group button.btn-danger { background: rgba(239,68,68,.25); color: #fecaca; border-color: rgba(239,68,68,.4); }
-        .panel-status-log {
-            margin-top: 12px;
-            padding: 8px;
-            border: 1px solid rgba(255,255,255,.15);
-            border-radius: 6px;
-            background: rgba(0,0,0,.3);
-            color: #bae6fd;
-            font-size: 11px;
-            font-weight: 500;
-            text-align: left;
-            letter-spacing: 0.5px;
-            height: 90px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            text-shadow: none;
-        }
+        .panel-status-log { margin-top: 12px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: 0.5px; height: 90px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .panel-status-log::-webkit-scrollbar { width: 4px; }
         .panel-status-log::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 2px; }
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; }
@@ -253,6 +178,23 @@
         .quick-play-btn { min-width: 80px; margin: 0 6px; background: #476a9f !important; border-radius: 17px; }
         .quick-divider { width: 1px; height: 18px; background: rgba(255,255,255,.12); margin: 0 4px; }
         .custom-subtitle { position: absolute; left: 50%; bottom: 110px; z-index: 10000; max-width: 85%; transform: translateX(-50%); color:#fff; font-size: 24px; font-weight: 700; text-shadow: -1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,2px 2px 4px rgba(0,0,0,.8); pointer-events:none; }
+        
+        .slider-row-container { display: flex; flex-direction: column; gap: 8px 0; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.15); width: 100%; transition: max-height 0.3s ease, opacity 0.3s ease, margin 0.3s ease, padding 0.3s ease; max-height: 200px; opacity: 1; overflow: hidden; }
+        .slider-row-container.hidden { max-height: 0; opacity: 0; margin-top: 0; padding-top: 0; border-top-color: transparent; }
+        .slider-group { display: inline-flex; align-items: center; justify-content: space-between; width: 100%; margin: 0; color: #e2e8f0; font-size: 12px; font-weight: 600; }
+        .slider-group label { width: 65px; flex-shrink: 0; white-space: nowrap; }
+        .slider-group input[type="range"] { flex: 1; margin: 0 8px; cursor: pointer; accent-color: #3b82f6; height: 4px; border-radius: 2px; }
+        .slider-value { width: 26px; text-align: right; font-family: monospace; font-size: 11px; flex-shrink: 0; }
+
+        .quick-loop-wrapper { position: relative; display: inline-flex; align-items: center; }
+        /* 增大循环字体（12px）并优化行高与最小宽度，确保在控制栏UI内完美显示 */
+        .quick-loop-btn { min-width: 36px !important; height: 34px !important; padding: 0 !important; display: inline-flex !important; flex-direction: column !important; align-items: center !important; justify-content: center !important; line-height: 1.0 !important; font-size: 12px !important; }
+        .quick-loop-btn span { display: block; }
+        .quick-loop-btn.active { background: rgba(59,130,246,0.4) !important; color: #60a5fa !important; }
+        .loop-menu { position: absolute; bottom: 44px; left: 50%; transform: translateX(-50%); background: rgba(20,22,30,0.95); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 6px; display: none; flex-direction: column; gap: 4px; z-index: 9991; white-space: nowrap; backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+        .loop-menu.show { display: flex; }
+        .loop-menu-btn { background: transparent; border: 0; color: #fff; padding: 6px 12px; text-align: left; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+        .loop-menu-btn:hover { background: rgba(255,255,255,0.15); color: #60a5fa; }
     `);
 
     function getVideo() { return videoElement; }
@@ -406,9 +348,6 @@
         btnSave.style.gridColumn = 'span 2';
         btnSave.onclick = () => { saveSettings(); showLog('💾 设置已保存'); };
 
-        logElement = document.createElement('div');
-        logElement.className = 'panel-status-log';
-
         subtitleInput.addEventListener('change', async event => {
             const file = event.target.files?.[0]; if (!file) return;
             try {
@@ -419,10 +358,70 @@
         });
 
         row3.append(btnLoadLocal, btnSearchWeb, btnSearchAPI, btnClear, btnSave);
-        body.append(row1, row3, logElement);
-        controlPanel.append(header, body);
 
+        const sliderRow = document.createElement('div');
+        sliderRow.className = 'slider-row-container hidden';
+
+        function applyUiStyles() {
+            if (!controlPanel) return;
+            controlPanel.style.setProperty('--ui-bg-opacity', settings.opacity);
+            controlPanel.style.setProperty('--ui-blur', settings.blur + 'px');
+            controlPanel.style.setProperty('--ui-hover-opacity', settings.hoverOpacity);
+            controlPanel.style.setProperty('--ui-hover-blur', settings.hoverBlur + 'px');
+        }
+
+        function createSlider(labelText, key, min, max, step) {
+            const group = document.createElement('div');
+            group.className = 'slider-group';
+
+            const label = document.createElement('label');
+            label.textContent = labelText;
+
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = min;
+            slider.max = max;
+            slider.step = step;
+            slider.value = settings[key];
+
+            const val = document.createElement('span');
+            val.className = 'slider-value';
+            val.textContent = settings[key];
+
+            slider.addEventListener('input', e => {
+                settings[key] = Number.parseFloat(e.target.value);
+                val.textContent = settings[key];
+                applyUiStyles();
+            });
+
+            group.append(label, slider, val);
+            return group;
+        }
+
+        sliderRow.append(
+            createSlider('常规透明', 'opacity', 0, 1, 0.05),
+            createSlider('常规磨砂', 'blur', 0, 20, 1),
+            createSlider('悬浮透明', 'hoverOpacity', 0, 1, 0.05),
+            createSlider('悬浮磨砂', 'hoverBlur', 0, 20, 1)
+        );
+
+        const toggleSliderBtn = createButton('👁 隐藏/显示透明UI设置', 'btn-primary');
+        toggleSliderBtn.style.width = '100%';
+        toggleSliderBtn.style.marginTop = '12px';
+        toggleSliderBtn.style.marginBottom = '2px';
+        toggleSliderBtn.onclick = () => {
+            sliderRow.classList.toggle('hidden');
+        };
+
+        logElement = document.createElement('div');
+        logElement.className = 'panel-status-log';
+
+        body.append(row1, row3, toggleSliderBtn, sliderRow, logElement);
+        controlPanel.append(header, body);
+        
         document.body.appendChild(controlPanel);
+        
+        applyUiStyles();
 
         makeDraggable(controlPanel, header);
         showLog('▶️ 系统初始化完成');
@@ -435,14 +434,14 @@
         controls.classList.add('quick-visible');
         clearTimeout(quickHideTimer);
         quickHideTimer = setTimeout(() => {
-            if (!controls.matches(':hover') && !controls.contains(document.activeElement)) {
+            if (!controls.matches(':hover') && !controls.contains(document.activeElement) && !loopMenu?.classList.contains('show')) {
                 controls.classList.remove('quick-visible');
             }
         }, 2200);
     }
 
     function hideQuickControls() {
-        if (!videoContainer) return;
+        if (!videoContainer || loopMenu?.classList.contains('show')) return;
         const controls = videoContainer.querySelector('.custom-quick-controls');
         if (!controls) return;
         clearTimeout(quickHideTimer);
@@ -458,8 +457,28 @@
         const controls = videoContainer.querySelector('.custom-quick-controls');
         if (controls) {
             controls.addEventListener('mouseenter', () => { clearTimeout(quickHideTimer); controls.classList.add('quick-visible'); });
-            controls.addEventListener('mouseleave', () => { quickHideTimer = setTimeout(hideQuickControls, 800); });
+            controls.addEventListener('mouseleave', () => { if (!loopMenu?.classList.contains('show')) quickHideTimer = setTimeout(hideQuickControls, 800); });
         }
+    }
+
+    function startLoop(seconds) {
+        if (!videoElement) return;
+        loopStart = videoElement.currentTime;
+        loopDuration = seconds;
+        loopActive = true;
+        loopBtn.classList.add('active');
+        const timeText = seconds >= 60 ? (seconds / 60) + 'm' : seconds + 's';
+        loopBtn.innerHTML = `<span>循</span><span>${timeText}</span>`;
+        loopMenu.classList.remove('show');
+        showLog(`🔂 已开启区间循环：从当前起 ${seconds >= 60 ? (seconds / 60) + '分钟' : seconds + '秒'}`);
+    }
+
+    function stopLoop() {
+        loopActive = false;
+        loopBtn.classList.remove('active');
+        loopBtn.innerHTML = '<span>循</span><span>环</span>';
+        loopMenu.classList.remove('show');
+        showLog('⏹️ 已关闭区间循环');
     }
 
     function createPlayerQuickControls() {
@@ -486,6 +505,53 @@
 
         jumpGroup.appendChild(Object.assign(document.createElement('span'), {className: 'quick-divider'}));
         rightButtons.forEach(item => appendJumpButton(item, 'forward'));
+
+        const loopWrapper = document.createElement('div');
+        loopWrapper.className = 'quick-loop-wrapper';
+        jumpGroup.appendChild(Object.assign(document.createElement('span'), {className: 'quick-divider'}));
+
+        loopBtn = createButton('', 'quick-btn quick-loop-btn');
+        loopBtn.innerHTML = '<span>循</span><span>环</span>';
+        loopBtn.onclick = event => {
+            event.stopPropagation();
+            if (loopActive) {
+                stopLoop();
+            } else {
+                loopMenu.classList.toggle('show');
+            }
+        };
+
+        loopMenu = document.createElement('div');
+        loopMenu.className = 'loop-menu';
+
+        const addMenuOption = (text, onClick) => {
+            const opt = createButton(text, 'loop-menu-btn');
+            opt.onclick = e => { e.stopPropagation(); onClick(); };
+            loopMenu.appendChild(opt);
+        };
+
+        addMenuOption('5秒循环', () => startLoop(5));
+        addMenuOption('10秒循环', () => startLoop(10));
+        addMenuOption('1分钟循环', () => startLoop(60));
+        addMenuOption('自定义时间...', () => {
+            const input = prompt('请输入自定义循环时间（秒）:', '15');
+            const sec = Number.parseFloat(input);
+            if (Number.isFinite(sec) && sec > 0) {
+                startLoop(sec);
+            } else if (input !== null) {
+                showLog('⚠️ 输入无效');
+            }
+        });
+        addMenuOption('关闭循环', () => stopLoop());
+
+        loopWrapper.append(loopBtn, loopMenu);
+        jumpGroup.appendChild(loopWrapper);
+
+        document.addEventListener('click', e => {
+            if (loopMenu && !loopWrapper.contains(e.target)) {
+                loopMenu.classList.remove('show');
+            }
+        });
 
         quickControls.appendChild(jumpGroup);
         videoContainer.appendChild(quickControls);
@@ -576,7 +642,16 @@
     }
 
     function updateSubtitle(forceUpdate = false) {
-        if (!subtitles.length || !subtitleElement || !videoElement) return;
+        if (!videoElement) return;
+
+        if (loopActive) {
+            const currentTime = videoElement.currentTime;
+            if (currentTime >= loopStart + loopDuration || currentTime < loopStart) {
+                videoElement.currentTime = loopStart;
+            }
+        }
+
+        if (!subtitles.length || !subtitleElement) return;
         const currentTime = getCurrentTime();
         let sub = null;
         if (currentSubIndex >= 0 && currentSubIndex < subtitles.length) {
@@ -686,15 +761,6 @@
         document.body.appendChild(subtitleList);
     }
 
-    async function loadRemoteSubtitle(url) {
-        showLog('⏳ 正在下载字幕...');
-        try {
-            const content = await requestText(url, 15000); originalSubtitleText = content;
-            subtitles = await parseSRT(content); currentSubIndex = -1; activeSubText = ''; updateSubtitle(true);
-            subtitleList?.remove(); subtitleList = null; showLog(`✅ 在线字幕加载成功`);
-        } catch (error) { showLog(`❌ 下载失败`); }
-    }
-
     function saveSettings() {
         ['accRate','skipTime','offset'].forEach(k => localStorage.setItem(STORAGE + k, settings[k + (k==='accRate'?'elerationRate':'')]));
         localStorage.setItem(STORAGE + 'accRate', String(settings.accelerationRate));
@@ -703,6 +769,10 @@
         localStorage.setItem(STORAGE + 'keyAcc', settings.shortcutKeys.accelerate);
         localStorage.setItem(STORAGE + 'keyFwd', settings.shortcutKeys.forward);
         localStorage.setItem(STORAGE + 'keyBwd', settings.shortcutKeys.backward);
+        localStorage.setItem(STORAGE + 'opacity', String(settings.opacity));
+        localStorage.setItem(STORAGE + 'blur', String(settings.blur));
+        localStorage.setItem(STORAGE + 'hoverOpacity', String(settings.hoverOpacity));
+        localStorage.setItem(STORAGE + 'hoverBlur', String(settings.hoverBlur));
     }
 
     function removeAds() {
