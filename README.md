@@ -1,6 +1,6 @@
 # 🚀 MissAV & Jable 综合增强助手
 
-![Version](https://img.shields.io/badge/version-3.5-blue.svg)
+![Version](https://img.shields.io/badge/version-4.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-PC%20(Desktop)-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -56,9 +56,3 @@
 *   **MissAV**: `missav.ws` / `missav.live` / `missav.ai` / `missav.fans` / `missav.media` 等
 *   **Jable**: `jable.tv/videos/*`
 *   **ThisAV**: 自动重定向并支持
-
----
-
-## 📄 License
-
-本项目采用 [MIT License](LICENSE) 开源协议。
