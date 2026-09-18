@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      6.0
+// @version      7.0
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按视频记忆、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -21,9 +21,12 @@
 // @run-at       document-start
 // @noframes
 // @license      MIT
+// @downloadURL  https://update.greasyfork.org/scripts/000000/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.user.js
+// @updateURL    https://update.greasyfork.org/scripts/000000/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.meta.js
 // ==/UserScript==
 (function () {
     'use strict';
+    try {
     const STORAGE_PREFIX = 'avSub:';
     const IS_JABLE = location.hostname.includes('jable');
     const POLL_INTERVAL = 400;
@@ -201,7 +204,9 @@
         loopStart: 0,
         loopDuration: 5,
         adObserver: null,
-        videoID: null
+        videoID: null,
+        uiLayer: null,
+        headerTimer: 0
     };
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
@@ -268,6 +273,15 @@
         logEl.scrollTop = logEl.scrollHeight;
     }
     GM_addStyle(`
+        .custom-ui-layer {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483600;
+            pointer-events: none;
+            display: block;
+        }
+        .custom-ui-layer > * { pointer-events: auto; }
+        .custom-ui-layer .custom-control-panel { position: fixed; }
         .custom-control-panel,
         .custom-control-panel * { box-sizing: border-box; }
         .custom-control-panel {
@@ -298,7 +312,9 @@
             -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%);
             box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55);
         }
-        .panel-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(0,0,0,.4); cursor: move; font-size: 14px; font-weight: 700; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; letter-spacing: .5px; }
+        .panel-header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(0,0,0,.4); cursor: move; font-size: 14px; font-weight: 700; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; letter-spacing: .5px; }
+        .custom-control-panel.panel-dragging { transition: none; }
+        .custom-control-panel.panel-dragging .panel-header { cursor: grabbing; background: rgba(59,130,246,.35); }
         .panel-header:hover { color: #fff; }
         .panel-header-btn { cursor: pointer; padding: 0 4px; font-size: 14px; text-shadow: none; }
         .panel-header-btn:hover { color: #60a5fa; }
@@ -318,6 +334,8 @@
         .btn-group button:hover { background: rgba(255,255,255,.25); }
         .btn-group button.btn-primary { background: linear-gradient(135deg,#3b82f6,#2563eb); border-color: rgba(59,130,246,.5); }
         .btn-group button.btn-danger { background: rgba(239,68,68,.25); color: #fecaca; border-color: rgba(239,68,68,.4); }
+        .btn-group button.btn-ghost { background: rgba(148,163,184,.18); color: #e2e8f0; border-color: rgba(148,163,184,.32); }
+        .btn-group button.btn-ghost:hover { background: rgba(148,163,184,.3); }
         .panel-full-btn { width: 100%; margin-top: 12px; }
         .panel-status-log { margin-top: 12px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .panel-status-log::-webkit-scrollbar { width: 4px; }
@@ -421,34 +439,144 @@
         group.append(label, input);
         return group;
     }
+    function getUiLayer() {
+        if (state.uiLayer?.isConnected) return state.uiLayer;
+        const layer = document.createElement('div');
+        layer.className = 'custom-ui-layer';
+        layer.setAttribute?.('data-av-helper', 'layer');
+        (document.body || document.documentElement).appendChild(layer);
+        state.uiLayer = layer;
+        return layer;
+    }
+    function measureSiteHeaderHeight() {
+        let safe = 0;
+        for (const node of document.querySelectorAll('body > *, #app > *, .fixed, [class*="fixed"], [class*="sticky"], header, nav')) {
+            if (!(node instanceof HTMLElement)) continue;
+            if (node.closest('.custom-ui-layer')) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.height < 12 || rect.height > 220) continue;
+            if (rect.top > 8 || rect.width < window.innerWidth * 0.6) continue;
+            let style = null;
+            try {
+                style = getComputedStyle(node);
+            } catch (_) {
+                continue;
+            }
+            if (!style || (style.position !== 'fixed' && style.position !== 'sticky')) continue;
+            if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) continue;
+            safe = Math.max(safe, rect.bottom);
+        }
+        return Math.round(safe);
+    }
+    function clampPanelPosition(panel = state.panel) {
+        if (!panel) return;
+        const width = panel.offsetWidth || PANEL_WIDTH;
+        const height = panel.offsetHeight || 60;
+        const maxX = Math.max(0, window.innerWidth - width);
+        const maxY = Math.max(0, window.innerHeight - height);
+        const top = clamp(panel.offsetTop || settings.panelY, 0, maxY);
+        panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, 0, maxX)}px`;
+        panel.style.top = `${top}px`;
+    }
+    function nudgePanelIntoView() {
+        const panel = state.panel;
+        if (!panel) return false;
+        if (panel.classList.contains('panel-dragging')) return false;
+        const header = panel.querySelector('.panel-header');
+        if (!header) return false;
+        const rect = header.getBoundingClientRect();
+        const guard = measureSiteHeaderHeight();
+        if (rect.top >= guard && rect.bottom <= window.innerHeight) return false;
+        const targetY = clamp(guard + 8, 0, Math.max(0, window.innerHeight - panel.offsetHeight));
+        panel.style.top = `${targetY}px`;
+        settings.panelY = targetY;
+        store.set('panelY', targetY);
+        return true;
+    }
+    function installHeaderGuard() {
+        if (state.headerTimer) return;
+        const run = throttle(() => {
+            if (!state.panel?.isConnected) {
+                clearInterval(state.headerTimer);
+                state.headerTimer = 0;
+                return;
+            }
+            if (nudgePanelIntoView()) log('📌 面板已自动避开站点顶栏');
+        }, MUTATION_THROTTLE);
+        window.addEventListener('scroll', run, { passive: true });
+        window.addEventListener('resize', run, { passive: true });
+        state.headerTimer = setInterval(run, 1500);
+        if (typeof state.headerTimer?.unref === 'function') state.headerTimer.unref();
+    }
     function makeDraggable(element, handle) {
         let originX = 0;
         let originY = 0;
         let startX = 0;
         let startY = 0;
+        let moved = false;
         const onMove = event => {
-            event.preventDefault();
+            if (event.buttons === 0) {
+                onUp();
+                return;
+            }
+            moved = true;
             const maxX = Math.max(0, window.innerWidth - element.offsetWidth);
             const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
+            const minY = Math.min(measureSiteHeaderHeight(), maxY);
             element.style.left = `${clamp(originX + event.clientX - startX, 0, maxX)}px`;
-            element.style.top = `${clamp(originY + event.clientY - startY, 0, maxY)}px`;
+            element.style.top = `${clamp(originY + event.clientY - startY, minY, maxY)}px`;
         };
         const onUp = () => {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            store.set('panelX', element.offsetLeft);
-            store.set('panelY', element.offsetTop);
+            document.removeEventListener('mousemove', onMove, true);
+            document.removeEventListener('mouseup', onUp, true);
+            if (moved) {
+                store.set('panelX', element.offsetLeft);
+                store.set('panelY', element.offsetTop);
+                element.classList.remove('panel-dragging');
+            }
+            moved = false;
         };
         handle.addEventListener('mousedown', event => {
             if (event.button !== 0) return;
+            if (event.target.closest('.panel-header-btn')) return;
             event.preventDefault();
+            element.classList.add('panel-dragging');
             originX = element.offsetLeft;
             originY = element.offsetTop;
             startX = event.clientX;
             startY = event.clientY;
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
+            moved = false;
+            document.addEventListener('mousemove', onMove, true);
+            document.addEventListener('mouseup', onUp, true);
         });
+        handle.addEventListener('touchstart', event => {
+            const touch = event.touches[0];
+            if (!touch) return;
+            if (event.target.closest('.panel-header-btn')) return;
+            element.classList.add('panel-dragging');
+            originX = element.offsetLeft;
+            originY = element.offsetTop;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            const onTouchMove = moveEvent => {
+                const point = moveEvent.touches[0];
+                if (!point) return;
+                moveEvent.preventDefault();
+                const maxX = Math.max(0, window.innerWidth - element.offsetWidth);
+                const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
+                element.style.left = `${clamp(originX + point.clientX - startX, 0, maxX)}px`;
+                element.style.top = `${clamp(originY + point.clientY - startY, 0, maxY)}px`;
+            };
+            const onTouchEnd = () => {
+                document.removeEventListener('touchmove', onTouchMove);
+                document.removeEventListener('touchend', onTouchEnd);
+                store.set('panelX', element.offsetLeft);
+                store.set('panelY', element.offsetTop);
+                element.classList.remove('panel-dragging');
+            };
+            document.addEventListener('touchmove', onTouchMove, { passive: false });
+            document.addEventListener('touchend', onTouchEnd);
+        }, { passive: true });
     }
     function createPanel() {
         if (state.panel || document.querySelector('.custom-control-panel')) return;
@@ -558,7 +686,18 @@
                 log('❌ 字幕读取失败');
             }
         });
-        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnForget, btnSave);
+        const resetPosBtn = createButton('重置面板位置', 'btn-ghost');
+        resetPosBtn.addEventListener('click', () => {
+            const targetY = Math.max(measureSiteHeaderHeight() + 8, 88);
+            settings.panelX = 20;
+            settings.panelY = targetY;
+            panel.style.left = '20px';
+            panel.style.top = `${targetY}px`;
+            store.set('panelX', 20);
+            store.set('panelY', targetY);
+            log('面板已复位到左上角');
+        });
+        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnForget, resetPosBtn, btnSave);
         const sliderRow = document.createElement('div');
         sliderRow.className = 'slider-row-container';
         sliderRow.hidden = true;
@@ -607,9 +746,12 @@
         state.logEl.className = 'panel-status-log';
         body.append(keysRow, actionRow, toggleSliderBtn, sliderRow, state.logEl);
         panel.append(header, body);
-        document.body.appendChild(panel);
+        getUiLayer().appendChild(panel);
         applyUiStyles();
         makeDraggable(panel, header);
+        clampPanelPosition(panel);
+        nudgePanelIntoView();
+        installHeaderGuard();
         log('▶️ 系统初始化完成');
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
@@ -1157,14 +1299,55 @@
         clickPlayEntry();
         startAdObserver();
     }
+    function installSpaWatch() {
+        let lastUrl = location.href;
+        let timer = 0;
+        const handleRouteChange = () => {
+            if (location.href === lastUrl) return;
+            lastUrl = location.href;
+            log('🔀 页面已切换，重新初始化播放器');
+            closeSubtitlePicker();
+            state.videoID = null;
+            state.player = null;
+            state.video = null;
+            stopPlayerPoll();
+            setTimeout(() => {
+                initPlayer();
+                clickPlayEntry();
+            }, 600);
+        };
+        const onRouteChange = () => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = 0;
+                handleRouteChange();
+            }, 400);
+        };
+        window.addEventListener('popstate', onRouteChange, { passive: true });
+        window.addEventListener('hashchange', onRouteChange, { passive: true });
+        for (const method of ['pushState', 'replaceState']) {
+            const original = history[method];
+            if (typeof original !== 'function') continue;
+            history[method] = function (...args) {
+                const result = original.apply(this, args);
+                onRouteChange();
+                return result;
+            };
+        }
+    }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initPage, { once: true });
     } else {
         initPage();
     }
+    installSpaWatch();
     window.addEventListener('beforeunload', () => {
         state.adObserver?.disconnect();
         stopPlayerPoll();
         cancelAnimationFrame(state.subtitleRAF);
+        clearInterval(state.headerTimer);
     }, { once: true });
+    } catch (error) {
+        console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
+    }
 })();
