@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      7.5
-// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按视频记忆、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      8.0
+// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
 // @match        *://missav.live/*
@@ -124,10 +124,12 @@
             }
         }
     };
+    const SITE_TAG = IS_JABLE ? 'jable' : 'missav';
+    const siteOffsetKey = () => `offset@${SITE_TAG}`;
     const settings = {
         accelerationRate: store.getNumber('accelerationRate', 3, SPEED_MIN, SPEED_MAX),
         skipTime: store.getNumber('skipTime', 5, SKIP_MIN, SKIP_MAX),
-        subtitleOffset: store.getNumber('subtitleOffset', 0, OFFSET_MIN, OFFSET_MAX),
+        subtitleOffset: store.getNumber(siteOffsetKey(), 0, OFFSET_MIN, OFFSET_MAX),
         subtitleFontSize: store.getNumber('subtitleFontSize', 24, FONT_SIZE_MIN, FONT_SIZE_MAX),
         subtitleBottom: store.getNumber('subtitleBottom', 10, SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX),
         panelX: store.getNumber('panelX', 20, 0, 99999),
@@ -143,27 +145,10 @@
             backward: store.getKeyName('keyBackward', 'c')
         }
     };
-    const offsetKeyFor = videoID => (videoID ? `offset:${videoID}` : '');
-    function loadOffsetForVideo(videoID) {
-        const fallback = store.getNumber('subtitleOffset', 0, OFFSET_MIN, OFFSET_MAX);
-        if (!videoID) return fallback;
-        const parsed = Number.parseFloat(store.get(offsetKeyFor(videoID)));
-        return Number.isFinite(parsed) ? clamp(parsed, OFFSET_MIN, OFFSET_MAX) : fallback;
-    }
-    function saveOffsetForVideo(videoID, offset) {
-        store.set('subtitleOffset', offset);
-        if (videoID) store.set(offsetKeyFor(videoID), offset);
-    }
-    function forgetOffsetForVideo(videoID) {
-        if (!videoID) return false;
-        if (store.get(offsetKeyFor(videoID)) === null) return false;
-        store.remove(offsetKeyFor(videoID));
-        return true;
-    }
     function persistSettings() {
         store.set('accelerationRate', settings.accelerationRate);
         store.set('skipTime', settings.skipTime);
-        store.set('subtitleOffset', settings.subtitleOffset);
+        store.set(siteOffsetKey(), settings.subtitleOffset);
         store.set('subtitleFontSize', settings.subtitleFontSize);
         store.set('subtitleBottom', settings.subtitleBottom);
         store.set('keyAccelerate', settings.keys.accelerate);
@@ -204,7 +189,6 @@
         loopStart: 0,
         loopDuration: 5,
         adObserver: null,
-        videoID: null,
         uiLayer: null
     };
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
@@ -597,27 +581,18 @@
         const btnAPI = createButton('API搜字幕');
         const btnClear = createButton('清除字幕', 'btn-danger');
         const btnSave = createButton('保存设置', 'btn-primary');
-        const btnForget = createButton('重置本片偏移', 'btn-danger');
+        const btnResetOffset = createButton('重置本站偏移', 'btn-danger');
         btnSave.style.gridColumn = 'span 2';
         btnLocal.addEventListener('click', () => fileInput.click());
         btnWeb.addEventListener('click', searchSubtitleWeb);
         btnAPI.addEventListener('click', searchSubtitleAPI);
         btnClear.addEventListener('click', clearSubtitles);
-        btnForget.addEventListener('click', () => {
-            const hadRecord = forgetOffsetForVideo(state.videoID);
-            if (!state.videoID) {
-                log('⚠️ 无法识别视频ID，仅重置本次偏移');
-            } else if (hadRecord) {
-                log(`🧹 已清除 ${state.videoID} 的专属偏移`);
-            } else {
-                log(`ℹ️ ${state.videoID} 没有保存过专属偏移`);
-            }
-            settings.subtitleOffset = 0;
-            state.cueCursor = -1;
-            store.set('subtitleOffset', 0);
-            if (state.videoID && hadRecord) store.remove(offsetKeyFor(state.videoID));
-            renderSubtitle(true);
+        btnResetOffset.addEventListener('click', () => {
+            const siteName = IS_JABLE ? 'Jable' : 'MissAV';
+            applySubtitleOffset(0);
             offsetInput.value = 0;
+            store.remove(siteOffsetKey());
+            log(`🧹 已重置 ${siteName} 本站偏移为 0`);
         });
         btnSave.addEventListener('click', () => {
             persistSettings();
@@ -645,7 +620,7 @@
             store.set('panelY', targetY);
             log('面板已复位到左上角');
         });
-        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnForget, resetPosBtn, btnSave);
+        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, btnSave);
         const sliderRow = document.createElement('div');
         sliderRow.className = 'slider-row-container';
         sliderRow.hidden = true;
@@ -973,7 +948,6 @@
     function applySubtitleOffset(offset) {
         settings.subtitleOffset = offset;
         state.cueCursor = -1;
-        saveOffsetForVideo(state.videoID, offset);
         renderSubtitle(true);
     }
     function applySubtitleStyle() {
@@ -1198,8 +1172,6 @@
         state.container = container;
         state.bound = true;
         state.player = (typeof unsafeWindow !== 'undefined' && unsafeWindow.player) || video.plyr || video;
-        state.videoID = getCurrentVideoID();
-        settings.subtitleOffset = loadOffsetForVideo(state.videoID);
         state.subtitleEl = document.createElement('div');
         state.subtitleEl.className = 'custom-subtitle';
         state.subtitleEl.style.display = 'none';
@@ -1239,7 +1211,6 @@
             lastUrl = location.href;
             log('🔀 页面已切换，重新初始化播放器');
             closeSubtitlePicker();
-            state.videoID = null;
             state.player = null;
             state.video = null;
             stopPlayerPoll();
