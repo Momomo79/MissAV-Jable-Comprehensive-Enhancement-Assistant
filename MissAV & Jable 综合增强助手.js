@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      7.0
+// @version      7.5
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按视频记忆、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -205,8 +205,7 @@
         loopDuration: 5,
         adObserver: null,
         videoID: null,
-        uiLayer: null,
-        headerTimer: 0
+        uiLayer: null
     };
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
@@ -448,26 +447,6 @@
         state.uiLayer = layer;
         return layer;
     }
-    function measureSiteHeaderHeight() {
-        let safe = 0;
-        for (const node of document.querySelectorAll('body > *, #app > *, .fixed, [class*="fixed"], [class*="sticky"], header, nav')) {
-            if (!(node instanceof HTMLElement)) continue;
-            if (node.closest('.custom-ui-layer')) continue;
-            const rect = node.getBoundingClientRect();
-            if (rect.height < 12 || rect.height > 220) continue;
-            if (rect.top > 8 || rect.width < window.innerWidth * 0.6) continue;
-            let style = null;
-            try {
-                style = getComputedStyle(node);
-            } catch (_) {
-                continue;
-            }
-            if (!style || (style.position !== 'fixed' && style.position !== 'sticky')) continue;
-            if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) continue;
-            safe = Math.max(safe, rect.bottom);
-        }
-        return Math.round(safe);
-    }
     function clampPanelPosition(panel = state.panel) {
         if (!panel) return;
         const width = panel.offsetWidth || PANEL_WIDTH;
@@ -477,36 +456,6 @@
         const top = clamp(panel.offsetTop || settings.panelY, 0, maxY);
         panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, 0, maxX)}px`;
         panel.style.top = `${top}px`;
-    }
-    function nudgePanelIntoView() {
-        const panel = state.panel;
-        if (!panel) return false;
-        if (panel.classList.contains('panel-dragging')) return false;
-        const header = panel.querySelector('.panel-header');
-        if (!header) return false;
-        const rect = header.getBoundingClientRect();
-        const guard = measureSiteHeaderHeight();
-        if (rect.top >= guard && rect.bottom <= window.innerHeight) return false;
-        const targetY = clamp(guard + 8, 0, Math.max(0, window.innerHeight - panel.offsetHeight));
-        panel.style.top = `${targetY}px`;
-        settings.panelY = targetY;
-        store.set('panelY', targetY);
-        return true;
-    }
-    function installHeaderGuard() {
-        if (state.headerTimer) return;
-        const run = throttle(() => {
-            if (!state.panel?.isConnected) {
-                clearInterval(state.headerTimer);
-                state.headerTimer = 0;
-                return;
-            }
-            if (nudgePanelIntoView()) log('📌 面板已自动避开站点顶栏');
-        }, MUTATION_THROTTLE);
-        window.addEventListener('scroll', run, { passive: true });
-        window.addEventListener('resize', run, { passive: true });
-        state.headerTimer = setInterval(run, 1500);
-        if (typeof state.headerTimer?.unref === 'function') state.headerTimer.unref();
     }
     function makeDraggable(element, handle) {
         let originX = 0;
@@ -522,9 +471,8 @@
             moved = true;
             const maxX = Math.max(0, window.innerWidth - element.offsetWidth);
             const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
-            const minY = Math.min(measureSiteHeaderHeight(), maxY);
             element.style.left = `${clamp(originX + event.clientX - startX, 0, maxX)}px`;
-            element.style.top = `${clamp(originY + event.clientY - startY, minY, maxY)}px`;
+            element.style.top = `${clamp(originY + event.clientY - startY, 0, maxY)}px`;
         };
         const onUp = () => {
             document.removeEventListener('mousemove', onMove, true);
@@ -688,7 +636,7 @@
         });
         const resetPosBtn = createButton('重置面板位置', 'btn-ghost');
         resetPosBtn.addEventListener('click', () => {
-            const targetY = Math.max(measureSiteHeaderHeight() + 8, 88);
+            const targetY = 88;
             settings.panelX = 20;
             settings.panelY = targetY;
             panel.style.left = '20px';
@@ -750,8 +698,6 @@
         applyUiStyles();
         makeDraggable(panel, header);
         clampPanelPosition(panel);
-        nudgePanelIntoView();
-        installHeaderGuard();
         log('▶️ 系统初始化完成');
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
@@ -944,18 +890,6 @@
             if (event.key.toLowerCase() !== settings.keys.accelerate) return;
             if (state.video) state.video.playbackRate = state.speedBeforeAccelerate;
             state.acceleratePressed = false;
-        });
-    }
-    function setupDoubleClickSeek() {
-        const video = state.video;
-        if (!video || video.dataset.quickSeekBound === '1') return;
-        video.dataset.quickSeekBound = '1';
-        video.addEventListener('dblclick', event => {
-            const rect = video.getBoundingClientRect();
-            if (!rect.width) return;
-            const isBackward = event.clientX - rect.left < rect.width / 2;
-            seek(isBackward ? -10 : 10);
-            log(isBackward ? '⏪ 双击：-10 秒' : '⏩ 双击：+10 秒');
         });
     }
     function parseTimestamp(raw) {
@@ -1274,7 +1208,6 @@
         createPanel();
         createQuickControls();
         setupShortcuts();
-        setupDoubleClickSeek();
         for (const type of ['play', 'pause', 'ended', 'loadedmetadata', 'ratechange', 'seeked']) {
             video.addEventListener(type, updatePlayPauseButton, { passive: true });
         }
@@ -1301,7 +1234,6 @@
     }
     function installSpaWatch() {
         let lastUrl = location.href;
-        let timer = 0;
         const handleRouteChange = () => {
             if (location.href === lastUrl) return;
             lastUrl = location.href;
@@ -1316,13 +1248,7 @@
                 clickPlayEntry();
             }, 600);
         };
-        const onRouteChange = () => {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(() => {
-                timer = 0;
-                handleRouteChange();
-            }, 400);
-        };
+        const onRouteChange = debounce(handleRouteChange, 400);
         window.addEventListener('popstate', onRouteChange, { passive: true });
         window.addEventListener('hashchange', onRouteChange, { passive: true });
         for (const method of ['pushState', 'replaceState']) {
@@ -1345,7 +1271,6 @@
         state.adObserver?.disconnect();
         stopPlayerPoll();
         cancelAnimationFrame(state.subtitleRAF);
-        clearInterval(state.headerTimer);
     }, { once: true });
     } catch (error) {
         console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
