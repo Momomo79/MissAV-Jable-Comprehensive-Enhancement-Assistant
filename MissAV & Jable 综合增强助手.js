@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      9.0
+// @version      9.2
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -18,6 +18,8 @@
 // @grant        GM_openInTab
 // @grant        unsafeWindow
 // @connect      xunlei.com
+// @connect      geilijiasu.com
+// @connect      subtitle.v.geilijiasu.com
 // @connect      jdforrepam.com
 // @connect      javbus.com
 // @connect      www.javbus.com
@@ -350,6 +352,8 @@
         subtitleBottom: store.getNumber('subtitleBottom', 10, SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX),
         panelX: store.getNumber('panelX', 20, 0, 99999),
         panelY: store.getNumber('panelY', 100, 0, 99999),
+        pickerX: store.getNumber('pickerX', NaN, 0, 99999),
+        pickerY: store.getNumber('pickerY', NaN, 0, 99999),
         isMinimized: store.getBool('isMinimized'),
         opacity: store.getNumber('opacity', 0.3, 0, 1),
         blur: store.getNumber('blur', 1, 0, 20),
@@ -410,6 +414,10 @@
         loopDuration: 5,
         adObserver: null,
         uiLayer: null,
+        pickerLayer: null,
+        subtitleBanner: null,
+        subtitleFileName: '',
+        subtitleCueCount: 0,
         hudHost: null,
         hudEl: null,
         holdTimer: 0,
@@ -499,7 +507,19 @@
             z-index: 2147483600;
             pointer-events: none;
             display: block;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            transform: none;
+            filter: none;
+            animation: none;
+            clip: auto;
+            clip-path: none;
+            opacity: 1;
+            isolation: auto;
         }
+        .custom-ui-layer.custom-ui-layer-top { z-index: 2147483646; }
         .custom-ui-layer > * { pointer-events: auto; }
         .custom-ui-layer .custom-control-panel { position: fixed; }
         .custom-control-panel,
@@ -593,8 +613,16 @@
         .loop-menu.show { display: flex; }
         .loop-menu-btn { background: transparent; border: 0; color: #fff; padding: 6px 12px; text-align: left; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; }
         .loop-menu-btn:hover { background: rgba(255,255,255,.15); color: #60a5fa; }
-        .subtitle-picker { position: fixed; left: 15px; bottom: 175px; z-index: 10001; min-width: 320px; max-height: 280px; overflow-y: auto; padding: 12px; border-radius: 12px; background: rgba(20,22,30,.92); color: #fff; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; backdrop-filter: blur(6px); box-shadow: 0 12px 32px rgba(0,0,0,.5); }
-        .subtitle-picker-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-bottom: 6px; }
+        .subtitle-picker { position: fixed; left: 15px; top: 40%; z-index: 1; min-width: 320px; max-width: min(560px, 92vw); max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border-radius: 12px; --ui-bg-opacity: .3; --ui-blur: 1px; --ui-hover-opacity: .9; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45); color: #f8fafc; font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); transition: background .2s ease, box-shadow .2s ease; pointer-events: auto; contain: layout style; }
+        .subtitle-picker:hover, .subtitle-picker:focus-within { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55); }
+        .subtitle-picker.panel-dragging { transition: none; }
+        .subtitle-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; display: flex; align-items: center; gap: 8px; max-width: min(680px, 88vw); padding: 7px 14px; border-radius: 9999px; --ui-bg-opacity: .35; --ui-blur: 1px; --ui-hover-opacity: .9; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 8px 24px rgba(0,0,0,.45); color: #f8fafc; font: 12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); cursor: pointer; user-select: none; pointer-events: auto; transition: background .2s ease; }
+        .subtitle-banner:hover { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); }
+        .subtitle-banner-icon { flex: 0 0 auto; }
+        .subtitle-banner-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #93c5fd; }
+        .subtitle-banner-meta { flex: 0 0 auto; color: #94a3b8; font-variant-numeric: tabular-nums; }
+        .subtitle-banner.expanded .subtitle-banner-name { white-space: normal; word-break: break-all; }
+        .subtitle-picker-header { position: sticky; top: -12px; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: -12px -12px 0; padding: 12px 12px 8px; background: rgba(0,0,0,.4); border-bottom: 1px solid rgba(255,255,255,.15); border-radius: 12px 12px 0 0; cursor: move; user-select: none; }
         .subtitle-picker-title { color: #60a5fa; font-weight: 700; }
         .subtitle-picker-close { cursor: pointer; color: #94a3b8; }
         .subtitle-picker-close:hover { color: #fff; }
@@ -854,7 +882,17 @@
         group.append(label, input);
         return group;
     }
-    function getUiLayer() {
+    function getUiLayer(zIndex = 2147483600) {
+        if (zIndex !== 2147483600) {
+            if (state.pickerLayer?.isConnected) return state.pickerLayer;
+            const layer = document.createElement('div');
+            layer.className = 'custom-ui-layer custom-ui-layer-top';
+            layer.setAttribute?.('data-av-helper', 'layer');
+            layer.style.zIndex = String(zIndex);
+            (document.body || document.documentElement).appendChild(layer);
+            state.pickerLayer = layer;
+            return layer;
+        }
         if (state.uiLayer?.isConnected) return state.uiLayer;
         const layer = document.createElement('div');
         layer.className = 'custom-ui-layer';
@@ -873,7 +911,7 @@
         panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, 0, maxX)}px`;
         panel.style.top = `${top}px`;
     }
-    function makeDraggable(element, handle) {
+    function makeDraggable(element, handle, keys = { x: 'panelX', y: 'panelY' }) {
         let originX = 0;
         let originY = 0;
         let startX = 0;
@@ -894,8 +932,10 @@
             document.removeEventListener('mousemove', onMove, true);
             document.removeEventListener('mouseup', onUp, true);
             if (moved) {
-                store.set('panelX', element.offsetLeft);
-                store.set('panelY', element.offsetTop);
+                settings[keys.x] = element.offsetLeft;
+                settings[keys.y] = element.offsetTop;
+                store.set(keys.x, element.offsetLeft);
+                store.set(keys.y, element.offsetTop);
                 element.classList.remove('panel-dragging');
             }
             moved = false;
@@ -941,6 +981,15 @@
             document.addEventListener('touchmove', onTouchMove, { passive: false });
             document.addEventListener('touchend', onTouchEnd);
         }, { passive: true });
+    }
+    function applyUiStyles() {
+        for (const target of [state.panel, state.subtitlePicker, state.subtitleBanner]) {
+            if (!target) continue;
+            target.style.setProperty('--ui-bg-opacity', settings.opacity);
+            target.style.setProperty('--ui-blur', `${settings.blur}px`);
+            target.style.setProperty('--ui-hover-opacity', settings.hoverOpacity);
+            target.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
+        }
     }
     function createPanel() {
         if (state.panel || document.querySelector('.custom-control-panel')) return;
@@ -1056,13 +1105,6 @@
         const sliderRow = document.createElement('div');
         sliderRow.className = 'slider-row-container';
         sliderRow.hidden = true;
-        const applyUiStyles = () => {
-            if (!state.panel) return;
-            state.panel.style.setProperty('--ui-bg-opacity', settings.opacity);
-            state.panel.style.setProperty('--ui-blur', `${settings.blur}px`);
-            state.panel.style.setProperty('--ui-hover-opacity', settings.hoverOpacity);
-            state.panel.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
-        };
         const createSlider = (labelText, key, min, max, step, onApply = applyUiStyles, format = String) => {
             const group = document.createElement('div');
             group.className = 'slider-group';
@@ -1408,21 +1450,58 @@
         state.cueIndex = { items, starts };
         state.cueCursor = -1;
         state.activeCueText = '';
+        state.subtitleFileName = fileName || label;
+        state.subtitleCueCount = items.length;
         if (settings.subtitleOffset !== 0) log(`ℹ️ 已应用字幕偏移 ${settings.subtitleOffset}s`);
         closeSubtitlePicker();
         renderSubtitle(true);
+        renderSubtitleBanner();
         log(`✅ ${label}加载成功：${items.length} 条${fileName && fileName !== label ? `（${fileName}）` : ''}`);
         return true;
+    }
+    function renderSubtitleBanner() {
+        const host = getUiLayer(2147483600);
+        let banner = state.subtitleBanner;
+        if (!state.subtitleFileName) {
+            banner?.remove();
+            state.subtitleBanner = null;
+            return;
+        }
+        if (!banner?.isConnected) {
+            banner = document.createElement('div');
+            banner.className = 'subtitle-banner';
+            banner.addEventListener('click', () => {
+                state.subtitleBanner?.classList.toggle('expanded');
+            });
+            host.appendChild(banner);
+            state.subtitleBanner = banner;
+        }
+        const nameEl = document.createElement('span');
+        nameEl.className = 'subtitle-banner-name';
+        nameEl.textContent = state.subtitleFileName;
+        nameEl.title = state.subtitleFileName;
+        const meta = document.createElement('span');
+        meta.className = 'subtitle-banner-meta';
+        meta.textContent = `${state.subtitleCueCount} 条 · 偏移 ${settings.subtitleOffset >= 0 ? '+' : ''}${settings.subtitleOffset}s`;
+        banner.replaceChildren(
+            Object.assign(document.createElement('span'), { className: 'subtitle-banner-icon', textContent: '📄' }),
+            nameEl,
+            meta
+        );
+        applyUiStyles();
     }
     function clearSubtitles() {
         state.cueIndex = null;
         state.subtitleSource = '';
         state.activeCueText = '';
         state.cueCursor = -1;
+        state.subtitleFileName = '';
+        state.subtitleCueCount = 0;
         if (state.subtitleEl) {
             state.subtitleEl.textContent = '';
             state.subtitleEl.style.display = 'none';
         }
+        renderSubtitleBanner();
         closeSubtitlePicker();
         log('🗑️ 字幕已清除');
     }
@@ -1613,6 +1692,33 @@
             return new TextDecoder('utf-8').decode(bytes);
         }
     }
+    function hostOf(url) {
+        try {
+            return new URL(url).host;
+        } catch (_) {
+            return '';
+        }
+    }
+    async function fetchSubtitlePayload(url) {
+        try {
+            const payload = await gmRequest(url, { timeout: 20000, binary: true });
+            if (typeof payload === 'string' ? payload.trim() : payload && payload.byteLength) return payload;
+        } catch (_) {
+        }
+        try {
+            const text = await gmRequest(url, { timeout: 20000 });
+            if (text?.trim()) return text;
+        } catch (_) {
+        }
+        for (const proxy of CORS_PROXIES) {
+            try {
+                const text = await gmRequest(proxy + encodeURIComponent(url), { timeout: 12000 });
+                if (text?.trim()) return text;
+            } catch (_) {
+            }
+        }
+        return null;
+    }
     async function loadRemoteSubtitle(url, name = '') {
         if (state.subtitleLoading) {
             log('⏳ 正有字幕在下载中，请稍候');
@@ -1620,21 +1726,22 @@
         }
         state.subtitleLoading = true;
         log(`⬇️ 正在下载字幕${name ? `：${name}` : ''}…`);
+        const host = hostOf(url);
         try {
-            const payload = await gmRequest(url, { timeout: 20000, binary: true });
+            const payload = await fetchSubtitlePayload(url);
+            if (payload === null) {
+                log(`❌ 下载失败: 网络错误${host ? ` (${host})` : ''}，请确认已授予 @connect 权限或改用「加载本地」`);
+                return;
+            }
             const text = decodeSubtitleBuffer(payload);
-            if (applySubtitleText(text, '字幕')) {
+            if (applySubtitleText(text, '字幕', name || url.split('/').pop())) {
                 closeSubtitlePicker();
+                log(`📍 字幕已缓存到浏览器本地，临时标记 avSub:subtitle；刷新页面后需重新选择「${name || '该字幕'}」`);
+            } else {
+                log('❌ 字幕内容无法解析，可能不是有效的字幕文件');
             }
         } catch (error) {
-            const host = (() => {
-                try {
-                    return new URL(url).host;
-                } catch (_) {
-                    return '';
-                }
-            })();
-            log(`❌ 下载失败: ${error.message}${host ? ` (${host})` : ''}`);
+            log(`❌ 下载失败: ${error.message}`);
         } finally {
             state.subtitleLoading = false;
         }
@@ -1667,7 +1774,40 @@
             list.appendChild(row);
         }
         state.subtitlePicker = list;
-        document.body.appendChild(list);
+        for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
+            list.addEventListener(type, event => event.stopPropagation());
+        }
+        getUiLayer(2147483646).appendChild(list);
+        if (!Number.isFinite(settings.pickerX) || !Number.isFinite(settings.pickerY)) {
+            const rect = list.getBoundingClientRect?.() || { width: 0, height: 0 };
+            list.style.left = '15px';
+            list.style.top = `${Math.max(60, window.innerHeight - (rect.height || 280) - 175)}px`;
+            list.style.bottom = 'auto';
+        }
+        applyUiStyles();
+        makeDraggable(list, header, { x: 'pickerX', y: 'pickerY' });
+        if (Number.isFinite(settings.pickerX) && Number.isFinite(settings.pickerY)) {
+            list.style.left = `${settings.pickerX}px`;
+            list.style.top = `${settings.pickerY}px`;
+            list.style.bottom = 'auto';
+        }
+        clampPickerPosition(list);
+    }
+    function clampPickerPosition(picker) {
+        if (!picker) return;
+        const rect = picker.getBoundingClientRect?.() || { width: 0, height: 0 };
+        const maxX = Math.max(0, window.innerWidth - rect.width - 8);
+        const maxY = Math.max(0, window.innerHeight - rect.height - 8);
+        const x = clamp(Number.parseFloat(picker.style.left) || 0, 0, maxX);
+        const y = clamp(Number.parseFloat(picker.style.top) || 0, 0, maxY);
+        if (picker.style.top) {
+            picker.style.left = `${x}px`;
+            picker.style.top = `${y}px`;
+            settings.pickerX = x;
+            settings.pickerY = y;
+            store.set('pickerX', x);
+            store.set('pickerY', y);
+        }
     }
     function parseJavBusHtml(html) {
         const stills = [];
