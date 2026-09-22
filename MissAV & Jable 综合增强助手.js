@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      8.0
-// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      9.0
+// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
 // @match        *://missav.live/*
@@ -18,6 +18,14 @@
 // @grant        GM_openInTab
 // @grant        unsafeWindow
 // @connect      xunlei.com
+// @connect      jdforrepam.com
+// @connect      javbus.com
+// @connect      www.javbus.com
+// @connect      javlibrary.com
+// @connect      www.javlibrary.com
+// @connect      javdb.com
+// @connect      api.allorigins.win
+// @connect      api.codetabs.com
 // @run-at       document-start
 // @noframes
 // @license      MIT
@@ -54,6 +62,38 @@
         forward: [10, 60, 300, 600]
     };
     const LOOP_PRESETS = [5, 10, 60];
+    const HOLD_DELAY = 240;
+    const HOLD_CANCEL_DISTANCE = 12;
+    const HOLD_CLICK_SUPPRESS = 300;
+    const INFO_CACHE_TTL = 86400000;
+    const INFO_CACHE_PREFIX = 'info:v2:';
+    const ACTRESS_CACHE_PREFIX = 'actress:';
+    const JDFORREPAM_API = 'https://jdforrepam.com';
+    const JDSIGN_SUFFIX = '71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa';
+    const JDFORREPAM_HEADERS = { 'User-Agent': 'Dart/3.5 (dart:io)', Accept: 'application/json' };
+    const CORS_PROXIES = [
+        'https://api.allorigins.win/raw?url=',
+        'https://api.codetabs.com/v1/proxy?quest='
+    ];
+    const JC_ENDPOINT = 'https://www.javlibrary.com/cn/vl_searchbyid.php?keyword=';
+    const JB_ENDPOINT = 'https://www.javbus.com/';
+    const JD_SEARCH = 'https://javdb.com/search?q=';
+    const IMAGE_EXT_RE = /\.(?:jpe?g|png|webp)(?:$|[?#])/i;
+    const NOW_PRINTING_RE = /\/now_printing(?:\/|\.|$)/i;
+    const COMMENT_BLOCK_RE = /<div[^>]+class=["'][^"']*(?:comment-content|comment-body|bubble-content)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
+    const SAMPLE_BOX_RE = /<a[^>]+class=["'][^"']*sample-box[^"']*["'][^>]+href=["']([^"']+)["']/gi;
+    const PHOTO_FRAME_RE = /<div[^>]+class=["'][^"']*photo-frame[^"']*["'][^>]*>\s*<img[^>]+src=["']([^"']+)["']/gi;
+    const JL_SCORE_RE = /class=["']score["'][^>]*>\s*\(?([0-9.]+)\)?\s*<\/span>/i;
+    const JL_COMMENT_RE = /<table[^>]+class=["']comment["'][^>]*>([\s\S]*?)<\/table>/gi;
+    const JD_ACTOR_PATH_RE = /href=["'](\/actors\/[a-zA-Z0-9_-]+)["']/gi;
+    const JD_TWITTER_RE = /href=["'](https?:\/\/(?:twitter\.com|x\.com)\/[^"'\s?#]+)["']/i;
+    const JD_INSTAGRAM_RE = /href=["'](https?:\/\/(?:www\.)?instagram\.com\/[^"'\s?#]+)["']/i;
+    const BLOCKED_ACTOR_PATHS = new Set([
+        '/actors/censored',
+        '/actors/uncensored',
+        '/actors/western',
+        '/actors/ranking'
+    ]);
     const AD_SELECTORS = [
         'div[class^="root"]',
         'div[class*="fixed"][class*="right-"][class*="bottom-"]',
@@ -90,6 +130,182 @@
             clearTimeout(timer);
             timer = setTimeout(() => fn.apply(this, args), delay);
         };
+    }
+    function toHex(value) {
+        let out = '';
+        for (let i = 0; i < 4; i++) {
+            out += ((value >> (i * 8)) & 0xff).toString(16).padStart(2, '0');
+        }
+        return out;
+    }
+    function utf8Bytes(text) {
+        const out = [];
+        for (let i = 0; i < text.length; i++) {
+            let code = text.charCodeAt(i);
+            if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+                const next = text.charCodeAt(i + 1);
+                if (next >= 0xdc00 && next <= 0xdfff) {
+                    code = ((code - 0xd800) << 10) + (next - 0xdc00) + 0x10000;
+                    i++;
+                }
+            }
+            if (code < 0x80) {
+                out.push(code);
+            } else if (code < 0x800) {
+                out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+            } else if (code < 0x10000) {
+                out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+            } else {
+                out.push(
+                    0xf0 | (code >> 18),
+                    0x80 | ((code >> 12) & 0x3f),
+                    0x80 | ((code >> 6) & 0x3f),
+                    0x80 | (code & 0x3f)
+                );
+            }
+        }
+        return out;
+    }
+    function md5(s) {
+        const add32 = (a, b) => (a + b) & 0xffffffff;
+        const cmn = (q, a, b, x, s, t) => {
+            a = add32(add32(a, q), add32(x, t));
+            return add32((a << s) | (a >>> (32 - s)), b);
+        };
+        const ff = (a, b, c, d, x, s, t) => cmn((b & c) | (~b & d), a, b, x, s, t);
+        const gg = (a, b, c, d, x, s, t) => cmn((b & d) | (c & ~d), a, b, x, s, t);
+        const hh = (a, b, c, d, x, s, t) => cmn(b ^ c ^ d, a, b, x, s, t);
+        const ii = (a, b, c, d, x, s, t) => cmn(c ^ (b | ~d), a, b, x, s, t);
+        const str2blk = (bytes, offset) => {
+            const blk = [];
+            for (let i = 0; i < 64; i += 4) {
+                blk[i >> 2] = bytes[offset + i] + (bytes[offset + i + 1] << 8) +
+                    (bytes[offset + i + 2] << 16) + (bytes[offset + i + 3] << 24);
+            }
+            return blk;
+        };
+        const cycle = (state, blk) => {
+            let [a, b, c, d] = state;
+            a = ff(a, b, c, d, blk[0], 7, -680876936);
+            d = ff(d, a, b, c, blk[1], 12, -389564586);
+            c = ff(c, d, a, b, blk[2], 17, 606105819);
+            b = ff(b, c, d, a, blk[3], 22, -1044525330);
+            a = ff(a, b, c, d, blk[4], 7, -176418897);
+            d = ff(d, a, b, c, blk[5], 12, 1200080426);
+            c = ff(c, d, a, b, blk[6], 17, -1473231341);
+            b = ff(b, c, d, a, blk[7], 22, -45705983);
+            a = ff(a, b, c, d, blk[8], 7, 1770035416);
+            d = ff(d, a, b, c, blk[9], 12, -1958414417);
+            c = ff(c, d, a, b, blk[10], 17, -42063);
+            b = ff(b, c, d, a, blk[11], 22, -1990404162);
+            a = ff(a, b, c, d, blk[12], 7, 1804603682);
+            d = ff(d, a, b, c, blk[13], 12, -40341101);
+            c = ff(c, d, a, b, blk[14], 17, -1502002290);
+            b = ff(b, c, d, a, blk[15], 22, 1236535329);
+            a = gg(a, b, c, d, blk[1], 5, -165796510);
+            d = gg(d, a, b, c, blk[6], 9, -1069501632);
+            c = gg(c, d, a, b, blk[11], 14, 643717713);
+            b = gg(b, c, d, a, blk[0], 20, -373897302);
+            a = gg(a, b, c, d, blk[5], 5, -701558691);
+            d = gg(d, a, b, c, blk[10], 9, 38016083);
+            c = gg(c, d, a, b, blk[15], 14, -660478335);
+            b = gg(b, c, d, a, blk[4], 20, -405537848);
+            a = gg(a, b, c, d, blk[9], 5, 568446438);
+            d = gg(d, a, b, c, blk[14], 9, -1019803690);
+            c = gg(c, d, a, b, blk[3], 14, -187363961);
+            b = gg(b, c, d, a, blk[8], 20, 1163531501);
+            a = gg(a, b, c, d, blk[13], 5, -1444681467);
+            d = gg(d, a, b, c, blk[2], 9, -51403784);
+            c = gg(c, d, a, b, blk[7], 14, 1735328473);
+            b = gg(b, c, d, a, blk[12], 20, -1926607734);
+            a = hh(a, b, c, d, blk[5], 4, -378558);
+            d = hh(d, a, b, c, blk[8], 11, -2022574463);
+            c = hh(c, d, a, b, blk[11], 16, 1839030562);
+            b = hh(b, c, d, a, blk[14], 23, -35309556);
+            a = hh(a, b, c, d, blk[1], 4, -1530992060);
+            d = hh(d, a, b, c, blk[4], 11, 1272893353);
+            c = hh(c, d, a, b, blk[7], 16, -155497632);
+            b = hh(b, c, d, a, blk[10], 23, -1094730640);
+            a = hh(a, b, c, d, blk[13], 4, 681279174);
+            d = hh(d, a, b, c, blk[0], 11, -358537222);
+            c = hh(c, d, a, b, blk[3], 16, -722521979);
+            b = hh(b, c, d, a, blk[6], 23, 76029189);
+            a = hh(a, b, c, d, blk[9], 4, -640364487);
+            d = hh(d, a, b, c, blk[12], 11, -421815835);
+            c = hh(c, d, a, b, blk[15], 16, 530742520);
+            b = hh(b, c, d, a, blk[2], 23, -995338651);
+            a = ii(a, b, c, d, blk[0], 6, -198630844);
+            d = ii(d, a, b, c, blk[7], 10, 1126891415);
+            c = ii(c, d, a, b, blk[14], 15, -1416354905);
+            b = ii(b, c, d, a, blk[5], 21, -57434055);
+            a = ii(a, b, c, d, blk[12], 6, 1700485571);
+            d = ii(d, a, b, c, blk[3], 10, -1894986606);
+            c = ii(c, d, a, b, blk[10], 15, -1051523);
+            b = ii(b, c, d, a, blk[1], 21, -2054922799);
+            a = ii(a, b, c, d, blk[8], 6, 1873313359);
+            d = ii(d, a, b, c, blk[15], 10, -30611744);
+            c = ii(c, d, a, b, blk[6], 15, -1560198380);
+            b = ii(b, c, d, a, blk[13], 21, 1309151649);
+            a = ii(a, b, c, d, blk[4], 6, -145523070);
+            d = ii(d, a, b, c, blk[11], 10, -1120210379);
+            c = ii(c, d, a, b, blk[2], 15, 718787259);
+            b = ii(b, c, d, a, blk[9], 21, -343485551);
+            state[0] = add32(a, state[0]);
+            state[1] = add32(b, state[1]);
+            state[2] = add32(c, state[2]);
+            state[3] = add32(d, state[3]);
+        };
+        const bytes = utf8Bytes(s);
+        const n = bytes.length;
+        const state = [1732584193, -271733879, -1732584194, 271733878];
+        let i = 64;
+        for (; i <= n; i += 64) cycle(state, str2blk(bytes, i - 64));
+        const tail = new Array(16).fill(0);
+        const tailLen = n - (i - 64);
+        for (i = 0; i < tailLen; i++) tail[i >> 2] |= bytes[n - tailLen + i] << ((i % 4) << 3);
+        tail[i >> 2] |= 128 << ((i % 4) << 3);
+        if (i > 55) {
+            cycle(state, tail);
+            tail.fill(0);
+        }
+        tail[14] = n * 8;
+        cycle(state, tail);
+        return state.map(toHex).join('');
+    }
+    function resolveUrl(href, base) {
+        if (!href) return '';
+        if (href.startsWith('//')) return `https:${href}`;
+        if (href.startsWith('/')) return `${base}${href}`;
+        return href;
+    }
+    function readCache(key) {
+        try {
+            const raw = localStorage.getItem(STORAGE_PREFIX + key);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            if (parsed.expires && parsed.expires < Date.now()) return null;
+            return parsed.data ?? null;
+        } catch (_) {
+            return null;
+        }
+    }
+    function writeCache(key, data, ttl = INFO_CACHE_TTL) {
+        try {
+            localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify({ data, expires: Date.now() + ttl }));
+        } catch (_) {
+        }
+    }
+    function stripTags(html) {
+        return String(html ?? '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    function decodeEntities(text) {
+        return String(text ?? '')
+            .replace(/&quot;/g, '"')
+            .replace(/&#0?39;|&apos;/g, "'")
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&');
     }
     const store = {
         get(key) {
@@ -139,6 +355,8 @@
         blur: store.getNumber('blur', 1, 0, 20),
         hoverOpacity: store.getNumber('hoverOpacity', 0.9, 0, 1),
         hoverBlur: store.getNumber('hoverBlur', 1, 0, 20),
+        holdAccelerate: store.getBool('holdAccelerate', true),
+        autoInfo: store.getBool('autoInfo', true),
         keys: {
             accelerate: store.getKeyName('keyAccelerate', 'z'),
             forward: store.getKeyName('keyForward', 'x'),
@@ -158,6 +376,8 @@
         store.set('blur', settings.blur);
         store.set('hoverOpacity', settings.hoverOpacity);
         store.set('hoverBlur', settings.hoverBlur);
+        store.set('holdAccelerate', settings.holdAccelerate);
+        store.set('autoInfo', settings.autoInfo);
     }
     const state = {
         video: null,
@@ -189,7 +409,23 @@
         loopStart: 0,
         loopDuration: 5,
         adObserver: null,
-        uiLayer: null
+        uiLayer: null,
+        hudHost: null,
+        hudEl: null,
+        holdTimer: 0,
+        holdPointerId: -1,
+        holdStartX: 0,
+        holdStartY: 0,
+        holdingSpeed: false,
+        suppressClickUntil: 0,
+        infoSection: null,
+        lightbox: null,
+        infoSession: 0,
+        pinnedOverlay: null,
+        gallery: [],
+        galleryIndex: 0,
+        infoData: null,
+        listMovies: null
     };
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
@@ -214,6 +450,7 @@
         }
     }
     function isProtectedNode(element) {
+        if (element.classList?.contains('av-info-section')) return true;
         const container = state.container;
         if (!container) return false;
         return element === container || element.contains(container) || container.contains(element);
@@ -342,7 +579,7 @@
         .custom-quick-controls.quick-compact .quick-play-btn { min-width: 64px; padding: 0 8px; }
         .custom-quick-controls.quick-compact .quick-loop-btn { min-width: 40px; padding: 0 5px; }
         .custom-subtitle { position: absolute; left: 50%; bottom: 10%; z-index: 10000; max-width: 85%; transform: translateX(-50%); color: #fff; font-size: 24px; font-weight: 700; text-align: center; white-space: pre-line; text-shadow: -1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,2px 2px 4px rgba(0,0,0,.8); pointer-events: none; }
-        .slider-row-container { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.15); max-height: 200px; opacity: 1; overflow: hidden; transition: max-height .3s ease, opacity .3s ease, margin .3s ease, padding .3s ease; }
+        .slider-row-container { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 0 14px; border-top: 1px solid rgba(255,255,255,.15); opacity: 1; overflow: visible; transition: opacity .3s ease; }
         .slider-row-container[hidden] { display: none; }
         .slider-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; }
         .slider-group label { width: 65px; flex-shrink: 0; white-space: nowrap; }
@@ -363,6 +600,88 @@
         .subtitle-picker-close:hover { color: #fff; }
         .subtitle-picker-row { padding: 8px; margin-top: 5px; border-bottom: 1px solid rgba(255,255,255,.1); cursor: pointer; word-break: break-all; }
         .subtitle-picker-row:hover { background: rgba(96,165,250,.16); }
+        .speed-hud-host { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; padding-top: 24px; pointer-events: none; z-index: 26; }
+        .speed-hud { display: inline-flex; align-items: center; justify-content: center; padding: 8px 18px; border-radius: 9999px; background: rgba(10,10,10,.85); border: 1px solid rgba(255,255,255,.16); color: #ededed; box-shadow: 0 4px 20px rgba(0,0,0,.5); pointer-events: none; user-select: none; -webkit-user-select: none; animation: speed-hud-pulse 1.2s ease-in-out infinite alternate; }
+        .speed-hud-content { display: flex; align-items: center; gap: 8px; font: 500 14px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; letter-spacing: -.2px; }
+        .speed-hud-rate { color: #50e3c2; font-family: ui-monospace,Consolas,monospace; font-size: 14px; font-weight: 600; }
+        .speed-hud-arrows { font-size: 12px; letter-spacing: -1px; opacity: .85; }
+        @keyframes speed-hud-pulse { from { transform: scale(1); } to { transform: scale(1.03); } }
+        .info-rating-badge { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; padding: 2px 8px; border-radius: 9999px; background: rgba(245,158,11,.16); border: 1px solid rgba(245,158,11,.45); color: #fbbf24; font: 600 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; white-space: nowrap; vertical-align: middle; }
+        .info-rating-badge small { color: #94a3b8; font-weight: 500; font-size: 10px; }
+        .social-badges { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+        .social-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.1); color: #e2e8f0; font-size: 11px; text-decoration: none; transition: background .15s ease; }
+        .social-badge:hover { background: rgba(96,165,250,.4); }
+        .lightbox-layer { position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.94); display: flex; flex-direction: column; touch-action: none; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; }
+        .lightbox-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; color: #e2e8f0; }
+        .lightbox-meta { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lightbox-counter { color: #94a3b8; font-family: ui-monospace,Consolas,monospace; }
+        .lightbox-hint { color: #64748b; font-size: 11px; }
+        .lightbox-close { cursor: pointer; background: rgba(255,255,255,.1); border: 0; color: #fff; width: 32px; height: 32px; border-radius: 50%; font-size: 16px; line-height: 1; }
+        .lightbox-close:hover { background: rgba(239,68,68,.5); }
+        .lightbox-stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 56px 20px; }
+        .lightbox-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; user-select: none; -webkit-user-drag: none; }
+        .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 72px; border: 0; border-radius: 8px; background: rgba(255,255,255,.08); color: #fff; font-size: 20px; cursor: pointer; }
+        .lightbox-nav:hover { background: rgba(96,165,250,.35); }
+        .lightbox-nav.prev { left: 6px; }
+        .lightbox-nav.next { right: 6px; }
+        .av-info-section { margin: 12px 0; border-radius: 12px; background: rgba(20,22,30,.72); border: 1px solid rgba(255,255,255,.12); overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,.24); color: #e2e8f0; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; }
+        .av-info-section:hover { border-color: rgba(255,255,255,.2); }
+        .av-info-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; user-select: none; background: rgba(255,255,255,.02); transition: background .15s; }
+        .av-info-head:hover { background: rgba(255,255,255,.05); }
+        .av-info-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; color: #f1f5f9; letter-spacing: -.01em; }
+        .av-info-title svg { flex: 0 0 16px; width: 16px; height: 16px; fill: none; stroke: #94a3b8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+        .av-info-meta { display: flex; align-items: center; gap: 8px; margin-left: auto; color: #94a3b8; font-size: 12px; white-space: nowrap; }
+        .av-info-stats { display: flex; gap: 8px; }
+        .av-info-chevron { flex: 0 0 6px; width: 6px; height: 6px; border-right: 1.5px solid #94a3b8; border-bottom: 1.5px solid #94a3b8; transform: rotate(45deg); transition: transform .15s; }
+        .av-info-section.open .av-info-chevron { transform: rotate(225deg); }
+        .av-info-body { border-top: 1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.22); padding: 14px 16px; }
+        .av-info-body[hidden] { display: none; }
+        .av-hub-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+        .av-hub-tab { color: #94a3b8; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.12); border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; transition: all .15s; }
+        .av-hub-tab:hover { color: #e2e8f0; border-color: rgba(255,255,255,.25); }
+        .av-hub-tab.active { color: #fff; background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.35); }
+        .av-stills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+        .av-still-item { aspect-ratio: 16 / 10; margin: 0; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); overflow: hidden; cursor: zoom-in; transition: transform .15s, border-color .15s, box-shadow .15s; }
+        .av-still-item:hover { border-color: rgba(255,255,255,.35); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.4); }
+        .av-still-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .av-hub-empty { margin: 0; padding: 28px 0; text-align: center; color: #64748b; font-size: 12px; }
+        .av-hub-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 28px 0; color: #94a3b8; font-size: 12px; }
+        .av-spinner { width: 12px; height: 12px; border: 1.5px solid #94a3b8; border-right-color: transparent; border-radius: 50%; animation: av-spin .7s linear infinite; }
+        @keyframes av-spin { to { transform: rotate(360deg); } }
+        .av-review-list { display: flex; flex-direction: column; gap: 10px; }
+        .review-card { padding: 10px 14px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.12); }
+        .review-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+        .review-header strong { color: #93c5fd; font-size: 12px; }
+        .review-header time { color: #64748b; font-size: 11px; }
+        .review-text { color: #cbd5e1; font-size: 12px; word-break: break-word; }
+        .av-info-pane[hidden] { display: none; }
+        .av-list-grid { display: flex; flex-direction: column; gap: 10px; }
+        .av-list-card { border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); border-radius: 12px; overflow: hidden; }
+        .av-list-card.is-expanded { border-color: rgba(255,255,255,.28); background: rgba(255,255,255,.06); }
+        .av-list-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+        .av-list-icon { flex: 0 0 16px; width: 16px; height: 16px; }
+        .av-list-icon svg { display: block; width: 16px; height: 16px; fill: none; stroke: #94a3b8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+        .av-list-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-list-meta { display: flex; align-items: center; gap: 12px; color: #94a3b8; font-size: 12px; white-space: nowrap; }
+        .av-list-stat { display: inline-flex; align-items: center; gap: 4px; }
+        .av-list-stat svg { display: block; width: 13px; height: 13px; fill: none; stroke: #64748b; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+        .av-list-action { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: #cbd5e1; font: 500 12px/1.4 inherit; font-family: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; transition: all .15s; }
+        .av-list-action:hover { color: #fff; border-color: rgba(255,255,255,.34); background: rgba(255,255,255,.12); }
+        .av-list-action.is-open { color: #fff; border-color: rgba(255,255,255,.34); }
+        .av-list-action .av-chevron { width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); transition: transform .15s; }
+        .av-list-action.is-open .av-chevron { transform: rotate(225deg); }
+        .av-list-body { border-top: 1px solid rgba(255,255,255,.1); padding: 12px 14px; }
+        .av-list-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px 0; color: #94a3b8; font-size: 12px; }
+        .av-list-fallback { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; color: #94a3b8; font-size: 12px; }
+        .av-list-fallback strong { color: #fca5a5; font-size: 12px; }
+        .av-list-fallback p { margin: 0; }
+        .av-list-movies { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+        .av-list-movie { display: block; color: inherit; text-decoration: none; }
+        .av-list-movie-cover { aspect-ratio: 16 / 10; border-radius: 8px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); overflow: hidden; }
+        .av-list-movie-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .av-list-movie strong { display: block; margin-top: 4px; font-size: 11px; font-weight: 600; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-list-movie:hover strong { color: #93c5fd; }
+        .quick-pip-btn { min-width: 32px; font-size: 15px; line-height: 1; }
     `);
     function seek(seconds) {
         const video = state.video;
@@ -391,12 +710,125 @@
             updatePlayPauseButton();
         }
     }
+    function buildSpeedHud(container) {
+        if (state.hudHost?.isConnected) return;
+        const host = document.createElement('div');
+        host.className = 'speed-hud-host';
+        const hud = document.createElement('div');
+        hud.className = 'speed-hud';
+        hud.setAttribute?.('aria-live', 'polite');
+        const content = document.createElement('div');
+        content.className = 'speed-hud-content';
+        const rate = document.createElement('span');
+        rate.className = 'speed-hud-rate';
+        rate.textContent = `${settings.accelerationRate}×`;
+        const text = document.createElement('span');
+        text.className = 'speed-hud-text';
+        text.textContent = '加速中';
+        const arrows = document.createElement('span');
+        arrows.className = 'speed-hud-arrows';
+        arrows.textContent = '▶▶';
+        content.append(rate, text, arrows);
+        hud.appendChild(content);
+        hud.style.display = 'none';
+        host.appendChild(hud);
+        container.appendChild(host);
+        state.hudHost = host;
+        state.hudEl = hud;
+    }
+    function showSpeedHud() {
+        if (!state.hudEl) return;
+        const rateEl = state.hudEl.querySelector('.speed-hud-rate');
+        if (rateEl) rateEl.textContent = `${settings.accelerationRate}×`;
+        state.hudEl.style.display = 'inline-flex';
+    }
+    function hideSpeedHud() {
+        if (state.hudEl) state.hudEl.style.display = 'none';
+    }
+    function cancelHold() {
+        clearTimeout(state.holdTimer);
+        state.holdTimer = 0;
+        if (!state.holdingSpeed) return;
+        state.holdingSpeed = false;
+        hideSpeedHud();
+        delete document.documentElement.dataset.avAccelerating;
+        const video = state.video;
+        if (video?.isConnected) video.playbackRate = state.speedBeforeAccelerate;
+        state.suppressClickUntil = performance.now() + HOLD_CLICK_SUPPRESS;
+    }
+    const HOLD_GUARD = '.custom-quick-controls, .custom-control-panel, .custom-ui-layer, .custom-subtitle, .speed-hud-host, .av-info-section, .lightbox-layer, .plyr__controls, button, input, select, textarea, a, [role="button"]';
+    function setupHoldAccelerate(container) {
+        if (container.dataset?.avHoldBound === '1') return;
+        container.dataset.avHoldBound = '1';
+        container.addEventListener('pointerdown', event => {
+            if (!settings.holdAccelerate) return;
+            if (event.button !== 0) return;
+            const video = state.video;
+            if (!video || !video.isConnected || video.paused) return;
+            if (event.target?.closest?.(HOLD_GUARD)) return;
+            cancelHold();
+            state.holdPointerId = event.pointerId;
+            state.holdStartX = event.clientX;
+            state.holdStartY = event.clientY;
+            state.holdTimer = setTimeout(() => {
+                state.holdTimer = 0;
+                if (!state.video || state.video.paused) return;
+                state.holdingSpeed = true;
+                state.speedBeforeAccelerate = Number.isFinite(state.video.playbackRate) ? state.video.playbackRate : 1;
+                document.documentElement.dataset.avAccelerating = '1';
+                state.video.playbackRate = settings.accelerationRate;
+                showSpeedHud();
+            }, HOLD_DELAY);
+        });
+        container.addEventListener('pointermove', event => {
+            if (event.pointerId !== state.holdPointerId) return;
+            if (Math.hypot(event.clientX - state.holdStartX, event.clientY - state.holdStartY) > HOLD_CANCEL_DISTANCE) cancelHold();
+        });
+        container.addEventListener('pointerup', event => {
+            if (event.pointerId === state.holdPointerId) cancelHold();
+        });
+        container.addEventListener('pointercancel', event => {
+            if (event.pointerId === state.holdPointerId) cancelHold();
+        });
+        container.addEventListener('click', event => {
+            if (performance.now() < state.suppressClickUntil) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            }
+        }, true);
+    }
     function createButton(text, className = '') {
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = text;
         if (className) button.className = className;
         return button;
+    }
+    function pipSupported(video) {
+        if (document.pictureInPictureEnabled && typeof video?.requestPictureInPicture === 'function') return 'standard';
+        if (typeof video?.webkitSetPresentationMode === 'function') return 'webkit';
+        return '';
+    }
+    async function togglePictureInPicture() {
+        const video = state.video;
+        if (!video) return;
+        const mode = pipSupported(video);
+        if (!mode) {
+            log('⚠️ 当前浏览器不支持画中画');
+            return;
+        }
+        try {
+            if (mode === 'standard') {
+                if (document.pictureInPictureElement) await document.exitPictureInPicture();
+                else await video.requestPictureInPicture();
+            } else {
+                const active = video.webkitPresentationMode === 'picture-in-picture';
+                video.webkitSetPresentationMode(active ? 'inline' : 'picture-in-picture');
+            }
+            log('🖼️ 已切换画中画');
+        } catch (_) {
+            log('❌ 画中画启动失败');
+        }
     }
     function createDivider() {
         const divider = document.createElement('span');
@@ -791,6 +1223,11 @@
         group.appendChild(createDivider());
         JUMP_PRESETS.forward.forEach(seconds => appendJumpButton(seconds, 'forward'));
         group.appendChild(createDivider());
+        state.pipBtn = createButton('⧉', 'quick-btn quick-pip-btn');
+        state.pipBtn.title = '画中画 (P)';
+        state.pipBtn.addEventListener('click', togglePictureInPicture);
+        group.appendChild(state.pipBtn);
+        group.appendChild(createDivider());
         const loopWrapper = document.createElement('div');
         loopWrapper.className = 'quick-loop-wrapper';
         state.loopBtn = createButton('', 'quick-btn quick-loop-btn');
@@ -851,6 +1288,11 @@
                 video.playbackRate = settings.accelerationRate;
                 state.acceleratePressed = true;
                 log(`⏩ 临时加速 ${settings.accelerationRate}x`);
+                return;
+            }
+            if (key === 'p') {
+                event.preventDefault();
+                if (!event.repeat) togglePictureInPicture();
                 return;
             }
             if (key !== forward && key !== backward) return;
@@ -1036,6 +1478,97 @@
             });
         });
     }
+    function gmRaw(url, { headers = null, timeout = 15000 } = {}) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url,
+                timeout,
+                headers: headers || undefined,
+                onload: response => resolve(response),
+                onerror: () => reject(new Error('网络错误')),
+                ontimeout: () => reject(new Error('请求超时')),
+                onabort: () => reject(new Error('请求已取消'))
+            });
+        });
+    }
+    const COARSE_POINTER = (() => {
+        try {
+            return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+        } catch (_) {
+            return false;
+        }
+    })();
+    const PAGE_HEADERS = COARSE_POINTER ? null : {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+    };
+    async function fetchHtml(url, { headers = null, timeout = 4500, skipProxy = false } = {}) {
+        const merged = headers || PAGE_HEADERS;
+        try {
+            const response = await gmRaw(url, { headers: merged, timeout });
+            if (response.status >= 200 && response.status < 300 && response.responseText) return response.responseText;
+        } catch (_) {
+        }
+        if (skipProxy) return '';
+        for (const proxy of CORS_PROXIES) {
+            try {
+                const response = await gmRaw(proxy + encodeURIComponent(url), { timeout: 3500 });
+                if (response.status >= 200 && response.status < 300 && response.responseText) return response.responseText;
+            } catch (_) {
+            }
+        }
+        return '';
+    }
+    let jdSigCache = null;
+    function jdSignature() {
+        const ts = Math.floor(Date.now() / 1000);
+        if (jdSigCache && ts - jdSigCache.ts <= 300) return jdSigCache.value;
+        const value = `${ts}.lpw6vgqzsp.${md5(ts + JDSIGN_SUFFIX)}`;
+        jdSigCache = { ts, value };
+        return value;
+    }
+    function jdApiFetch(url, timeout = 5000) {
+        return fetchHtml(url, {
+            headers: Object.assign({}, JDFORREPAM_HEADERS, { jdsignature: jdSignature() }),
+            timeout,
+            skipProxy: true
+        });
+    }
+    function normalizeVideoCode(videoId) {
+        let id = String(videoId ?? '').trim();
+        if (!id) return '';
+        if (/^https?:\/\//i.test(id) || id.includes('/')) {
+            try {
+                const parts = id.split('?')[0].split('#')[0].split('/').filter(Boolean);
+                if (parts.length) id = decodeURIComponent(parts[parts.length - 1] ?? id);
+            } catch (_) {
+            }
+        }
+        id = id.replace(/[-_](?:uncensored|leak|chinese|english|subtitle|hd|fhd|4k)$/i, '');
+        const fc2 = id.match(/^(fc2(?:-ppv)?-[0-9]+)/i);
+        if (fc2?.[1]) return fc2[1].toUpperCase();
+        const std = id.match(/^([a-z0-9]+-[a-z0-9]+)/i);
+        if (std?.[1]) return std[1].toUpperCase();
+        return id.toUpperCase();
+    }
+    function getPageVideoCode() {
+        try {
+            const rows = document.querySelectorAll('.text-secondary, .video-info-row, .info-row, li');
+            for (const row of rows) {
+                const label = row.querySelector('span:first-child, dt, .label')?.textContent?.trim() || '';
+                if (/^(?:Code|番号|番號|品番)\s*[:：]?$/i.test(label)) {
+                    const value = row.querySelector('.font-medium, dd, .value, span:last-child')?.textContent?.trim();
+                    if (value && /^[a-z0-9]/i.test(value)) return normalizeVideoCode(value);
+                }
+            }
+        } catch (_) {
+        }
+        const parts = location.pathname.split('/').filter(Boolean);
+        const slug = decodeURIComponent(parts[parts.length - 1] ?? '').split('#')[0].trim();
+        if (!slug || /^(?:new|popular|actresses|genres|makers|search|videos|en|cn|ja|zh)$/i.test(slug)) return '';
+        return normalizeVideoCode(slug);
+    }
     async function searchSubtitleAPI() {
         const id = getCurrentVideoID();
         if (!id) {
@@ -1136,6 +1669,885 @@
         state.subtitlePicker = list;
         document.body.appendChild(list);
     }
+    function parseJavBusHtml(html) {
+        const stills = [];
+        const reviews = [];
+        if (!html || html.includes('driver-verify') || html.includes('所在地區年齡檢測') || html.includes('404 Page Not Found')) {
+            return { stills, reviews };
+        }
+        for (const match of html.matchAll(SAMPLE_BOX_RE)) {
+            const url = resolveUrl(match[1]?.trim(), JB_ENDPOINT.replace(/\/$/, ''));
+            if (IMAGE_EXT_RE.test(url) && !stills.includes(url)) stills.push(url);
+        }
+        if (!stills.length) {
+            for (const match of html.matchAll(PHOTO_FRAME_RE)) {
+                const url = resolveUrl(match[1]?.trim(), JB_ENDPOINT.replace(/\/$/, ''));
+                if (IMAGE_EXT_RE.test(url) && !stills.includes(url)) stills.push(url);
+            }
+        }
+        let count = 0;
+        for (const match of html.matchAll(COMMENT_BLOCK_RE)) {
+            if (count >= 10) break;
+            const content = stripTags(match[1]);
+            if (content.length >= 3) {
+                reviews.push({ user: 'JAVBus 网友', content });
+                count++;
+            }
+        }
+        return { stills, reviews };
+    }
+    function parseJavLibraryHtml(html) {
+        let rating;
+        const reviews = [];
+        const scoreMatch = html.match(JL_SCORE_RE);
+        if (scoreMatch?.[1]) {
+            const score = Number.parseFloat(scoreMatch[1]);
+            const countMatch = html.match(/\(?([0-9,]+)\s*(?:人評價|人评价|votes|reviews)\)?/i);
+            const count = countMatch?.[1] ? Number.parseInt(countMatch[1].replace(/,/g, ''), 10) : undefined;
+            if (score > 0) rating = { score, count, source: 'JAVLibrary' };
+        }
+        let taken = 0;
+        for (const block of html.matchAll(JL_COMMENT_RE)) {
+            if (taken >= 12) break;
+            const text = block[1] ?? '';
+            const contentMatch = text.match(/class=["']ttext["'][^>]*>([\s\S]*?)(?:<\/(?:div|td)>|$)/i);
+            const userMatch = text.match(/class=["']nickname["'][^>]*>([\s\S]*?)(?:<\/(?:div|td|span|a)>|$)/i);
+            const dateMatch = text.match(/class=["']date["'][^>]*>([\s\S]*?)(?:<\/(?:div|td|span)>|$)/i);
+            const content = stripTags(contentMatch?.[1]);
+            if (content.length >= 4) {
+                reviews.push({
+                    user: stripTags(userMatch?.[1]) || '影评网友',
+                    date: stripTags(dateMatch?.[1]),
+                    content
+                });
+                taken++;
+            }
+        }
+        return { rating, reviews };
+    }
+    function extractPageReviews() {
+        const reviews = [];
+        const cards = document.querySelectorAll('#comments .comment, #comment-list > div, .comments-list > div, [data-comment-id], article.comment');
+        for (const card of cards) {
+            const user = card.querySelector('.username, .user-name, strong, .font-bold')?.textContent?.trim();
+            const date = card.querySelector('time, .time, .date, .text-xs')?.textContent?.trim();
+            const content = card.querySelector('.content, .comment-content, .comment-body, p')?.textContent?.trim();
+            if (!content || content.length < 2 || content.includes('MissAV')) continue;
+            reviews.push({ user: user || 'MissAV 影迷', date, content });
+        }
+        return reviews;
+    }
+    function dedupeReviews(list) {
+        const seen = new Set();
+        const out = [];
+        for (const review of list) {
+            if (!review?.content) continue;
+            const key = review.content.trim().slice(0, 80);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(review);
+        }
+        return out;
+    }
+    async function fetchJavDbInfo(code, onPartial) {
+        const empty = { rating: undefined, stills: [], reviews: [], lists: [] };
+        const cleanId = code.replace(/[-_]/g, '').toLowerCase();
+        const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
+            q: code, page: '1', type: 'movie', limit: '5',
+            movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
+        });
+        let searchBody;
+        try {
+            searchBody = JSON.parse(await jdApiFetch(searchUrl));
+        } catch (_) {
+            return empty;
+        }
+        const movies = Array.isArray(searchBody?.data?.movies) ? searchBody.data.movies : [];
+        const movie = movies.find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === cleanId);
+        if (!movie?.id) return empty;
+        const movieId = encodeURIComponent(movie.id);
+        const detailUrl = `${JDFORREPAM_API}/api/v2/movies/${movieId}`;
+        const reviewsUrl = `${JDFORREPAM_API}/api/v1/movies/${movieId}/reviews?` +
+            new URLSearchParams({ page: '1', sort_by: 'hotly', limit: '20' });
+        const listsUrl = `${JDFORREPAM_API}/api/v1/lists/related?` +
+            new URLSearchParams({ movie_id: movie.id, page: '1', limit: '20' });
+        const once = url => jdApiFetch(url).catch(() => '').then(raw => raw || jdApiFetch(url).catch(() => ''));
+        const [detailRaw, reviewsRaw, listsRaw] = await Promise.all([once(detailUrl), once(reviewsUrl), once(listsUrl)]);
+        let rating;
+        const stills = [];
+        const reviews = [];
+        const lists = [];
+        try {
+            const detail = JSON.parse(detailRaw)?.data?.movie;
+            if (detail) {
+                const raw = Number(detail.score);
+                if (Number.isFinite(raw) && raw > 0 && raw <= 5) {
+                    const watched = Number(detail.watched_count);
+                    rating = {
+                        score: Number((raw * 2).toFixed(1)),
+                        count: Number.isFinite(watched) && watched > 0 ? watched : undefined,
+                        source: 'JavDB'
+                    };
+                }
+                const push = url => {
+                    const abs = resolveUrl(url, JDFORREPAM_API);
+                    if (abs && !stills.includes(abs)) stills.push(abs);
+                };
+                for (const img of Array.isArray(detail.preview_images) ? detail.preview_images : []) {
+                    push(img?.large_url || img?.thumb_url || (typeof img === 'string' ? img : ''));
+                }
+                if (!stills.length) {
+                    const samples = Array.isArray(detail.sample_images) ? detail.sample_images
+                        : (Array.isArray(detail.samples) ? detail.samples : []);
+                    for (const item of samples) push(typeof item === 'string' ? item : item?.url || item?.thumbnail);
+                }
+                if (!stills.length) push(detail.cover_url || detail.thumb_url);
+            }
+        } catch (_) {
+        }
+        try {
+            const body = JSON.parse(reviewsRaw);
+            const list = Array.isArray(body?.data?.reviews) ? body.data.reviews : [];
+            for (const item of list.slice(0, 20)) {
+                const content = String(item?.content ?? '').trim();
+                if (content.length < 2) continue;
+                reviews.push({
+                    user: String(item?.username ?? '').trim() || '匿名',
+                    date: String(item?.created_at ?? '').slice(0, 10),
+                    content,
+                    score: Number.isFinite(Number(item?.score)) ? Number(item.score) : undefined
+                });
+            }
+        } catch (_) {
+        }
+        try {
+            const body = JSON.parse(listsRaw);
+            for (const item of Array.isArray(body?.data?.lists) ? body.data.lists : []) {
+                if (!item?.id) continue;
+                lists.push({
+                    id: String(item.id),
+                    name: String(item.name || '未命名影单').trim(),
+                    movieCount: Number(item.movies_count || 0),
+                    viewsCount: Number(item.views_count || 0) || undefined,
+                    collectionsCount: Number(item.collections_count || 0) || undefined,
+                    createdAt: item.created_at ? String(item.created_at).slice(0, 10) : undefined,
+                    shareUrl: `https://javdb.com/lists/${encodeURIComponent(item.id)}`
+                });
+            }
+        } catch (_) {
+        }
+        const partial = { rating, stills, reviews, lists };
+        onPartial?.(partial);
+        return partial;
+    }
+    async function fetchJavLibraryInfo(code, onPartial) {
+        let html = await fetchHtml(`${JC_ENDPOINT}${encodeURIComponent(code)}`, { timeout: 3000, skipProxy: true });
+        if (html && !html.includes('class="score"')) {
+            const first = html.match(/href=["']\.\/\?v=([a-z0-9]+)["']/i);
+            if (first?.[1]) {
+                html = await fetchHtml(`https://www.javlibrary.com/cn/?v=${first[1]}`, { timeout: 3000, skipProxy: true }).catch(() => '');
+            }
+        }
+        if (!html) return { rating: undefined, reviews: [] };
+        const parsed = parseJavLibraryHtml(html);
+        onPartial?.(parsed);
+        return parsed;
+    }
+    async function fetchJavBusInfo(code, onPartial) {
+        const html = await fetchHtml(`${JB_ENDPOINT}${encodeURIComponent(code)}`, {
+            headers: { Cookie: 'age=verified; existmag=all; dv=1' },
+            timeout: 4000
+        });
+        const parsed = parseJavBusHtml(html);
+        onPartial?.(parsed);
+        return parsed;
+    }
+    async function fetchActressSocial(name) {
+        const trimmed = String(name ?? '').trim();
+        if (!trimmed || trimmed.length < 2) return null;
+        const cacheKey = `${ACTRESS_CACHE_PREFIX}${trimmed}`;
+        const cached = readCache(cacheKey);
+        if (cached) return cached;
+        const cookie = { Cookie: 'over18=1' };
+        const searchHtml = await fetchHtml(`${JD_SEARCH}${encodeURIComponent(trimmed)}&f=actor`, { headers: cookie, timeout: 4500 });
+        const paths = [...searchHtml.matchAll(JD_ACTOR_PATH_RE)].map(match => match[1] ?? '');
+        const actorPath = paths.find(path => !BLOCKED_ACTOR_PATHS.has(path.toLowerCase())) ?? '';
+        let twitter;
+        let instagram;
+        if (actorPath) {
+            const actorHtml = await fetchHtml(`https://javdb.com${actorPath}`, { headers: cookie, timeout: 4500 });
+            const twitterMatch = actorHtml.match(JD_TWITTER_RE);
+            const igMatch = actorHtml.match(JD_INSTAGRAM_RE);
+            if (twitterMatch?.[1] && !twitterMatch[1].includes('/share') && !twitterMatch[1].includes('/intent')) {
+                twitter = twitterMatch[1];
+            }
+            if (igMatch?.[1]) instagram = igMatch[1];
+        }
+        const result = { name: trimmed, twitter, instagram };
+        writeCache(cacheKey, result, twitter || instagram ? INFO_CACHE_TTL * 7 : INFO_CACHE_TTL);
+        return result;
+    }
+    async function loadVideoInfo() {
+        const code = getPageVideoCode();
+        if (!code) {
+            closeInfoSection();
+            log('⚠️ 无法识别番号，跳过情报加载');
+            return null;
+        }
+        buildInfoSection();
+        const session = ++state.infoSession;
+        const pageReviews = extractPageReviews();
+        state.infoData = { code, rating: undefined, stills: [], reviews: pageReviews, lists: [] };
+        const cacheKey = `${INFO_CACHE_PREFIX}${code}`;
+        const cached = readCache(cacheKey);
+        if (cached) {
+            state.infoData = cached;
+            if (session === state.infoSession) applyInfoToPage(cached);
+            return cached;
+        }
+        log(`🔎 正在获取情报: ${code}`);
+        const merged = [...pageReviews];
+        const seenStills = [];
+        const seenLists = [];
+        const acceptStills = incoming => {
+            for (const url of incoming ?? []) {
+                if (url && !NOW_PRINTING_RE.test(url) && !seenStills.includes(url)) seenStills.push(url);
+            }
+        };
+        const acceptLists = incoming => {
+            for (const item of incoming ?? []) {
+                if (item?.id && !seenLists.some(existing => existing.id === item.id)) seenLists.push(item);
+            }
+        };
+        const onPartial = partial => {
+            if (session !== state.infoSession) return;
+            if (partial.rating) {
+                if (!state.infoData.rating || partial.rating.source === 'JAVLibrary') state.infoData.rating = partial.rating;
+            }
+            if (partial.stills?.length) {
+                acceptStills(partial.stills);
+                state.infoData.stills = [...seenStills];
+            }
+            if (partial.reviews?.length) {
+                merged.push(...partial.reviews);
+                state.infoData.reviews = dedupeReviews(merged);
+            }
+            if (partial.lists?.length) {
+                acceptLists(partial.lists);
+                state.infoData.lists = [...seenLists];
+            }
+            applyInfoToPage(state.infoData);
+        };
+        const results = await Promise.allSettled([
+            fetchJavBusInfo(code, onPartial),
+            fetchJavDbInfo(code, onPartial),
+            fetchJavLibraryInfo(code, onPartial)
+        ]);
+        if (session !== state.infoSession) return null;
+        const javLib = results[2].status === 'fulfilled' ? results[2].value : { rating: undefined, reviews: [] };
+        const javDb = results[1].status === 'fulfilled' ? results[1].value : { rating: undefined, stills: [], reviews: [], lists: [] };
+        const javBus = results[0].status === 'fulfilled' ? results[0].value : { stills: [], reviews: [] };
+        for (const source of [javBus, javDb, javLib]) {
+            acceptStills(source.stills);
+            acceptLists(source.lists);
+            merged.push(...(source.reviews ?? []));
+        }
+        const finalData = {
+            code,
+            rating: javLib.rating || javDb.rating,
+            stills: [...seenStills],
+            reviews: dedupeReviews(merged),
+            lists: [...seenLists]
+        };
+        state.infoData = finalData;
+        applyInfoToPage(finalData);
+        writeCache(cacheKey, finalData);
+        if (finalData.rating || finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
+            log(`✅ 情报加载完成：${finalData.stills.length} 剧照，${finalData.reviews.length} 短评，${finalData.lists.length} 影单`);
+        } else {
+            log('⚠️ 情报源均无返回（可能被站点拦截）');
+        }
+        return finalData;
+    }
+    function injectRatingBadge(rating) {
+        if (!rating?.score) return;
+        const existing = document.querySelector('.info-rating-badge');
+        const label = `★ ${rating.score.toFixed(1)} <small>${rating.source}</small>`;
+        const title = `${rating.source} 评分：${rating.score.toFixed(1)} / 10` +
+            (rating.count ? `（${rating.count} 人评价）` : '');
+        if (existing) {
+            existing.innerHTML = label;
+            existing.title = title;
+            return;
+        }
+        const titleEl = infoAnchor();
+        if (!titleEl) return;
+        const badge = document.createElement('span');
+        badge.className = 'info-rating-badge';
+        badge.innerHTML = label;
+        badge.title = title;
+        titleEl.insertBefore(badge, titleEl.firstChild);
+    }
+    function injectSocialBadges(social, name) {
+        if (!social || (!social.twitter && !social.instagram)) return;
+        const links = document.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"]');
+        for (const link of links) {
+            const text = link.textContent?.trim() || '';
+            if (!text) continue;
+            if (!(text.toLowerCase() === name.toLowerCase() || text.includes(name))) continue;
+            if (link.dataset.avSocialInjected === '1' || link.nextElementSibling?.classList.contains('social-badges')) continue;
+            link.dataset.avSocialInjected = '1';
+            const container = document.createElement('span');
+            container.className = 'social-badges';
+            if (social.twitter) {
+                const xLink = document.createElement('a');
+                xLink.href = social.twitter;
+                xLink.target = '_blank';
+                xLink.rel = 'noopener noreferrer';
+                xLink.className = 'social-badge social-x';
+                xLink.title = `Twitter / X: ${name}`;
+                xLink.textContent = '𝕏';
+                xLink.addEventListener('click', event => event.stopPropagation());
+                container.appendChild(xLink);
+            }
+            if (social.instagram) {
+                const igLink = document.createElement('a');
+                igLink.href = social.instagram;
+                igLink.target = '_blank';
+                igLink.rel = 'noopener noreferrer';
+                igLink.className = 'social-badge social-ig';
+                igLink.title = `Instagram: ${name}`;
+                igLink.textContent = '📷';
+                igLink.addEventListener('click', event => event.stopPropagation());
+                container.appendChild(igLink);
+            }
+            link.after(container);
+        }
+    }
+    const INFO_ANCHOR_SELECTORS = [
+        'h1.text-base', 'h1.text-lg', '.video-title', '.video-detail-title',
+        '.video-detail h1', '.detail h1', 'h1', 'h4.h4', 'h4'
+    ];
+    function infoAnchor() {
+        const code = getPageVideoCode();
+        const candidates = [];
+        const seen = new Set();
+        const push = element => {
+            if (element && !seen.has(element)) {
+                seen.add(element);
+                candidates.push(element);
+            }
+        };
+        for (const selector of INFO_ANCHOR_SELECTORS) {
+            for (const element of document.querySelectorAll(selector)) push(element);
+        }
+        const usable = candidates.filter(element => {
+            if (element.closest?.('header, nav, .header, .navbar, .site-header, .logo, .top-bar')) return false;
+            const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+            return text.length >= 3;
+        });
+        if (!usable.length) return null;
+        if (code) {
+            const upper = code.toUpperCase();
+            const withCode = usable.find(element => (element.textContent || '').toUpperCase().includes(upper));
+            if (withCode) return withCode;
+        }
+        return usable[0];
+    }
+    const HUB_TABS = [['stills', '官方剧照'], ['reviews', '社区短评'], ['lists', '精选影单']];
+    const HUB_EMPTY = {
+        stills: '未获取到官方剧照',
+        reviews: '暂无社区短评（该片较新或暂无影迷留言）',
+        lists: '暂无收录该影片的精选影单'
+    };
+    const INFO_BLOCK_SELECTORS = ['.video-detail', '.video-info', '.video-meta', '.detail', 'article', 'main'];
+    function infoMount(anchor) {
+        if (!anchor) return null;
+        let node = anchor;
+        while (node.parentElement && node.parentElement !== document.body) {
+            const parent = node.parentElement;
+            if (parent.tagName === 'A' || parent.tagName === 'BUTTON' ||
+                /^H[1-6]$/.test(parent.tagName) || parent.tagName === 'P' || parent.tagName === 'SPAN') {
+                node = parent;
+                continue;
+            }
+            break;
+        }
+        let host = node.parentElement;
+        if (!host || host === document.body) {
+            for (const selector of INFO_BLOCK_SELECTORS) {
+                const block = anchor.closest?.(selector);
+                if (block?.parentElement && block.parentElement !== document.body) {
+                    host = block.parentElement;
+                    node = block;
+                    break;
+                }
+            }
+        }
+        if (!host || host === document.body) return null;
+        return { host, node };
+    }
+    function buildInfoSection() {
+        if (!document.querySelector('.av-info-section')) {
+            const anchor = infoAnchor();
+            const mount = infoMount(anchor);
+            if (!mount) return null;
+            const root = document.createElement('section');
+            root.className = 'av-info-section';
+            const head = document.createElement('div');
+            head.className = 'av-info-head';
+            const title = document.createElement('span');
+            title.className = 'av-info-title';
+            const icon = document.createElement('span');
+            icon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>';
+            const titleText = document.createElement('span');
+            titleText.textContent = '官方剧照与社区短评';
+            title.append(icon, titleText);
+            const meta = document.createElement('span');
+            meta.className = 'av-info-meta';
+            const stats = document.createElement('span');
+            stats.className = 'av-info-stats';
+            const chevron = document.createElement('span');
+            chevron.className = 'av-info-chevron';
+            meta.append(stats, chevron);
+            const body = document.createElement('div');
+            body.className = 'av-info-body';
+            body.hidden = true;
+            const tabs = document.createElement('nav');
+            tabs.className = 'av-hub-tabs';
+            const panes = {};
+            const loading = document.createElement('div');
+            loading.className = 'av-hub-loading';
+            const spinner = document.createElement('span');
+            spinner.className = 'av-spinner';
+            const loadingText = document.createElement('span');
+            loadingText.textContent = '正在获取情报…';
+            loading.append(spinner, loadingText);
+            for (const [key, label] of HUB_TABS) {
+                const tab = document.createElement('button');
+                tab.type = 'button';
+                tab.className = 'av-hub-tab';
+                tab.dataset.tab = key;
+                tab.textContent = label;
+                tab.addEventListener('click', () => setInfoTab(key));
+                tabs.appendChild(tab);
+                const pane = document.createElement('div');
+                pane.className = 'av-info-pane';
+                pane.dataset.pane = key;
+                pane.hidden = key !== 'stills';
+                panes[key] = pane;
+            }
+            const grid = document.createElement('div');
+            grid.className = 'av-stills-grid';
+            const reviews = document.createElement('div');
+            reviews.className = 'av-review-list';
+            const lists = document.createElement('div');
+            lists.className = 'av-list-grid';
+            panes.stills.append(loading, grid);
+            panes.reviews.appendChild(reviews);
+            panes.lists.appendChild(lists);
+            body.append(tabs, panes.stills, panes.reviews, panes.lists);
+            head.append(title, meta);
+            head.addEventListener('click', () => setInfoExpanded(body.hidden));
+            root.append(head, body);
+            mount.host.insertBefore(root, mount.node);
+            state.infoSection = {
+                root, head, body, meta, stats, chevron, tabs, panes,
+                grid, reviews, lists, loading, activeTab: 'stills'
+            };
+            setInfoTab('stills');
+        }
+        return state.infoSection;
+    }
+    function setInfoTab(key) {
+        const refs = state.infoSection;
+        if (!refs) return;
+        refs.activeTab = key;
+        for (const name of Object.keys(refs.panes)) refs.panes[name].hidden = name !== key;
+        for (const tab of refs.tabs.children) tab.classList.toggle('active', tab.dataset?.tab === key);
+    }
+    function setInfoExpanded(expanded) {
+        const refs = state.infoSection;
+        if (!refs) return;
+        refs.body.hidden = !expanded;
+        refs.root.classList.toggle('open', expanded);
+    }
+    function closeInfoSection() {
+        document.querySelector('.av-info-section')?.remove();
+        state.infoSection = null;
+    }
+    function renderInfoSection(data) {
+        if (!data) return;
+        const stills = data.stills ?? [];
+        const reviews = data.reviews ?? [];
+        const lists = data.lists ?? [];
+        if (!data.rating && !stills.length && !reviews.length && !lists.length) {
+            closeInfoSection();
+            return;
+        }
+        const refs = buildInfoSection();
+        if (!refs) return;
+        if (refs.loading.parentElement) refs.loading.remove();
+        const counts = { stills: stills.length, reviews: reviews.length, lists: lists.length };
+        for (const tab of refs.tabs.children) {
+            const key = tab.dataset?.tab;
+            const label = HUB_TABS.find(([name]) => name === key)?.[1] ?? '';
+            tab.textContent = `${label} (${counts[key] ?? 0})`;
+        }
+        const statNodes = [];
+        if (counts.stills) statNodes.push(`${counts.stills} 剧照`);
+        if (counts.reviews) statNodes.push(`${counts.reviews} 讨论`);
+        if (counts.lists) statNodes.push(`${counts.lists} 影单`);
+        refs.stats.replaceChildren(...statNodes.map(text => {
+            const span = document.createElement('span');
+            span.className = 'av-info-stat';
+            span.textContent = text;
+            return span;
+        }));
+        const empty = text => {
+            const p = document.createElement('p');
+            p.className = 'av-hub-empty';
+            p.textContent = text;
+            return p;
+        };
+        const stillNodes = stills.slice(0, 40).map((url, index) => {
+            const figure = document.createElement('figure');
+            figure.className = 'av-still-item';
+            const img = document.createElement('img');
+            img.src = url;
+            img.loading = 'lazy';
+            img.referrerPolicy = 'no-referrer';
+            img.alt = `剧照 ${index + 1}`;
+            figure.appendChild(img);
+            figure.addEventListener('click', () => openLightbox(stills, index));
+            return figure;
+        });
+        refs.grid.replaceChildren(...(stillNodes.length ? stillNodes : [empty(HUB_EMPTY.stills)]));
+        const reviewNodes = reviews.slice(0, 30).map(review => {
+            const card = document.createElement('article');
+            card.className = 'review-card';
+            const head = document.createElement('div');
+            head.className = 'review-header';
+            const user = document.createElement('strong');
+            user.textContent = review.user || '匿名';
+            head.appendChild(user);
+            if (review.date) {
+                const time = document.createElement('time');
+                time.textContent = review.date;
+                head.appendChild(time);
+            }
+            const text = document.createElement('p');
+            text.className = 'review-text';
+            text.textContent = review.content;
+            card.append(head, text);
+            return card;
+        });
+        refs.reviews.replaceChildren(...(reviewNodes.length ? reviewNodes : [empty(HUB_EMPTY.reviews)]));
+        const listNodes = lists.slice(0, 20).map(item => buildListCard(item));
+        refs.lists.replaceChildren(...(listNodes.length ? listNodes : [empty(HUB_EMPTY.lists)]));
+    }
+    function buildListCard(item) {
+        const card = document.createElement('article');
+        card.className = 'av-list-card';
+        const head = document.createElement('div');
+        head.className = 'av-list-head';
+        const left = document.createElement('div');
+        left.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;';
+        const icon = document.createElement('span');
+        icon.className = 'av-list-icon';
+        icon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"></path></svg>';
+        const title = document.createElement('strong');
+        title.className = 'av-list-title';
+        title.textContent = item.name;
+        title.title = item.name;
+        left.append(icon, title);
+        const meta = document.createElement('span');
+        meta.className = 'av-list-meta';
+        const stat = (text, svg) => {
+            const span = document.createElement('span');
+            span.className = 'av-list-stat';
+            if (svg) span.innerHTML = svg;
+            span.appendChild(document.createTextNode(text));
+            return span;
+        };
+        meta.appendChild(stat(`${item.movieCount} 部`));
+        if (item.collectionsCount) {
+            meta.appendChild(stat(formatCount(item.collectionsCount),
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>'));
+        }
+        if (item.viewsCount) {
+            meta.appendChild(stat(formatCount(item.viewsCount),
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'));
+        }
+        const expand = document.createElement('button');
+        expand.type = 'button';
+        expand.className = 'av-list-action av-list-expand';
+        const expandLabel = document.createElement('span');
+        expandLabel.textContent = '展开影片';
+        const chevron = document.createElement('span');
+        chevron.className = 'av-chevron';
+        expand.append(expandLabel, chevron);
+        const out = document.createElement('a');
+        out.className = 'av-list-action av-list-out';
+        out.href = item.shareUrl;
+        out.target = '_blank';
+        out.rel = 'noopener noreferrer';
+        out.title = '在 JavDB 官方页查看完整影单';
+        out.textContent = '原站 ↗';
+        const body = document.createElement('div');
+        body.className = 'av-list-body';
+        body.hidden = true;
+        expand.addEventListener('click', () => toggleListExpand(item, card, expand, expandLabel, body));
+        head.append(left, meta, expand, out);
+        card.append(head, body);
+        return card;
+    }
+    function toggleListExpand(item, card, button, label, body) {
+        const expanded = body.hidden === false;
+        if (expanded) {
+            body.hidden = true;
+            card.classList.remove('is-expanded');
+            button.classList.remove('is-open');
+            label.textContent = '展开影片';
+            return;
+        }
+        body.hidden = false;
+        card.classList.add('is-expanded');
+        button.classList.add('is-open');
+        label.textContent = '收起';
+        loadListMovies(item, body);
+    }
+    async function loadListMovies(item, body) {
+        const cached = state.listMovies?.[item.id];
+        if (cached && (cached.loading || cached.movies.length || cached.error)) {
+            renderListMovies(item, body, cached);
+            return;
+        }
+        state.listMovies = state.listMovies || {};
+        state.listMovies[item.id] = { loading: true, movies: [] };
+        renderListMovies(item, body, state.listMovies[item.id]);
+        const result = await fetchListMovies(item.id);
+        state.listMovies[item.id] = result.success
+            ? { loading: false, movies: result.movies }
+            : { loading: false, movies: [], error: result.error || 'network' };
+        if (body.parentElement) renderListMovies(item, body, state.listMovies[item.id]);
+    }
+    function renderListMovies(item, body, cache) {
+        const spinner = () => {
+            const wrap = document.createElement('div');
+            wrap.className = 'av-list-loading';
+            const dot = document.createElement('span');
+            dot.className = 'av-spinner';
+            const text = document.createElement('span');
+            text.textContent = '正在获取影单影片…';
+            wrap.append(dot, text);
+            return wrap;
+        };
+        const fallback = (title, text) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'av-list-fallback';
+            const strong = document.createElement('strong');
+            strong.textContent = title;
+            const p = document.createElement('p');
+            p.textContent = text;
+            const link = document.createElement('a');
+            link.className = 'av-list-action';
+            link.href = item.shareUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = `前往 JavDB 原站查看完整影单（共 ${item.movieCount} 部）↗`;
+            wrap.append(strong, p, link);
+            return wrap;
+        };
+        if (cache.loading) {
+            body.replaceChildren(spinner());
+            return;
+        }
+        if (cache.error === 'cloudflare') {
+            body.replaceChildren(fallback('受 JavDB 网页安全防护拦截',
+                'JavDB 网页端启用了 Cloudflare 人机验证，暂时无法在站内解析影单影片，请直接前往原站浏览。'));
+            return;
+        }
+        if (cache.error) {
+            const wrap = document.createElement('div');
+            wrap.className = 'av-list-fallback';
+            const p = document.createElement('p');
+            p.textContent = '获取影单影片列表超时或失败。';
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'av-list-action';
+            retry.textContent = '重试加载';
+            retry.addEventListener('click', () => {
+                delete state.listMovies[item.id];
+                loadListMovies(item, body);
+            });
+            const link = document.createElement('a');
+            link.className = 'av-list-action';
+            link.href = item.shareUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = '在 JavDB 查看 ↗';
+            wrap.append(p, retry, link);
+            body.replaceChildren(wrap);
+            return;
+        }
+        if (!cache.movies.length) {
+            const p = document.createElement('p');
+            p.className = 'av-hub-empty';
+            p.textContent = '该影单暂无收录影片或未解析到结果';
+            body.replaceChildren(p);
+            return;
+        }
+        const grid = document.createElement('div');
+        grid.className = 'av-list-movies';
+        for (const movie of cache.movies.slice(0, 60)) {
+            const link = document.createElement('a');
+            link.className = 'av-list-movie';
+            link.href = `/search/${encodeURIComponent(movie.number)}`;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.title = `在 MissAV 搜索 ${movie.number}${movie.title ? ' - ' + movie.title : ''}`;
+            const cover = document.createElement('div');
+            cover.className = 'av-list-movie-cover';
+            if (movie.cover) {
+                const img = document.createElement('img');
+                img.src = movie.cover;
+                img.loading = 'lazy';
+                img.referrerPolicy = 'no-referrer';
+                img.alt = movie.number;
+                cover.appendChild(img);
+            }
+            const label = document.createElement('strong');
+            label.textContent = movie.number;
+            link.append(cover, label);
+            grid.appendChild(link);
+        }
+        body.replaceChildren(grid);
+    }
+    async function fetchListMovies(listId) {
+        if (!listId) return { success: false, movies: [], error: 'empty' };
+        const url = `https://javdb.com/lists/${encodeURIComponent(listId)}`;
+        const html = await fetchHtml(url, {
+            headers: { Cookie: 'over18=1' },
+            timeout: 8000
+        }).catch(() => '');
+        if (!html) return { success: false, movies: [], error: 'network' };
+        if (/Just a moment\.\.\.|cf-browser-verification|challenge-platform/.test(html)) {
+            return { success: false, movies: [], error: 'cloudflare' };
+        }
+        const movies = parseJavDbListHtml(html);
+        if (!movies.length) return { success: false, movies: [], error: 'empty' };
+        return { success: true, movies };
+    }
+    function parseJavDbListHtml(html) {
+        const movies = [];
+        const itemRegex = /<a[^>]*href=["']\/v\/([a-zA-Z0-9]+)["'][^>]*title=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+        let match;
+        while ((match = itemRegex.exec(html)) !== null) {
+            const id = match[1];
+            const fullTitle = match[2];
+            const inner = match[3];
+            const strongMatch = inner.match(/<strong>([^<]+)<\/strong>/i);
+            const number = strongMatch ? strongMatch[1].trim() : '';
+            const imgMatch = inner.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["']/i);
+            let cover = imgMatch ? imgMatch[1] : undefined;
+            if (cover && cover.startsWith('//')) cover = 'https:' + cover;
+            const scoreMatch = inner.match(/class=["']value["']>([\d.]+)<\/span>/i);
+            const score = scoreMatch ? Number.parseFloat(scoreMatch[1]) : undefined;
+            movies.push({
+                id,
+                number: number || id,
+                title: (number ? fullTitle.replace(number, '') : fullTitle).trim() || number || id,
+                cover,
+                score: Number.isFinite(score) ? score : undefined
+            });
+        }
+        return movies;
+    }
+    function formatCount(num) {
+        if (num === undefined || num === null) return '';
+        if (num >= 10000) return (num / 10000).toFixed(1).replace(/\.0$/, '') + 'w';
+        if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+        return String(num);
+    }
+    function applyInfoToPage(data) {
+        if (!data) return;
+        if (data.rating) injectRatingBadge(data.rating);
+        renderInfoSection(data);
+    }
+    function openLightbox(images, index) {
+        closeLightbox();
+        state.gallery = images;
+        state.galleryIndex = clamp(index, 0, images.length - 1);
+        const layer = document.createElement('div');
+        layer.className = 'lightbox-layer';
+        const topbar = document.createElement('div');
+        topbar.className = 'lightbox-topbar';
+        const meta = document.createElement('span');
+        meta.className = 'lightbox-meta';
+        meta.textContent = '剧照画廊';
+        const counter = document.createElement('span');
+        counter.className = 'lightbox-counter';
+        const hint = document.createElement('span');
+        hint.className = 'lightbox-hint';
+        hint.textContent = '← → 切换 · Esc 关闭';
+        const close = createButton('✕', 'lightbox-close');
+        close.addEventListener('click', closeLightbox);
+        topbar.append(meta, counter, hint, close);
+        const stage = document.createElement('div');
+        stage.className = 'lightbox-stage';
+        const img = document.createElement('img');
+        img.className = 'lightbox-img';
+        stage.appendChild(img);
+        const prev = createButton('‹', 'lightbox-nav prev');
+        const next = createButton('›', 'lightbox-nav next');
+        prev.addEventListener('click', () => stepLightbox(-1));
+        next.addEventListener('click', () => stepLightbox(1));
+        layer.append(topbar, stage, prev, next);
+        layer.addEventListener('click', event => {
+            if (event.target === layer || event.target === stage) closeLightbox();
+        });
+        document.body.appendChild(layer);
+        state.lightbox = { layer, img, counter };
+        const keyHandler = event => {
+            if (event.key === 'Escape') closeLightbox();
+            else if (event.key === 'ArrowLeft') stepLightbox(-1);
+            else if (event.key === 'ArrowRight') stepLightbox(1);
+        };
+        layer._keyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler);
+        updateLightbox();
+    }
+    function stepLightbox(delta) {
+        if (!state.gallery.length) return;
+        const total = state.gallery.length;
+        state.galleryIndex = (state.galleryIndex + delta + total) % total;
+        updateLightbox();
+    }
+    function updateLightbox() {
+        if (!state.lightbox) return;
+        const total = state.gallery.length;
+        state.lightbox.img.src = state.gallery[state.galleryIndex];
+        state.lightbox.counter.textContent = `${state.galleryIndex + 1} / ${total}`;
+    }
+    function closeLightbox() {
+        if (state.lightbox) {
+            document.removeEventListener('keydown', state.lightbox.layer._keyHandler);
+            state.lightbox.layer.remove();
+            state.lightbox = null;
+        }
+    }
+    function loadActressSocialFromPage() {
+        const links = document.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"]');
+        const names = new Set();
+        for (const link of links) {
+            const text = link.textContent?.trim() || '';
+            if (text && text.length >= 2) names.add(text);
+        }
+        for (const name of names) {
+            fetchActressSocial(name).then(social => injectSocialBadges(social, name)).catch(() => {});
+        }
+    }
     function findMainVideo() {
         const candidates = [];
         for (const video of document.querySelectorAll('video')) {
@@ -1180,12 +2592,18 @@
         createPanel();
         createQuickControls();
         setupShortcuts();
+        buildSpeedHud(container);
+        setupHoldAccelerate(container);
         for (const type of ['play', 'pause', 'ended', 'loadedmetadata', 'ratechange', 'seeked']) {
             video.addEventListener(type, updatePlayPauseButton, { passive: true });
         }
         video.addEventListener('loadedmetadata', () => renderSubtitle(true), { passive: true });
         startSubtitleLoop();
         updatePlayPauseButton();
+        if (settings.autoInfo) {
+            loadActressSocialFromPage();
+            loadVideoInfo();
+        }
         log('🎬 播放器已就绪');
     }
     function clickPlayEntry() {
@@ -1211,6 +2629,13 @@
             lastUrl = location.href;
             log('🔀 页面已切换，重新初始化播放器');
             closeSubtitlePicker();
+            closeInfoSection();
+            closeLightbox();
+            cancelHold();
+            state.infoSession++;
+            state.infoData = null;
+            state.listMovies = null;
+            document.querySelector('.info-rating-badge')?.remove();
             state.player = null;
             state.video = null;
             stopPlayerPoll();
@@ -1238,10 +2663,14 @@
         initPage();
     }
     installSpaWatch();
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && state.infoSection) setInfoExpanded(false);
+    });
     window.addEventListener('beforeunload', () => {
         state.adObserver?.disconnect();
         stopPlayerPoll();
         cancelAnimationFrame(state.subtitleRAF);
+        clearTimeout(state.holdTimer);
     }, { once: true });
     } catch (error) {
         console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
