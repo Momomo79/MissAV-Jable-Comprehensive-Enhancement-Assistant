@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      10.0
+// @version      10.5
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -478,7 +478,50 @@
         reviewsLoadingMore: false
     };
     const ANALYTICS_ENTRY = /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
+    const COCKPIT_GUARD_CSS = 'html.av-cockpit-mode,html.av-cockpit-mode body{margin:0 !important;padding:0 !important;background:#090a0f !important;overflow-x:hidden !important}html.av-cockpit-mode body>*:not(.av-analytics-page){display:none !important}html.av-cockpit-mode .av-analytics-page{position:fixed !important;inset:0 !important;z-index:2147483600 !important;overflow-y:auto !important;background:#090a0f !important}';
+    function engageCockpitGuard() {
+        try {
+            document.documentElement.classList.add('av-cockpit-mode');
+            if (document.getElementById('av-cockpit-guard')) return;
+            const guard = document.createElement('style');
+            guard.id = 'av-cockpit-guard';
+            guard.textContent = COCKPIT_GUARD_CSS;
+            (document.head || document.documentElement).appendChild(guard);
+        } catch (_) {
+        }
+    }
+    function releaseCockpitGuard() {
+        try {
+            document.documentElement.classList.remove('av-cockpit-mode');
+            const guard = document.getElementById('av-cockpit-guard');
+            if (guard) guard.remove();
+        } catch (_) {
+        }
+    }
+    let cockpitMediaKiller = null;
+    function armMediaKiller() {
+        if (cockpitMediaKiller || typeof MutationObserver !== 'function') return;
+        cockpitMediaKiller = new MutationObserver(records => {
+            for (const record of records) {
+                for (const node of record.addedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    if (node.tagName === 'VIDEO' || node.tagName === 'AUDIO' || (node.querySelector && node.querySelector('video, audio'))) {
+                        silenceMedia();
+                        return;
+                    }
+                }
+            }
+        });
+        cockpitMediaKiller.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    function disarmMediaKiller() {
+        if (!cockpitMediaKiller) return;
+        cockpitMediaKiller.disconnect();
+        cockpitMediaKiller = null;
+    }
     if (ANALYTICS_ENTRY) {
+        engageCockpitGuard();
+        armMediaKiller();
         try {
             sessionStorage.setItem('avSub:cockpit', '1');
         } catch (_) {
@@ -585,6 +628,8 @@
             --ui-hover-blur: 1px;
             position: fixed;
             z-index: 99999;
+            display: flex;
+            flex-direction: column;
             width: ${PANEL_WIDTH}px;
             border: 1px solid rgba(255,255,255,.18);
             border-radius: 12px;
@@ -596,7 +641,7 @@
             font: 12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
             -webkit-font-smoothing: antialiased;
             text-shadow: 0 1px 2px rgba(0,0,0,.6);
-            transition: background .2s ease, box-shadow .2s ease;
+            transition: background .2s ease, box-shadow .2s ease, width .3s cubic-bezier(.4,0,.2,1);
             overflow: hidden;
         }
         .custom-control-panel:hover,
@@ -606,12 +651,22 @@
             -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%);
             box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55);
         }
-        .panel-header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,.4); cursor: move; font-size: 13px; font-weight: 700; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; letter-spacing: .4px; }
+        .panel-header { position: relative; z-index: 2; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,.4); cursor: move; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; }
+        .panel-title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 1.2px; text-shadow: none; background: linear-gradient(100deg,#7dd3fc 0%,#a78bfa 26%,#f0abfc 50%,#7dd3fc 74%,#a78bfa 100%); background-size: 240% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; filter: drop-shadow(0 0 6px rgba(129,140,248,.55)); animation: panelTitleFlow 4.2s linear infinite; transition: max-width .3s cubic-bezier(.4,0,.2,1), opacity .24s ease; }
+        @keyframes panelTitleFlow { from { background-position: 0% 50%; } to { background-position: 240% 50%; } }
         .custom-control-panel.panel-dragging { transition: none; }
         .custom-control-panel.panel-dragging .panel-header { cursor: grabbing; background: rgba(59,130,246,.35); }
-        .panel-header:hover { color: #fff; }
-        .panel-header-btn { cursor: pointer; padding: 0 4px; font-size: 14px; text-shadow: none; }
-        .panel-header-btn:hover { color: #60a5fa; }
+        .panel-gear { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #cbd5e1; cursor: pointer; transition: color .2s ease, background .2s ease, border-color .2s ease, transform .3s cubic-bezier(.4,0,.2,1), box-shadow .25s ease; }
+        .panel-gear svg { display: block; width: 17px; height: 17px; }
+        .panel-gear:hover { color: #fff; background: rgba(148,163,184,.18); border-color: rgba(148,163,184,.32); box-shadow: 0 0 10px rgba(129,140,248,.45); }
+        .panel-gear:focus-visible { outline: 2px solid rgba(56,189,248,.7); outline-offset: 2px; }
+        .custom-control-panel.panel-collapsed .panel-gear { transform: rotate(180deg); }
+        .custom-control-panel.panel-collapsed .panel-header { gap: 0; }
+        .custom-control-panel.panel-collapsed .panel-title { max-width: 0; opacity: 0; }
+        .panel-collapse { width: ${PANEL_WIDTH - 2}px; display: grid; grid-template-rows: 1fr; transition: grid-template-rows .3s cubic-bezier(.4,0,.2,1), opacity .24s ease; }
+        .panel-collapse-inner { min-height: 0; overflow: hidden; }
+        .custom-control-panel.panel-collapsed { width: 52px; }
+        .custom-control-panel.panel-collapsed .panel-collapse { grid-template-rows: 0fr; opacity: 0; }
         .panel-body { padding: 10px 12px; max-height: min(46vh, 380px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; }
         .panel-body[hidden] { display: none; }
         .panel-footer { padding: 0 12px 10px; border-top: 1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.28); }
@@ -1027,14 +1082,13 @@
     function clampPanelPosition(panel = state.panel) {
         if (!panel) return;
         const width = panel.offsetWidth || PANEL_WIDTH;
-        const height = panel.offsetHeight || 60;
         const maxX = Math.max(0, window.innerWidth - width);
-        const maxY = Math.max(0, window.innerHeight - height);
-        const top = clamp(panel.offsetTop || settings.panelY, 0, maxY);
         panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, 0, maxX)}px`;
-        panel.style.top = `${top}px`;
+        const height = panel.offsetHeight || 60;
+        const maxY = Math.max(0, window.innerHeight - height);
+        panel.style.top = `${clamp(panel.offsetTop || settings.panelY, 0, maxY)}px`;
     }
-    function makeDraggable(element, handle, keys = { x: 'panelX', y: 'panelY' }) {
+    function makeDraggable(element, handle, keys = { x: 'panelX', y: 'panelY' }, onEnd = null) {
         let originX = 0;
         let originY = 0;
         let startX = 0;
@@ -1059,13 +1113,14 @@
                 settings[keys.y] = element.offsetTop;
                 store.set(keys.x, element.offsetLeft);
                 store.set(keys.y, element.offsetTop);
+                if (onEnd) onEnd();
                 element.classList.remove('panel-dragging');
             }
             moved = false;
         };
         handle.addEventListener('mousedown', event => {
             if (event.button !== 0) return;
-            if (event.target.closest('.panel-header-btn')) return;
+            if (event.target.closest('.panel-gear')) return;
             event.preventDefault();
             element.classList.add('panel-dragging');
             originX = element.offsetLeft;
@@ -1079,7 +1134,7 @@
         handle.addEventListener('touchstart', event => {
             const touch = event.touches[0];
             if (!touch) return;
-            if (event.target.closest('.panel-header-btn')) return;
+            if (event.target.closest('.panel-gear')) return;
             element.classList.add('panel-dragging');
             originX = element.offsetLeft;
             originY = element.offsetTop;
@@ -1099,6 +1154,7 @@
                 document.removeEventListener('touchend', onTouchEnd);
                 store.set('panelX', element.offsetLeft);
                 store.set('panelY', element.offsetTop);
+                if (onEnd) onEnd();
                 element.classList.remove('panel-dragging');
             };
             document.addEventListener('touchmove', onTouchMove, { passive: false });
@@ -1135,28 +1191,49 @@
         state.panel = panel;
         const header = document.createElement('div');
         header.className = 'panel-header';
-        const title = document.createElement('span');
-        title.textContent = '⚙️ 增强助手 (拖拽移动)';
-        const minimizeBtn = document.createElement('span');
-        minimizeBtn.className = 'panel-header-btn';
-        minimizeBtn.textContent = settings.isMinimized ? '➕' : '➖';
-        minimizeBtn.title = '折叠 / 展开';
-        header.append(title, minimizeBtn);
+        header.title = '按住可拖动面板';
+        const panelTitle = document.createElement('span');
+        panelTitle.className = 'panel-title';
+        panelTitle.textContent = '综合增强助手';
+        const gearBtn = document.createElement('button');
+        gearBtn.type = 'button';
+        gearBtn.className = 'panel-gear';
+        gearBtn.setAttribute('aria-label', '展开或折叠设置面板');
+        gearBtn.setAttribute('aria-expanded', settings.isMinimized ? 'false' : 'true');
+        gearBtn.title = settings.isMinimized ? '展开设置面板' : '折叠设置面板';
+        gearBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+        header.append(gearBtn, panelTitle);
         const body = document.createElement('div');
         body.className = 'panel-body';
-        body.hidden = settings.isMinimized;
         state.panelBody = body;
         const footer = document.createElement('div');
         footer.className = 'panel-footer';
-        footer.hidden = settings.isMinimized;
         state.panelFooter = footer;
-        minimizeBtn.addEventListener('click', () => {
-            settings.isMinimized = !settings.isMinimized;
-            body.hidden = settings.isMinimized;
-            footer.hidden = settings.isMinimized;
-            minimizeBtn.textContent = settings.isMinimized ? '➕' : '➖';
-            store.set('isMinimized', settings.isMinimized);
-        });
+        const collapsible = document.createElement('div');
+        collapsible.className = 'panel-collapse';
+        const collapsibleInner = document.createElement('div');
+        collapsibleInner.className = 'panel-collapse-inner';
+        collapsible.appendChild(collapsibleInner);
+        state.panelCollapse = collapsible;
+        if (settings.isMinimized) panel.classList.add('panel-collapsed');
+        const layoutPanel = () => {
+            const anchor = clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60));
+            const headerHeight = header.offsetHeight || 34;
+            const contentHeight = settings.isMinimized ? 0 : collapsibleInner.scrollHeight;
+            const maxTop = Math.max(0, window.innerHeight - (headerHeight + contentHeight) - 4);
+            panel.style.bottom = 'auto';
+            panel.style.top = `${clamp(anchor, 0, maxTop)}px`;
+        };
+        state.layoutPanel = layoutPanel;
+        const togglePanel = collapsed => {
+            settings.isMinimized = collapsed;
+            panel.classList.toggle('panel-collapsed', collapsed);
+            gearBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            gearBtn.title = collapsed ? '展开设置面板' : '折叠设置面板';
+            store.set('isMinimized', collapsed);
+            layoutPanel();
+        };
+        gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
         const keysRow = document.createElement('div');
         keysRow.className = 'panel-row';
         const offsetGroup = createInputGroup('字幕偏移:', 'number', settings.subtitleOffset, input => {
@@ -1232,13 +1309,12 @@
         });
         const resetPosBtn = createButton('重置面板位置', 'btn-ghost');
         resetPosBtn.addEventListener('click', () => {
-            const targetY = 88;
             settings.panelX = 20;
-            settings.panelY = targetY;
+            settings.panelY = 88;
             panel.style.left = '20px';
-            panel.style.top = `${targetY}px`;
             store.set('panelX', 20);
-            store.set('panelY', targetY);
+            store.set('panelY', 88);
+            layoutPanel();
             log('面板已复位到左上角');
         });
         actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, btnSave);
@@ -1290,11 +1366,26 @@
         state.logEl.className = 'panel-status-log';
         footer.appendChild(state.logEl);
         body.append(keysRow, actionRow, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
-        panel.append(header, body, footer);
+        collapsibleInner.append(body, footer);
+        panel.append(header, collapsible);
         getUiLayer().appendChild(panel);
         applyUiStyles();
-        makeDraggable(panel, header);
+        const persistAnchor = () => {
+            settings.panelY = Math.max(0, Math.round(header.getBoundingClientRect().top));
+            store.set('panelY', settings.panelY);
+            layoutPanel();
+        };
+        makeDraggable(panel, header, { x: 'panelX', y: 'panelY' }, persistAnchor);
         clampPanelPosition(panel);
+        layoutPanel();
+        if (typeof ResizeObserver === 'function') {
+            state.panelLayoutObserver = new ResizeObserver(() => layoutPanel());
+            state.panelLayoutObserver.observe(collapsibleInner);
+        }
+        window.addEventListener('resize', () => {
+            panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
+            layoutPanel();
+        });
         panel.addEventListener('input', event => {
             const target = event.target;
             if (target && target.type === 'range') syncRangeFill(target);
@@ -3444,6 +3535,8 @@
     const MAX_WATCHED = 5000;
     const ANALYTICS_KEY = 'analyticsRecords_v1';
     const MAX_RECORDS = 3000;
+    const MAX_RECORDS_SLACK = 200;
+    const ANALYTICS_SAVE_INTERVAL = 25000;
     const CARD_SELECTOR = '.thumbnail, .video-img-box, .video-item, .list-item, article.video-card, .grid > div, .row > div[class*="col-"]';
     const DURATION_OPTIONS = [[0, '全部时长'], [300, '≥ 5 分钟'], [600, '≥ 10 分钟'], [1200, '≥ 20 分钟'], [1800, '≥ 30 分钟'], [3600, '≥ 60 分钟']];
     let watchedCache = null;
@@ -4092,51 +4185,146 @@
     }
     function saveAnalyticsRecords() {
         const list = analyticsRecords();
-        if (list.length > MAX_RECORDS) {
+        if (list.length > MAX_RECORDS + MAX_RECORDS_SLACK) {
             list.sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
             list.length = MAX_RECORDS;
         }
+        state.analyticsSavedAt = Date.now();
+        state.analyticsSavePending = false;
         store.set(ANALYTICS_KEY, JSON.stringify(list));
+    }
+    function persistAnalyticsRecords(force) {
+        if (!state.analyticsRecords && !state.analyticsSavePending) return;
+        if (!force && state.analyticsSavedAt && Date.now() - state.analyticsSavedAt < ANALYTICS_SAVE_INTERVAL) {
+            state.analyticsSavePending = true;
+            return;
+        }
+        saveAnalyticsRecords();
+    }
+    const META_SKIP_SELECTOR = 'nav, header, footer, .app-nav, .navbar, .site-header, .site-nav, .dropdown-menu, .pagination, .breadcrumb, .modal, .custom-ui-layer, .custom-control-panel, .av-analytics-page';
+    const META_ACTRESS_SELECTOR = 'a[href*="/actresses/"], a[href*="/actress/"], a[href*="/models/"], a[href*="/model/"], a[href*="/actors/"], a[href*="/stars/"]';
+    const META_GENRE_SELECTOR = 'a[href*="/genres/"], a[href*="/genre/"], a[href*="/tags/"], a[href*="/categories/"], a[href*="/category/"], a[href*="/themes/"]';
+    const META_MAKER_SELECTOR = 'a[href*="/makers/"], a[href*="/maker/"], a[href*="/labels/"], a[href*="/label/"], a[href*="/studios/"], a[href*="/studio/"]';
+    const META_BLOCKED_SLUGS = new Set(['actresses', 'actress', 'models', 'model', 'actors', 'stars', 'makers', 'maker', 'labels', 'label', 'genres', 'genre', 'tags', 'categories', 'ranking', 'saved', 'collection', 'list', 'search', 'videos']);
+    function metaRoot() {
+        for (const selector of ['.video-info', '.video-detail']) {
+            for (const element of document.querySelectorAll(selector)) {
+                if (element.closest(META_SKIP_SELECTOR)) continue;
+                return element;
+            }
+        }
+        return null;
+    }
+    function metaSkipped(anchor, root) {
+        const scope = root === undefined ? metaRoot() : root;
+        if (scope && scope.contains(anchor)) return false;
+        return !!anchor.closest(META_SKIP_SELECTOR);
+    }
+    function metaAnchors(selector, limit) {
+        const root = metaRoot();
+        const collect = list => {
+            const found = [];
+            for (const anchor of list) {
+                if (metaSkipped(anchor, root)) continue;
+                found.push(anchor);
+                if (found.length >= limit) break;
+            }
+            return found;
+        };
+        if (root) {
+            const scoped = collect(root.querySelectorAll(selector));
+            if (scoped.length) return scoped;
+        }
+        return collect(document.querySelectorAll(selector));
+    }
+    function metaText(anchor) {
+        const text = (anchor.textContent || '').replace(/\s+/g, ' ').trim();
+        if (text.length >= 2 && text.length <= 40) return text;
+        const own = (anchor.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+        if (own.length >= 2 && own.length <= 40) return own;
+        const titled = anchor.querySelector('[title]');
+        const titledText = titled ? (titled.getAttribute('title') || '').replace(/\s+/g, ' ').trim() : '';
+        if (titledText.length >= 2 && titledText.length <= 40) return titledText;
+        const image = anchor.querySelector('img[alt]');
+        const alt = image ? (image.getAttribute('alt') || '').replace(/\s+/g, ' ').trim() : '';
+        if (alt.length >= 2 && alt.length <= 40) return alt;
+        return '';
+    }
+    function metaHeading() {
+        const selectors = ['.video-info .info-header h4', '.video-info h4', '.video-detail .info-header h4', '.video-title', 'h1.text-base', 'h1.text-lg', '.video-detail h1', 'h1', 'h4'];
+        for (const selector of selectors) {
+            for (const element of document.querySelectorAll(selector)) {
+                if (metaSkipped(element)) continue;
+                const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+                if (text.length >= 2 && text.length <= 200) return text;
+            }
+        }
+        return '';
     }
     function extractPageMetadata() {
         const meta = { code: '', title: '', duration: 0, actresses: [], genres: [], maker: '' };
         meta.code = getPageVideoCode();
-        const heading = document.querySelector('h1.text-base, h1.text-lg, .video-title, h1');
-        if (heading) meta.title = (heading.textContent || '').trim();
+        meta.title = metaHeading();
         const rows = document.querySelectorAll('.text-secondary, .video-info-row, .info-row, li');
         for (const row of rows) {
+            if (metaSkipped(row)) continue;
             const first = row.querySelector('span:first-child');
             const label = first ? (first.textContent || '').trim() : '';
-            if (!meta.title && /^(Title|標題|标题|タイトル)\s*[:：]?$/i.test(label)) {
+            if (!meta.title && /^(?:Title|標題|标题|タイトル|作品名)\s*[:：]?$/i.test(label)) {
                 const value = row.querySelector('.font-medium');
-                if (value) meta.title = (value.textContent || '').trim();
+                if (value) meta.title = (value.textContent || '').replace(/\s+/g, ' ').trim();
             }
-            if (!meta.maker && /^(Maker|メーカー|片商|廠商|制作)\s*[:：]?$/i.test(label)) {
+            if (!meta.maker && /^(?:Maker|メーカー|メーカ|片商|廠商|厂商|制作|製作|スタジオ|Studio|Label|Company)\s*[:：]?$/i.test(label)) {
                 const value = row.querySelector('.font-medium, a');
-                if (value) meta.maker = (value.textContent || '').trim();
+                if (value) meta.maker = (value.textContent || '').replace(/\s+/g, ' ').trim();
             }
         }
         const genres = new Set();
-        for (const anchor of document.querySelectorAll('a[href*="/genres/"], a[href*="/genre/"]')) {
-            const text = (anchor.textContent || '').trim();
-            if (text && text.length < 30 && !text.includes('http') && !text.includes('ranking')) genres.add(text);
+        for (const anchor of metaAnchors(META_GENRE_SELECTOR, 40)) {
+            const text = metaText(anchor);
+            if (text && !text.includes('http') && !/^(?:ranking|saved|collection|list|search)$/i.test(text)) genres.add(text);
         }
         meta.genres = [...genres];
         const actresses = new Set();
-        const blocked = new Set(['actresses', 'actress', 'ranking', 'saved', 'collection', 'list']);
-        for (const anchor of document.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"]')) {
-            const text = (anchor.textContent || '').trim();
-            const slug = (anchor.getAttribute('href') || '').split('/').filter(Boolean).pop() || '';
-            if (text.length >= 2 && !blocked.has(slug)) actresses.add(text);
+        for (const anchor of metaAnchors(META_ACTRESS_SELECTOR, 30)) {
+            const text = metaText(anchor);
+            const slug = ((anchor.getAttribute('href') || '').split('/').filter(Boolean).pop() || '').toLowerCase();
+            if (text && !META_BLOCKED_SLUGS.has(slug)) actresses.add(text);
         }
         meta.actresses = [...actresses];
         if (!meta.maker) {
-            const makerEl = document.querySelector('.space-y-2 a[href*="/makers/"], a[href*="/makers/"], a[href*="/labels/"]');
-            if (makerEl) meta.maker = (makerEl.textContent || '').trim();
+            const makerAnchor = metaAnchors(META_MAKER_SELECTOR, 1)[0];
+            if (makerAnchor) meta.maker = metaText(makerAnchor);
         }
         const video = state.video;
         if (video && isFinite(video.duration)) meta.duration = Math.round(video.duration);
         return meta;
+    }
+    function backfillAnalyticsMetadata(fresh) {
+        if (!fresh || !fresh.code) return;
+        if (!fresh.actresses.length && !fresh.genres.length && !fresh.maker && !fresh.title) return;
+        const list = analyticsRecords();
+        let changed = false;
+        for (const record of list) {
+            if (record.code !== fresh.code) continue;
+            if (!(record.actresses || []).length && fresh.actresses.length) {
+                record.actresses = fresh.actresses;
+                changed = true;
+            }
+            if (!(record.genres || []).length && fresh.genres.length) {
+                record.genres = fresh.genres;
+                changed = true;
+            }
+            if (!record.maker && fresh.maker) {
+                record.maker = fresh.maker;
+                changed = true;
+            }
+            if ((!record.title || record.title === record.code) && fresh.title) {
+                record.title = fresh.title;
+                changed = true;
+            }
+        }
+        if (changed) persistAnalyticsRecords(true);
     }
     function startAnalyticsTracking() {
         const video = state.video;
@@ -4144,8 +4332,9 @@
         const code = getPageVideoCode();
         if (!code) return;
         if (state.analyticsSession && state.analyticsSession.code === code) return;
-        commitAnalyticsSession();
+        commitAnalyticsSession(true);
         const meta = extractPageMetadata();
+        backfillAnalyticsMetadata(meta);
         state.analyticsSession = {
             code,
             title: meta.title || code,
@@ -4157,6 +4346,7 @@
             maxProgress: 0,
             watchCount: 1,
             lastTick: Date.now(),
+            lastMediaTime: Number(video.currentTime) || 0,
             dirty: false,
             committed: false,
             metaTries: 0
@@ -4166,15 +4356,28 @@
             const session = state.analyticsSession;
             if (!session || !state.video) return;
             const now = Date.now();
-            const delta = (now - session.lastTick) / 1000;
+            const wallDelta = Math.max(0, (now - session.lastTick) / 1000);
             session.lastTick = now;
-            if (document.hidden) return;
-            if (!state.video.paused && !state.video.seeking && delta > 0 && delta < 10) {
-                session.watchedSeconds += delta;
+            const mediaTime = Number(state.video.currentTime) || 0;
+            const mediaDelta = mediaTime - session.lastMediaTime;
+            session.lastMediaTime = mediaTime;
+            if (document.hidden || wallDelta > 120) return;
+            if (!state.video.paused && !state.video.seeking && mediaDelta > 0) {
+                const jumped = mediaDelta > wallDelta * 8 + 2;
+                session.watchedSeconds += jumped ? wallDelta : mediaDelta;
                 session.dirty = true;
-                if (state.video.duration > 0) {
-                    session.maxProgress = Math.max(session.maxProgress, state.video.currentTime / state.video.duration);
-                    session.duration = Math.round(state.video.duration);
+                let total = Number(state.video.duration);
+                let origin = 0;
+                if (!Number.isFinite(total) || total <= 0) {
+                    const seekable = state.video.seekable;
+                    if (seekable && seekable.length) {
+                        origin = Number(seekable.start(0)) || 0;
+                        total = (Number(seekable.end(seekable.length - 1)) || 0) - origin;
+                    }
+                }
+                if (Number.isFinite(total) && total > 0) {
+                    session.duration = Math.round(total);
+                    session.maxProgress = Math.max(session.maxProgress, Math.min(1, (mediaTime - origin) / total));
                 }
             }
             if (!session.metaTries || ((!session.actresses.length || !session.genres.length) && session.metaTries < 3)) {
@@ -4184,13 +4387,30 @@
                 if (!session.actresses.length && fresh.actresses.length) session.actresses = fresh.actresses;
                 if (!session.genres.length && fresh.genres.length) session.genres = fresh.genres;
                 if (!session.maker && fresh.maker) session.maker = fresh.maker;
+                backfillAnalyticsMetadata(fresh);
             }
             if (session.dirty && session.watchedSeconds >= 30) commitAnalyticsSession();
         }, 2000);
-        video.addEventListener('pause', commitAnalyticsSession, { passive: true });
-        video.addEventListener('ended', commitAnalyticsSession, { passive: true });
+        video.addEventListener('pause', () => commitAnalyticsSession(true), { passive: true });
+        video.addEventListener('ended', () => commitAnalyticsSession(true), { passive: true });
     }
-    function commitAnalyticsSession() {
+    function resyncAnalyticsClock() {
+        if (document.hidden) {
+            flushAnalyticsRecords();
+            return;
+        }
+        const session = state.analyticsSession;
+        if (!session || !state.video) return;
+        session.lastTick = Date.now();
+        session.lastMediaTime = Number(state.video.currentTime) || 0;
+    }
+    function flushAnalyticsRecords() {
+        commitAnalyticsSession(true);
+        if (state.analyticsSavePending) persistAnalyticsRecords(true);
+    }
+    document.addEventListener('visibilitychange', resyncAnalyticsClock, { passive: true });
+    window.addEventListener('pagehide', flushAnalyticsRecords, { passive: true });
+    function commitAnalyticsSession(force) {
         const session = state.analyticsSession;
         if (!session || !session.dirty) return;
         const list = analyticsRecords();
@@ -4225,12 +4445,12 @@
         }
         session.watchedSeconds = 0;
         session.dirty = false;
-        saveAnalyticsRecords();
+        persistAnalyticsRecords(force === true);
     }
     function stopAnalyticsTracking() {
         clearInterval(state.analyticsTimer);
         state.analyticsTimer = 0;
-        commitAnalyticsSession();
+        commitAnalyticsSession(true);
         state.analyticsSession = null;
     }
     function aggregateAnalytics(range) {
@@ -4242,6 +4462,7 @@
             totalWatchedSeconds: 0,
             completedCount: 0,
             activeDays: new Set(),
+            allActiveDays: new Set(),
             hourlyCount: new Array(24).fill(0),
             hourlySeconds: new Array(24).fill(0),
             actressMap: new Map(),
@@ -4255,16 +4476,17 @@
             daySecondsMap: new Map()
         };
         for (const record of records) {
-            if (floor && (record.watchedAt || 0) < floor) continue;
-            result.totalCount++;
             const seconds = record.watchedSeconds || 0;
-            result.totalWatchedSeconds += seconds;
-            if ((record.maxProgress || 0) >= 0.75 || seconds >= 1200) result.completedCount++;
             const date = new Date(record.watchedAt || now);
             const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-            result.activeDays.add(dayKey);
+            result.allActiveDays.add(dayKey);
             result.dayMap.set(dayKey, (result.dayMap.get(dayKey) || 0) + 1);
             result.daySecondsMap.set(dayKey, (result.daySecondsMap.get(dayKey) || 0) + seconds);
+            if (floor && (record.watchedAt || 0) < floor) continue;
+            result.totalCount++;
+            result.totalWatchedSeconds += seconds;
+            if ((record.maxProgress || 0) >= 0.75) result.completedCount++;
+            result.activeDays.add(dayKey);
             const hour = date.getHours();
             result.hourlyCount[hour]++;
             result.hourlySeconds[hour] += seconds;
@@ -4326,13 +4548,14 @@
             .map(([name, entry]) => ({ name, count: entry.count, seconds: entry.seconds, percentage: Math.round((entry.count / maxActressCount) * 100) }))
             .sort((a, b) => b.count - a.count || b.seconds - a.seconds)
             .slice(0, 10);
-        const totalForGenre = Math.max(1, result.totalCount);
+        const maxGenreCount = Math.max(1, ...[...result.genreMap.values()]);
         const topGenres = [...result.genreMap.entries()]
-            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / totalForGenre) * 100) }))
+            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / maxGenreCount) * 100) }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 15);
+        const maxMakerCount = Math.max(1, ...[...result.makerMap.values()]);
         const topMakers = [...result.makerMap.entries()]
-            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / totalForGenre) * 100) }))
+            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / maxMakerCount) * 100) }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 8);
         const habitBuckets = [
@@ -4346,7 +4569,8 @@
             totalWatchedSeconds: result.totalWatchedSeconds,
             avgWatchedMinutes,
             completionRate,
-            activeDaysCount: result.activeDays.size,
+            activeDaysCount: result.allActiveDays.size,
+            rangeActiveDaysCount: result.activeDays.size,
             hourlyDistribution,
             dailyHeatmap,
             topActresses,
@@ -4434,12 +4658,15 @@
             buildKpi('累计观影部数', data.totalCount, '部', '独立番号记录库', '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3z"/>', 'cyan'),
             buildKpi('真实有效时长', formatDuration(data.totalWatchedSeconds), '', '心跳累计，排除挂机与暂停', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', 'emerald'),
             buildKpi('平均单片投入', data.avgWatchedMinutes, '分钟', '单部作品平均停留', '<path d="M12 2v20"/><path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>', 'violet'),
-            buildKpi('深度完播率', data.completionRate, '%', '播放超 75% 或超 20 分钟', '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="m9 15 2 2 4-4"/>', 'pink')
+            buildKpi('深度完播率', data.completionRate, '%', '播放进度达 75% 以上', '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="m9 15 2 2 4-4"/>', 'pink')
         );
         main.appendChild(kpiGrid);
         const heat = document.createElement('section');
         heat.className = 'av-cockpit-card';
-        heat.appendChild(buildCardTitle('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>', '观影节律热力图 (近 365 天)', `近一年累计活跃 ${data.activeDaysCount} 天`));
+        const heatSubtitle = range === 'all'
+            ? `近一年累计活跃 ${data.activeDaysCount} 天`
+            : `近一年累计活跃 ${data.activeDaysCount} 天 · 本范围 ${data.rangeActiveDaysCount} 天`;
+        heat.appendChild(buildCardTitle('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>', '观影节律热力图 (近 365 天)', heatSubtitle));
         const weekdays = document.createElement('div');
         weekdays.className = 'av-heatmap-weekdays';
         for (const name of ['日', '一', '二', '三', '四', '五', '六']) {
@@ -4529,7 +4756,7 @@
         rankGrid.className = 'av-duo-grid';
         const actressCard = document.createElement('section');
         actressCard.className = 'av-cockpit-card';
-        actressCard.appendChild(buildCardTitle('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', '偏好女优 TOP 10', '按陪伴频次与时长加权', true));
+        actressCard.appendChild(buildCardTitle('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', '偏好女优 TOP 10', '频次与时长加权，条长为相对榜首', true));
         if (!data.topActresses.length) {
             const empty = document.createElement('div');
             empty.className = 'av-mini-empty';
@@ -4548,7 +4775,7 @@
                 head.className = 'av-rank-head';
                 const link = document.createElement('a');
                 link.className = 'av-actress-link';
-                link.href = `https://missav.ai/search/${encodeURIComponent(item.name)}`;
+                link.href = IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`;
                 link.target = '_blank';
                 link.rel = 'noopener noreferrer';
                 link.textContent = item.name;
@@ -4568,7 +4795,7 @@
         }
         const genreCard = document.createElement('section');
         genreCard.className = 'av-cockpit-card';
-        genreCard.appendChild(buildCardTitle('<path d="M20.6 13.4 12 22l-9-9V3h10z"/><path d="M7.5 7.5h.01"/>', '偏好题材 TOP 15', '性癖雷达分布'));
+        genreCard.appendChild(buildCardTitle('<path d="M20.6 13.4 12 22l-9-9V3h10z"/><path d="M7.5 7.5h.01"/>', '偏好题材 TOP 15', '出现频次，条长为相对榜首'));
         if (!data.topGenres.length) {
             const empty = document.createElement('div');
             empty.className = 'av-mini-empty';
@@ -4584,7 +4811,7 @@
                 const bar = document.createElement('div');
                 bar.className = 'av-progress-bar is-genre';
                 const fill = document.createElement('div');
-                fill.style.width = `${Math.min(100, item.percentage * 2.5)}%`;
+                fill.style.width = `${Math.min(100, item.percentage)}%`;
                 bar.appendChild(fill);
                 const count = document.createElement('span');
                 count.className = 'av-genre-count';
@@ -4601,7 +4828,7 @@
         if (!data.topMakers.length) {
             const empty = document.createElement('div');
             empty.className = 'av-mini-empty';
-            empty.textContent = '暂无片商信息';
+            empty.textContent = IS_JABLE ? 'Jable 未提供片商信息' : '暂无片商信息';
             makerCard.appendChild(empty);
         } else {
             const chips = document.createElement('div');
@@ -4685,11 +4912,12 @@
             analyticsObserver.disconnect();
             analyticsObserver = null;
         }
+        disarmMediaKiller();
+        releaseCockpitGuard();
         window.close();
         setTimeout(() => {
             if (window.closed || !state.analyticsPage) return;
-            if (history.length > 1) history.back();
-            else location.href = analyticsUrl().replace('#av-analytics', '');
+            location.replace(analyticsUrl().replace('#av-analytics', ''));
         }, 160);
     }
     function buildCockpitAction(iconPaths, label, className, title, onClick) {
@@ -4743,7 +4971,19 @@
         analyticsObserver = new MutationObserver(evictForeignNodes);
         analyticsObserver.observe(document.body, { childList: true });
     }
+    function silenceMedia() {
+        for (const media of document.querySelectorAll('video, audio')) {
+            try {
+                media.pause();
+                media.muted = true;
+                media.removeAttribute('src');
+                media.load();
+            } catch (_) {
+            }
+        }
+    }
     function buildAnalyticsPage() {
+        silenceMedia();
         document.body.replaceChildren();
         document.body.style.margin = '0';
         document.body.style.padding = '0';
@@ -4821,8 +5061,26 @@
     }
     function mountAnalyticsPage() {
         analyticsRequested = true;
+        engageCockpitGuard();
+        armMediaKiller();
         document.title = ANALYTICS_TITLE;
+        try {
+            sessionStorage.setItem('avSub:cockpit', '1');
+        } catch (_) {
+        }
+        if (!/^#av-analytics\b/.test(location.hash)) {
+            try {
+                if (typeof history.replaceState === 'function') history.replaceState(null, '', analyticsUrl());
+            } catch (_) {
+            }
+        }
         const boot = () => {
+            if (!document.body) {
+                if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+                else setTimeout(boot, 60);
+                return;
+            }
+            disarmMediaKiller();
             if (document.querySelector('.av-analytics-page')) return;
             buildAnalyticsPage();
         };
@@ -4836,6 +5094,7 @@
                     return;
                 }
                 if (document.hidden) return;
+                silenceMedia();
                 if (document.title !== ANALYTICS_TITLE) document.title = ANALYTICS_TITLE;
                 if (!state.analyticsPage || !state.analyticsPage.isConnected) buildAnalyticsPage();
             }, 800);
@@ -4875,14 +5134,27 @@
             }, 600);
         };
         const onRouteChange = debounce(handleRouteChange, 400);
+        const analyticsKick = () => {
+            if (!isAnalyticsRoute()) return;
+            if (state.analyticsPage) return;
+            mountAnalyticsPage();
+        };
         window.addEventListener('popstate', onRouteChange, { passive: true });
         window.addEventListener('hashchange', onRouteChange, { passive: true });
+        window.addEventListener('hashchange', analyticsKick, { passive: true });
+        window.addEventListener('popstate', analyticsKick, { passive: true });
         for (const method of ['pushState', 'replaceState']) {
             const original = history[method];
             if (typeof original !== 'function') continue;
             history[method] = function (...args) {
+                const next = typeof args[2] === 'string' ? args[2] : '';
+                if (next.includes('av-analytics')) {
+                    cockpitSticky = true;
+                    analyticsRequested = true;
+                }
                 const result = original.apply(this, args);
-                onRouteChange();
+                if (analyticsRequested) analyticsKick();
+                else onRouteChange();
                 return result;
             };
         }
@@ -4893,6 +5165,24 @@
         initPage();
     }
     if (!isAnalyticsRoute()) installSpaWatch();
+    document.addEventListener('click', event => {
+        const target = event.target;
+        if (!target || typeof target.closest !== 'function') return;
+        const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
+        if (!link) return;
+        link.href = analyticsUrl();
+        event.stopImmediatePropagation();
+    }, true);
+    for (const type of ['auxclick', 'pointerdown', 'mousedown']) {
+        document.addEventListener(type, event => {
+            const target = event.target;
+            if (!target || typeof target.closest !== 'function') return;
+            const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
+            if (!link) return;
+            link.href = analyticsUrl();
+            event.stopImmediatePropagation();
+        }, true);
+    }
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && state.infoSection) setInfoExpanded(false);
     });
