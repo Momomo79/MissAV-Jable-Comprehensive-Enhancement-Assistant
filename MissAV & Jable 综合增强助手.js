@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      9.2
-// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      10.0
+// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
 // @match        *://missav.live/*
@@ -68,7 +68,7 @@
     const HOLD_CANCEL_DISTANCE = 12;
     const HOLD_CLICK_SUPPRESS = 300;
     const INFO_CACHE_TTL = 86400000;
-    const INFO_CACHE_PREFIX = 'info:v2:';
+    const INFO_CACHE_PREFIX = 'info:v4:';
     const ACTRESS_CACHE_PREFIX = 'actress:';
     const JDFORREPAM_API = 'https://jdforrepam.com';
     const JDSIGN_SUFFIX = '71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa';
@@ -361,6 +361,17 @@
         hoverBlur: store.getNumber('hoverBlur', 1, 0, 20),
         holdAccelerate: store.getBool('holdAccelerate', true),
         autoInfo: store.getBool('autoInfo', true),
+        filterEnabled: store.getBool('filterEnabled', true),
+        filterMinDuration: store.getNumber('filterMinDuration', 0, 0, 86400),
+        filterHideWatched: store.getBool('filterHideWatched', false),
+        filterEnableBlacklist: store.getBool('filterEnableBlacklist', true),
+        filterKeywords: store.getKeyName('filterKeywords', ''),
+        filterPrefixes: store.getKeyName('filterPrefixes', ''),
+        filterDimMode: store.getBool('filterDimMode', false),
+        filterTrackWatched: store.getBool('filterTrackWatched', true),
+        filterBarVisible: store.getBool('filterBarVisible', true),
+        filterPanelOpen: store.getBool('filterPanelOpen', false),
+        analyticsTrack: store.getBool('analyticsTrack', true),
         keys: {
             accelerate: store.getKeyName('keyAccelerate', 'z'),
             forward: store.getKeyName('keyForward', 'x'),
@@ -382,6 +393,17 @@
         store.set('hoverBlur', settings.hoverBlur);
         store.set('holdAccelerate', settings.holdAccelerate);
         store.set('autoInfo', settings.autoInfo);
+        store.set('filterEnabled', settings.filterEnabled);
+        store.set('filterMinDuration', settings.filterMinDuration);
+        store.set('filterHideWatched', settings.filterHideWatched);
+        store.set('filterEnableBlacklist', settings.filterEnableBlacklist);
+        store.set('filterKeywords', settings.filterKeywords);
+        store.set('filterPrefixes', settings.filterPrefixes);
+        store.set('filterDimMode', settings.filterDimMode);
+        store.set('filterTrackWatched', settings.filterTrackWatched);
+        store.set('filterBarVisible', settings.filterBarVisible);
+        store.set('filterPanelOpen', settings.filterPanelOpen);
+        store.set('analyticsTrack', settings.analyticsTrack);
     }
     const state = {
         video: null,
@@ -433,8 +455,40 @@
         gallery: [],
         galleryIndex: 0,
         infoData: null,
-        listMovies: null
+        listMovies: null,
+        filterBar: null,
+        filterHost: null,
+        filterChecks: {},
+        filterCheckSync: {},
+        filterPanel: null,
+        filterDepends: null,
+        filterStats: { total: 0, filtered: 0, visible: 0 },
+        filterTimer: 0,
+        filterObserver: null,
+        domGen: 0,
+        watchGen: 0,
+        analyticsSession: null,
+        analyticsTimer: 0,
+        analyticsRecords: null,
+        analyticsPage: null,
+        analyticsRange: 'all',
+        reviewsCode: '',
+        reviewsPage: 1,
+        reviewsHasMore: false,
+        reviewsLoadingMore: false
     };
+    const ANALYTICS_ENTRY = /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
+    if (ANALYTICS_ENTRY) {
+        try {
+            sessionStorage.setItem('avSub:cockpit', '1');
+        } catch (_) {
+        }
+    }
+    let cockpitSticky = ANALYTICS_ENTRY;
+    try {
+        cockpitSticky = cockpitSticky || sessionStorage.getItem('avSub:cockpit') === '1';
+    } catch (_) {
+    }
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
         return;
@@ -539,7 +593,7 @@
             -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%);
             box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45);
             color: #f8fafc;
-            font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
+            font: 12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
             -webkit-font-smoothing: antialiased;
             text-shadow: 0 1px 2px rgba(0,0,0,.6);
             transition: background .2s ease, box-shadow .2s ease;
@@ -552,35 +606,36 @@
             -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%);
             box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55);
         }
-        .panel-header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(0,0,0,.4); cursor: move; font-size: 14px; font-weight: 700; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; letter-spacing: .5px; }
+        .panel-header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,.4); cursor: move; font-size: 13px; font-weight: 700; color: #f1f5f9; border-bottom: 1px solid rgba(255,255,255,.15); user-select: none; letter-spacing: .4px; }
         .custom-control-panel.panel-dragging { transition: none; }
         .custom-control-panel.panel-dragging .panel-header { cursor: grabbing; background: rgba(59,130,246,.35); }
         .panel-header:hover { color: #fff; }
         .panel-header-btn { cursor: pointer; padding: 0 4px; font-size: 14px; text-shadow: none; }
         .panel-header-btn:hover { color: #60a5fa; }
-        .panel-body { padding: 12px 14px; }
+        .panel-body { padding: 10px 12px; max-height: min(46vh, 380px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; }
         .panel-body[hidden] { display: none; }
-        .panel-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 10px; margin: 0 0 10px; }
-        .input-group { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; color: #e2e8f0; font-size: 13px; font-weight: 600; white-space: nowrap; letter-spacing: .3px; }
+        .panel-footer { padding: 0 12px 10px; border-top: 1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.28); }
+        .panel-footer[hidden] { display: none; }
+        .panel-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 8px; margin: 0 0 8px; }
+        .input-group { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; color: #e2e8f0; font-size: 12px; font-weight: 600; white-space: nowrap; letter-spacing: .2px; }
         .custom-control-panel input[type="number"]::-webkit-outer-spin-button,
         .custom-control-panel input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .custom-control-panel input[type="number"] { -moz-appearance: textfield; }
         .custom-control-panel input[type="text"],
-        .custom-control-panel input[type="number"] { width: 54px; height: 26px; padding: 0 4px; border: 1px solid rgba(255,255,255,.3); border-radius: 6px; outline: none; background: rgba(255,255,255,.15); color: #fff; font-size: 13px; font-weight: 700; text-align: center; text-shadow: none; transition: border-color .2s; }
+        .custom-control-panel input[type="number"] { width: 48px; height: 24px; padding: 0 4px; border: 1px solid rgba(255,255,255,.3); border-radius: 6px; outline: none; background: rgba(255,255,255,.15); color: #fff; font-size: 12px; font-weight: 700; text-align: center; text-shadow: none; transition: border-color .2s; }
         .custom-control-panel input[type="text"] { width: 44px; text-transform: lowercase; }
         .custom-control-panel input:focus { border-color: #60a5fa; background: rgba(255,255,255,.2); }
-        .btn-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-        .btn-group button { width: 100%; min-height: 30px; padding: 5px; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; background: rgba(255,255,255,.12); color: #f8fafc; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: .5px; text-shadow: 0 1px 2px rgba(0,0,0,.4); transition: background .2s ease, border-color .2s ease; }
+        .btn-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+        .btn-group button { width: 100%; min-height: 26px; padding: 4px 5px; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; background: rgba(255,255,255,.12); color: #f8fafc; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: .2px; text-shadow: 0 1px 2px rgba(0,0,0,.4); transition: background .2s ease, border-color .2s ease; }
         .btn-group button:hover { background: rgba(255,255,255,.25); }
         .btn-group button.btn-primary { background: linear-gradient(135deg,#3b82f6,#2563eb); border-color: rgba(59,130,246,.5); }
         .btn-group button.btn-danger { background: rgba(239,68,68,.25); color: #fecaca; border-color: rgba(239,68,68,.4); }
         .btn-group button.btn-ghost { background: rgba(148,163,184,.18); color: #e2e8f0; border-color: rgba(148,163,184,.32); }
         .btn-group button.btn-ghost:hover { background: rgba(148,163,184,.3); }
-        .panel-full-btn { width: 100%; margin-top: 12px; }
-        .panel-status-log { margin-top: 12px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
-        .panel-status-log::-webkit-scrollbar { width: 4px; }
-        .panel-status-log::-webkit-scrollbar-thumb { background: rgba(255,255,255,.3); border-radius: 2px; }
-        .log-entry { display: flex; align-items: flex-start; word-break: break-all; }
+        .panel-full-btn { display: block; width: 100%; min-height: 24px; margin-top: 4px; padding: 2px 8px; border: 0; border-radius: 6px; background: rgba(255,255,255,.06); color: #cbd5e1; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .2s ease, color .2s ease; }
+        .panel-full-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
+        .panel-status-log { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
+        .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
         .custom-quick-controls { position: absolute; left: 50%; bottom: 48px; transform: translateX(-50%) scale(var(--quick-scale, 1)); transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box; }
         .custom-quick-controls.quick-visible,
@@ -603,7 +658,16 @@
         .slider-row-container[hidden] { display: none; }
         .slider-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; }
         .slider-group label { width: 65px; flex-shrink: 0; white-space: nowrap; }
-        .slider-group input[type="range"] { flex: 1; margin: 0; cursor: pointer; accent-color: #3b82f6; height: 4px; border-radius: 2px; }
+        .slider-group input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1; width: 100%; height: 14px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
+        .slider-group input[type="range"]::-webkit-slider-runnable-track { height: 4px; border: 0; border-radius: 999px; background: linear-gradient(90deg, #38bdf8 0 var(--av-range, 0%), rgba(255,255,255,.16) var(--av-range, 0%) 100%); }
+        .slider-group input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,.18), 0 1px 4px rgba(0,0,0,.45); transition: box-shadow .15s ease, transform .15s ease; }
+        .slider-group input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.26), 0 1px 4px rgba(0,0,0,.45); }
+        .slider-group input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.12); }
+        .slider-group input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.38); }
+        .slider-group input[type="range"]::-moz-range-track { height: 4px; border: 0; border-radius: 999px; background: rgba(255,255,255,.16); }
+        .slider-group input[type="range"]::-moz-range-progress { height: 4px; border: 0; border-radius: 999px; background: #38bdf8; }
+        .slider-group input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,.18); }
+        .slider-group input[type="range"]:hover::-moz-range-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.26); }
         .slider-value { width: 30px; text-align: right; font-family: ui-monospace,Consolas,monospace; font-size: 11px; flex-shrink: 0; }
         .quick-loop-wrapper { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; }
         .quick-loop-btn { min-width: 46px; height: 32px; padding: 0 8px; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; line-height: 1; font-size: 13px; }
@@ -668,22 +732,81 @@
         .av-hub-tab { color: #94a3b8; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.12); border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; transition: all .15s; }
         .av-hub-tab:hover { color: #e2e8f0; border-color: rgba(255,255,255,.25); }
         .av-hub-tab.active { color: #fff; background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.35); }
-        .av-stills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
-        .av-still-item { aspect-ratio: 16 / 10; margin: 0; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); overflow: hidden; cursor: zoom-in; transition: transform .15s, border-color .15s, box-shadow .15s; }
+        .av-stills-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; max-height: 420px; padding-right: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
+        .av-still-item { position: relative; aspect-ratio: 16 / 10; margin: 0; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); overflow: hidden; cursor: zoom-in; transition: transform .15s, border-color .15s, box-shadow .15s; }
         .av-still-item:hover { border-color: rgba(255,255,255,.35); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.4); }
-        .av-still-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .av-still-open { display: block; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: none; cursor: zoom-in; }
+        .av-still-item img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .2s; }
+        .av-still-item:hover img { transform: scale(1.04); }
         .av-hub-empty { margin: 0; padding: 28px 0; text-align: center; color: #64748b; font-size: 12px; }
         .av-hub-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 28px 0; color: #94a3b8; font-size: 12px; }
         .av-spinner { width: 12px; height: 12px; border: 1.5px solid #94a3b8; border-right-color: transparent; border-radius: 50%; animation: av-spin .7s linear infinite; }
         @keyframes av-spin { to { transform: rotate(360deg); } }
-        .av-review-list { display: flex; flex-direction: column; gap: 10px; }
+        .av-review-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 420px;
+            padding-right: 4px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148,163,184,.4) transparent;
+            scrollbar-gutter: stable;
+            -webkit-overflow-scrolling: touch;
+        }
+        .av-review-list > .review-card { flex: 0 0 auto; }
         .review-card { padding: 10px 14px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.12); }
+        .av-review-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        .av-review-user { color: #e2e8f0; font-size: 12px; font-weight: 600; }
+        .av-review-score { color: #fbbf24; font-size: 11px; font-weight: 700; }
+        .av-review-date { margin-left: auto; color: #64748b; font-size: 11px; }
+        .av-review-text { margin: 0; color: #cbd5e1; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+        .av-review-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; padding: 2px 0; }
+        .av-hub-more-btn { min-height: 28px; padding: 4px 16px; border: 1px solid rgba(56,189,248,.4); border-radius: 6px; background: rgba(56,189,248,.12); color: #38bdf8; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+        .av-hub-more-btn:hover { background: rgba(56,189,248,.22); }
+        .av-hub-more-btn:disabled { opacity: .6; cursor: progress; }
+        .av-hub-done { color: #64748b; font-size: 11px; }
+        .review-text { max-height: 9em; overflow-y: auto; }
         .review-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
         .review-header strong { color: #93c5fd; font-size: 12px; }
         .review-header time { color: #64748b; font-size: 11px; }
         .review-text { color: #cbd5e1; font-size: 12px; word-break: break-word; }
         .av-info-pane[hidden] { display: none; }
-        .av-list-grid { display: flex; flex-direction: column; gap: 10px; }
+        .av-list-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 480px;
+            padding-right: 4px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148,163,184,.4) transparent;
+            scrollbar-gutter: stable;
+            -webkit-overflow-scrolling: touch;
+        }
+        .av-stills-grid::-webkit-scrollbar,
+        .av-review-list::-webkit-scrollbar,
+        .av-list-grid::-webkit-scrollbar,
+        .panel-body::-webkit-scrollbar,
+        .panel-status-log::-webkit-scrollbar { width: 8px; height: 8px; }
+        .av-stills-grid::-webkit-scrollbar-thumb,
+        .av-review-list::-webkit-scrollbar-thumb,
+        .av-list-grid::-webkit-scrollbar-thumb,
+        .panel-body::-webkit-scrollbar-thumb,
+        .panel-status-log::-webkit-scrollbar-thumb { background: rgba(148,163,184,.38); background-clip: padding-box; border: 2px solid transparent; border-radius: 999px; }
+        .av-stills-grid::-webkit-scrollbar-thumb:hover,
+        .av-review-list::-webkit-scrollbar-thumb:hover,
+        .av-list-grid::-webkit-scrollbar-thumb:hover,
+        .panel-body::-webkit-scrollbar-thumb:hover,
+        .panel-status-log::-webkit-scrollbar-thumb:hover { background: rgba(56,189,248,.62); background-clip: padding-box; border: 2px solid transparent; }
+        .av-stills-grid::-webkit-scrollbar-track,
+        .av-review-list::-webkit-scrollbar-track,
+        .av-list-grid::-webkit-scrollbar-track,
+        .panel-body::-webkit-scrollbar-track,
+        .panel-status-log::-webkit-scrollbar-track { background: transparent; }
+        .av-list-grid > .av-list-card { flex: 0 0 auto; }
         .av-list-card { border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); border-radius: 12px; overflow: hidden; }
         .av-list-card.is-expanded { border-color: rgba(255,255,255,.28); background: rgba(255,255,255,.06); }
         .av-list-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
@@ -982,8 +1105,20 @@
             document.addEventListener('touchend', onTouchEnd);
         }, { passive: true });
     }
+    function syncRangeFill(input) {
+        if (!input || input.type !== 'range') return;
+        const min = Number(input.min || 0);
+        const max = Number(input.max || 100);
+        const span = max - min;
+        const ratio = span > 0 ? (Number(input.value) - min) / span : 0;
+        input.style.setProperty('--av-range', `${(clamp(ratio, 0, 1) * 100).toFixed(2)}%`);
+    }
+    function syncRangeFills(root) {
+        if (!root) return;
+        for (const input of root.querySelectorAll('input[type="range"]')) syncRangeFill(input);
+    }
     function applyUiStyles() {
-        for (const target of [state.panel, state.subtitlePicker, state.subtitleBanner]) {
+        for (const target of [state.panel, state.subtitlePicker, state.subtitleBanner, state.filterBar]) {
             if (!target) continue;
             target.style.setProperty('--ui-bg-opacity', settings.opacity);
             target.style.setProperty('--ui-blur', `${settings.blur}px`);
@@ -1011,9 +1146,14 @@
         body.className = 'panel-body';
         body.hidden = settings.isMinimized;
         state.panelBody = body;
+        const footer = document.createElement('div');
+        footer.className = 'panel-footer';
+        footer.hidden = settings.isMinimized;
+        state.panelFooter = footer;
         minimizeBtn.addEventListener('click', () => {
             settings.isMinimized = !settings.isMinimized;
             body.hidden = settings.isMinimized;
+            footer.hidden = settings.isMinimized;
             minimizeBtn.textContent = settings.isMinimized ? '➕' : '➖';
             store.set('isMinimized', settings.isMinimized);
         });
@@ -1139,14 +1279,27 @@
         toggleSliderBtn.addEventListener('click', () => {
             sliderRow.hidden = !sliderRow.hidden;
         });
+        const filterToggleBtn = createButton('🛡 隐藏/显示内容过滤与屏蔽', 'btn-primary panel-full-btn');
+        const filterPanel = buildFilterPanel();
+        filterToggleBtn.addEventListener('click', () => {
+            filterPanel.hidden = !filterPanel.hidden;
+            settings.filterPanelOpen = !filterPanel.hidden;
+            store.set('filterPanelOpen', settings.filterPanelOpen);
+        });
         state.logEl = document.createElement('div');
         state.logEl.className = 'panel-status-log';
-        body.append(keysRow, actionRow, toggleSliderBtn, sliderRow, state.logEl);
-        panel.append(header, body);
+        footer.appendChild(state.logEl);
+        body.append(keysRow, actionRow, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
+        panel.append(header, body, footer);
         getUiLayer().appendChild(panel);
         applyUiStyles();
         makeDraggable(panel, header);
         clampPanelPosition(panel);
+        panel.addEventListener('input', event => {
+            const target = event.target;
+            if (target && target.type === 'range') syncRangeFill(target);
+        });
+        syncRangeFills(panel);
         log('▶️ 系统初始化完成');
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
@@ -1537,39 +1690,76 @@
         log(`🌐 网页搜索: ${id}`);
         GM_openInTab(`https://subtitlecat.com/index.php?search=${encodeURIComponent(id)}`, { active: true });
     }
-    function gmRequest(url, { timeout = 15000, binary = false } = {}) {
+    function gmSend(url, { headers = null, timeout = 15000, responseType = undefined, anonymous = false } = {}) {
         return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
+            const options = {
                 method: 'GET',
                 url,
                 timeout,
-                responseType: binary ? 'arraybuffer' : undefined,
-                onload: response => {
-                    if (response.status < 200 || response.status >= 300) {
-                        reject(new Error(`HTTP ${response.status}`));
-                        return;
-                    }
-                    resolve(binary ? response.response ?? response.responseText : response.responseText);
-                },
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('请求超时')),
-                onabort: () => reject(new Error('请求已取消'))
-            });
+                onload: resolve,
+                onerror: () => reject(Object.assign(new Error('网络错误'), { network: true })),
+                ontimeout: () => reject(Object.assign(new Error('请求超时'), { network: true })),
+                onabort: () => reject(Object.assign(new Error('请求已取消'), { network: true }))
+            };
+            if (headers) options.headers = headers;
+            if (responseType) options.responseType = responseType;
+            if (anonymous) options.anonymous = true;
+            GM_xmlhttpRequest(options);
         });
     }
-    function gmRaw(url, { headers = null, timeout = 15000 } = {}) {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url,
+    function gmAttempts(url, strategies, { timeout = 15000, responseType = undefined } = {}) {
+        let lastError = null;
+        const attempt = index => {
+            if (index >= strategies.length) return Promise.reject(lastError || new Error('网络错误'));
+            const strategy = strategies[index];
+            return gmSend(url, {
+                headers: strategy.headers,
+                anonymous: strategy.anonymous,
                 timeout,
-                headers: headers || undefined,
-                onload: response => resolve(response),
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('请求超时')),
-                onabort: () => reject(new Error('请求已取消'))
+                responseType
+            }).catch(error => {
+                lastError = error;
+                return attempt(index + 1);
             });
-        });
+        };
+        return attempt(0);
+    }
+    function pageOriginHeaders(extra = null) {
+        const base = Object.assign({}, PAGE_HEADERS || {}, extra || {});
+        if (COARSE_POINTER) return base;
+        try {
+            if (typeof location !== 'undefined') {
+                base.Referer = location.href;
+                base.Origin = location.origin;
+            }
+            if (typeof navigator !== 'undefined' && navigator.userAgent) base['User-Agent'] = navigator.userAgent;
+        } catch (_) {
+        }
+        return base;
+    }
+    function textStrategies(extra = null) {
+        if (COARSE_POINTER) return [{ anonymous: true }];
+        return [
+            { headers: pageOriginHeaders(extra) },
+            { headers: Object.assign({}, PAGE_HEADERS || {}, extra || {}) },
+            { anonymous: true }
+        ];
+    }
+    function gmRaw(url, { headers = null, timeout = 15000, strategies = null } = {}) {
+        if (strategies) return gmAttempts(url, strategies, { timeout });
+        return gmSend(url, { headers, timeout });
+    }
+    async function gmRequest(url, { timeout = 15000, binary = false, headers = null, strategies = null } = {}) {
+        const response = strategies
+            ? await gmAttempts(url, strategies, { timeout, responseType: binary ? 'arraybuffer' : undefined })
+            : await gmSend(url, { headers, timeout, responseType: binary ? 'arraybuffer' : undefined });
+        if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
+        if (binary) {
+            if (response.response instanceof ArrayBuffer) return response.response;
+            if (response.response instanceof Uint8Array) return response.response;
+            return response.responseText;
+        }
+        return response.responseText ?? '';
     }
     const COARSE_POINTER = (() => {
         try {
@@ -1614,8 +1804,12 @@
             skipProxy: true
         });
     }
+    const codeNormCache = new Map();
     function normalizeVideoCode(videoId) {
-        let id = String(videoId ?? '').trim();
+        const raw = String(videoId ?? '');
+        const cached = codeNormCache.get(raw);
+        if (cached !== undefined) return cached;
+        let id = raw.trim();
         if (!id) return '';
         if (/^https?:\/\//i.test(id) || id.includes('/')) {
             try {
@@ -1626,10 +1820,14 @@
         }
         id = id.replace(/[-_](?:uncensored|leak|chinese|english|subtitle|hd|fhd|4k)$/i, '');
         const fc2 = id.match(/^(fc2(?:-ppv)?-[0-9]+)/i);
-        if (fc2?.[1]) return fc2[1].toUpperCase();
-        const std = id.match(/^([a-z0-9]+-[a-z0-9]+)/i);
-        if (std?.[1]) return std[1].toUpperCase();
-        return id.toUpperCase();
+        let result = fc2?.[1] ? fc2[1].toUpperCase() : '';
+        if (!result) {
+            const std = id.match(/^([a-z0-9]+-[a-z0-9]+)/i);
+            result = std?.[1] ? std[1].toUpperCase() : id.toUpperCase();
+        }
+        if (codeNormCache.size >= 800) codeNormCache.clear();
+        codeNormCache.set(raw, result);
+        return result;
     }
     function getPageVideoCode() {
         try {
@@ -1674,13 +1872,22 @@
             log(`❌ API错误: ${error.message}`);
         }
     }
-    function decodeSubtitleBuffer(payload) {
-        if (typeof payload === 'string') return payload;
-        if (!(payload instanceof ArrayBuffer)) return String(payload ?? '');
-        const bytes = new Uint8Array(payload);
+    function decodeSubtitleBytes(bytes) {
         if (!bytes.length) return '';
-        if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+        if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
             return new TextDecoder('utf-8').decode(bytes.subarray(3));
+        }
+        if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+            try {
+                return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+            } catch (_) {
+            }
+        }
+        if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+            try {
+                return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+            } catch (_) {
+            }
         }
         try {
             return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -1691,6 +1898,48 @@
         } catch (_) {
             return new TextDecoder('utf-8').decode(bytes);
         }
+    }
+    async function extractSubtitleFromZip(buffer) {
+        const bytes = new Uint8Array(buffer);
+        if (bytes.length < 30 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) {
+            return null;
+        }
+        const view = new DataView(buffer);
+        const method = view.getUint16(8, true);
+        const compSize = view.getUint32(18, true);
+        const nameLen = view.getUint16(26, true);
+        const extraLen = view.getUint16(28, true);
+        const dataOffset = 30 + nameLen + extraLen;
+        if (dataOffset >= bytes.length) return null;
+        const name = new TextDecoder('utf-8').decode(bytes.subarray(30, 30 + nameLen));
+        if (name.endsWith('/')) return null;
+        if (method === 0) {
+            const size = compSize || bytes.length - dataOffset;
+            return decodeSubtitleBytes(bytes.subarray(dataOffset, dataOffset + size));
+        }
+        if (method === 8 && typeof DecompressionStream === 'function') {
+            try {
+                const stream = new DecompressionStream('deflate-raw');
+                const writer = stream.writable.getWriter();
+                writer.write(bytes.subarray(dataOffset, compSize ? dataOffset + compSize : undefined));
+                writer.close();
+                const inflated = await new Response(stream.readable).arrayBuffer();
+                return decodeSubtitleBytes(new Uint8Array(inflated));
+            } catch (_) {
+                return null;
+            }
+        }
+        return null;
+    }
+    async function decodeSubtitleBuffer(payload) {
+        if (typeof payload === 'string') return payload.replace(/\0/g, '');
+        if (!(payload instanceof ArrayBuffer) && !(payload instanceof Uint8Array)) return String(payload ?? '');
+        const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+        if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+            const inner = await extractSubtitleFromZip(payload instanceof Uint8Array ? payload.buffer : payload);
+            if (inner) return inner.replace(/\0/g, '');
+        }
+        return decodeSubtitleBytes(bytes).replace(/\0/g, '');
     }
     function hostOf(url) {
         try {
@@ -1733,7 +1982,7 @@
                 log(`❌ 下载失败: 网络错误${host ? ` (${host})` : ''}，请确认已授予 @connect 权限或改用「加载本地」`);
                 return;
             }
-            const text = decodeSubtitleBuffer(payload);
+            const text = await decodeSubtitleBuffer(payload);
             if (applySubtitleText(text, '字幕', name || url.split('/').pop())) {
                 closeSubtitlePicker();
                 log(`📍 字幕已缓存到浏览器本地，临时标记 avSub:subtitle；刷新页面后需重新选择「${name || '该字幕'}」`);
@@ -1890,7 +2139,7 @@
         return out;
     }
     async function fetchJavDbInfo(code, onPartial) {
-        const empty = { rating: undefined, stills: [], reviews: [], lists: [] };
+        const empty = { rating: undefined, stills: [], reviews: [], lists: [], javDbMovieId: '' };
         const cleanId = code.replace(/[-_]/g, '').toLowerCase();
         const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
             q: code, page: '1', type: 'movie', limit: '5',
@@ -1931,7 +2180,7 @@
                 }
                 const push = url => {
                     const abs = resolveUrl(url, JDFORREPAM_API);
-                    if (abs && !stills.includes(abs)) stills.push(abs);
+                    if (abs && !NOW_PRINTING_RE.test(abs) && !stills.includes(abs)) stills.push(abs);
                 };
                 for (const img of Array.isArray(detail.preview_images) ? detail.preview_images : []) {
                     push(img?.large_url || img?.thumb_url || (typeof img === 'string' ? img : ''));
@@ -1976,7 +2225,7 @@
             }
         } catch (_) {
         }
-        const partial = { rating, stills, reviews, lists };
+        const partial = { rating, stills, reviews, lists, javDbMovieId: String(movie.id) };
         onPartial?.(partial);
         return partial;
     }
@@ -2035,6 +2284,7 @@
             return null;
         }
         buildInfoSection();
+        beginStillSearch(code);
         const session = ++state.infoSession;
         const pageReviews = extractPageReviews();
         state.infoData = { code, rating: undefined, stills: [], reviews: pageReviews, lists: [] };
@@ -2050,8 +2300,8 @@
         const seenStills = [];
         const seenLists = [];
         const acceptStills = incoming => {
-            for (const url of incoming ?? []) {
-                if (url && !NOW_PRINTING_RE.test(url) && !seenStills.includes(url)) seenStills.push(url);
+            for (const url of usableStills(incoming ?? [])) {
+                if (!seenStills.includes(url)) seenStills.push(url);
             }
         };
         const acceptLists = incoming => {
@@ -2076,6 +2326,7 @@
                 acceptLists(partial.lists);
                 state.infoData.lists = [...seenLists];
             }
+            if (partial.javDbMovieId) state.infoData.javDbMovieId = partial.javDbMovieId;
             applyInfoToPage(state.infoData);
         };
         const results = await Promise.allSettled([
@@ -2097,7 +2348,8 @@
             rating: javLib.rating || javDb.rating,
             stills: [...seenStills],
             reviews: dedupeReviews(merged),
-            lists: [...seenLists]
+            lists: [...seenLists],
+            javDbMovieId: javDb.javDbMovieId || ''
         };
         state.infoData = finalData;
         applyInfoToPage(finalData);
@@ -2201,6 +2453,34 @@
         lists: '暂无收录该影片的精选影单'
     };
     const INFO_BLOCK_SELECTORS = ['.video-detail', '.video-info', '.video-meta', '.detail', 'article', 'main'];
+    let stillCode = '';
+    const stillFailed = new Set();
+    function beginStillSearch(code) {
+        if (stillCode === code) return;
+        stillCode = code;
+        stillFailed.clear();
+    }
+    function usableStills(urls) {
+        return [...new Set(urls)].filter(url => url && !stillFailed.has(url) && !NOW_PRINTING_RE.test(url));
+    }
+    function reportStillError(url, figure) {
+        if (!url) return;
+        stillFailed.add(url);
+        const info = state.infoData;
+        if (info && Array.isArray(info.stills)) info.stills = info.stills.filter(item => item !== url);
+        if (figure?.parentElement) figure.remove();
+        const refs = state.infoSection;
+        if (!refs) return;
+        const left = refs.grid.querySelectorAll('.av-still-item').length;
+        const tab = refs.tabs.querySelector('[data-tab="stills"]');
+        if (tab) tab.textContent = `官方剧照 (${left})`;
+        if (!left) {
+            const p = document.createElement('p');
+            p.className = 'av-hub-empty';
+            p.textContent = HUB_EMPTY.stills;
+            refs.grid.replaceChildren(p);
+        }
+    }
     function infoMount(anchor) {
         if (!anchor) return null;
         let node = anchor;
@@ -2255,6 +2535,8 @@
             body.hidden = true;
             const tabs = document.createElement('nav');
             tabs.className = 'av-hub-tabs';
+            tabs.setAttribute('role', 'tablist');
+            tabs.setAttribute('aria-label', '情报分类');
             const panes = {};
             const loading = document.createElement('div');
             loading.className = 'av-hub-loading';
@@ -2268,12 +2550,20 @@
                 tab.type = 'button';
                 tab.className = 'av-hub-tab';
                 tab.dataset.tab = key;
+                tab.id = `av-hub-tab-${key}`;
+                tab.setAttribute('role', 'tab');
+                tab.setAttribute('aria-selected', key === 'stills' ? 'true' : 'false');
+                tab.setAttribute('aria-controls', `av-hub-panel-${key}`);
+                tab.tabIndex = key === 'stills' ? 0 : -1;
                 tab.textContent = label;
                 tab.addEventListener('click', () => setInfoTab(key));
                 tabs.appendChild(tab);
                 const pane = document.createElement('div');
                 pane.className = 'av-info-pane';
                 pane.dataset.pane = key;
+                pane.id = `av-hub-panel-${key}`;
+                pane.setAttribute('role', 'tabpanel');
+                pane.setAttribute('aria-labelledby', `av-hub-tab-${key}`);
                 pane.hidden = key !== 'stills';
                 panes[key] = pane;
             }
@@ -2304,7 +2594,12 @@
         if (!refs) return;
         refs.activeTab = key;
         for (const name of Object.keys(refs.panes)) refs.panes[name].hidden = name !== key;
-        for (const tab of refs.tabs.children) tab.classList.toggle('active', tab.dataset?.tab === key);
+        for (const tab of refs.tabs.children) {
+            const on = tab.dataset?.tab === key;
+            tab.classList.toggle('active', on);
+            tab.setAttribute('aria-selected', on ? 'true' : 'false');
+            tab.tabIndex = on ? 0 : -1;
+        }
     }
     function setInfoExpanded(expanded) {
         const refs = state.infoSection;
@@ -2318,7 +2613,7 @@
     }
     function renderInfoSection(data) {
         if (!data) return;
-        const stills = data.stills ?? [];
+        const stills = usableStills(data.stills ?? []);
         const reviews = data.reviews ?? [];
         const lists = data.lists ?? [];
         if (!data.rating && !stills.length && !reviews.length && !lists.length) {
@@ -2353,38 +2648,117 @@
         const stillNodes = stills.slice(0, 40).map((url, index) => {
             const figure = document.createElement('figure');
             figure.className = 'av-still-item';
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'av-still-open';
+            open.setAttribute('aria-label', `打开剧照 ${index + 1}`);
+            open.addEventListener('click', () => openLightbox(stills, index));
             const img = document.createElement('img');
             img.src = url;
             img.loading = 'lazy';
             img.referrerPolicy = 'no-referrer';
             img.alt = `剧照 ${index + 1}`;
-            figure.appendChild(img);
-            figure.addEventListener('click', () => openLightbox(stills, index));
+            img.addEventListener('error', () => {
+                if (!figure.isConnected) return;
+                reportStillError(url, figure);
+            });
+            open.appendChild(img);
+            figure.appendChild(open);
             return figure;
         });
         refs.grid.replaceChildren(...(stillNodes.length ? stillNodes : [empty(HUB_EMPTY.stills)]));
-        const reviewNodes = reviews.slice(0, 30).map(review => {
+        if (state.reviewsCode !== data.code) {
+            state.reviewsCode = data.code;
+            state.reviewsPage = 1;
+            state.reviewsHasMore = reviews.length >= 20;
+            state.reviewsLoadingMore = false;
+        }
+        const reviewNodes = reviews.slice(0, 120).map(review => {
             const card = document.createElement('article');
             card.className = 'review-card';
-            const head = document.createElement('div');
-            head.className = 'review-header';
+            const head = document.createElement('header');
+            head.className = 'av-review-head';
             const user = document.createElement('strong');
+            user.className = 'av-review-user';
             user.textContent = review.user || '匿名';
             head.appendChild(user);
+            if (review.score) {
+                const score = document.createElement('span');
+                score.className = 'av-review-score';
+                score.textContent = `${review.score} 分`;
+                head.appendChild(score);
+            }
             if (review.date) {
                 const time = document.createElement('time');
+                time.className = 'av-review-date';
                 time.textContent = review.date;
                 head.appendChild(time);
             }
             const text = document.createElement('p');
-            text.className = 'review-text';
+            text.className = 'av-review-text';
             text.textContent = review.content;
             card.append(head, text);
             return card;
         });
         refs.reviews.replaceChildren(...(reviewNodes.length ? reviewNodes : [empty(HUB_EMPTY.reviews)]));
+        const footer = document.createElement('div');
+        footer.className = 'av-review-footer';
+        if (reviewNodes.length && (state.reviewsHasMore || state.reviewsLoadingMore)) {
+            const more = createButton(state.reviewsLoadingMore ? '正在加载更多短评…' : '加载更多短评', 'av-hub-more-btn');
+            more.disabled = state.reviewsLoadingMore;
+            more.addEventListener('click', loadMoreReviews);
+            footer.appendChild(more);
+        } else if (reviewNodes.length >= 20) {
+            const done = document.createElement('span');
+            done.className = 'av-hub-done';
+            done.textContent = `已加载全部短评 (共 ${reviewNodes.length} 条)`;
+            footer.appendChild(done);
+        }
+        if (footer.childElementCount) refs.reviews.appendChild(footer);
         const listNodes = lists.slice(0, 20).map(item => buildListCard(item));
         refs.lists.replaceChildren(...(listNodes.length ? listNodes : [empty(HUB_EMPTY.lists)]));
+    }
+    async function loadMoreReviews() {
+        const info = state.infoData;
+        if (state.reviewsLoadingMore || !state.reviewsHasMore || !info) return;
+        const movieId = info.javDbMovieId;
+        if (!movieId) {
+            state.reviewsHasMore = false;
+            renderInfoSection(info);
+            return;
+        }
+        state.reviewsLoadingMore = true;
+        renderInfoSection(info);
+        const nextPage = (state.reviewsPage || 1) + 1;
+        const url = `${JDFORREPAM_API}/api/v1/movies/${encodeURIComponent(movieId)}/reviews?` +
+            new URLSearchParams({ page: String(nextPage), sort_by: 'hotly', limit: '20' });
+        const raw = await jdApiFetch(url).catch(() => '');
+        state.reviewsLoadingMore = false;
+        if (state.infoData !== info) return;
+        let list = [];
+        try {
+            const body = JSON.parse(raw);
+            list = Array.isArray(body?.data?.reviews) ? body.data.reviews : [];
+        } catch (_) {
+        }
+        const before = info.reviews.length;
+        const merged = [...info.reviews];
+        for (const item of list) {
+            const content = String(item?.content ?? '').trim();
+            if (content.length < 2) continue;
+            const score = Number(item?.score);
+            merged.push({
+                user: String(item?.username ?? '').trim() || '匿名',
+                date: String(item?.created_at ?? '').slice(0, 10),
+                content,
+                score: Number.isFinite(score) && score > 0 ? score : undefined
+            });
+        }
+        info.reviews = dedupeReviews(merged);
+        state.reviewsPage = nextPage;
+        if (list.length < 20 || info.reviews.length === before) state.reviewsHasMore = false;
+        renderInfoSection(info);
+        log(`💬 已加载更多短评（共 ${info.reviews.length} 条）`);
     }
     function buildListCard(item) {
         const card = document.createElement('article');
@@ -2688,7 +3062,11 @@
             fetchActressSocial(name).then(social => injectSocialBadges(social, name)).catch(() => {});
         }
     }
+    let videoProbeEl = null;
+    let videoProbeAt = 0;
+    const VIDEO_PROBE_TTL = 1000;
     function findMainVideo() {
+        if (videoProbeEl && videoProbeEl.isConnected && Date.now() - videoProbeAt < VIDEO_PROBE_TTL) return videoProbeEl;
         const candidates = [];
         for (const video of document.querySelectorAll('video')) {
             if (video.closest('.custom-quick-controls, .custom-control-panel')) continue;
@@ -2697,7 +3075,9 @@
             candidates.push({ video, area: rect.width * rect.height });
         }
         candidates.sort((a, b) => b.area - a.area);
-        return candidates[0]?.video ?? null;
+        videoProbeAt = Date.now();
+        videoProbeEl = candidates[0]?.video ?? null;
+        return videoProbeEl;
     }
     function stopPlayerPoll() {
         clearInterval(state.pollTimer);
@@ -2707,6 +3087,7 @@
     }
     function initPlayer() {
         if (state.bound || state.pollTimer) return;
+        if (!findMainVideo()) createPanel();
         state.pollTimer = setInterval(() => {
             const video = findMainVideo();
             if (!video) return;
@@ -2734,6 +3115,7 @@
         setupShortcuts();
         buildSpeedHud(container);
         setupHoldAccelerate(container);
+        syncFilterBar();
         for (const type of ['play', 'pause', 'ended', 'loadedmetadata', 'ratechange', 'seeked']) {
             video.addEventListener(type, updatePlayPauseButton, { passive: true });
         }
@@ -2745,6 +3127,7 @@
             loadVideoInfo();
         }
         log('🎬 播放器已就绪');
+        if (settings.analyticsTrack) setTimeout(startAnalyticsTracking, 1200);
     }
     function clickPlayEntry() {
         for (const selector of PLAY_ENTRY_SELECTORS) {
@@ -2757,16 +3140,1717 @@
         return false;
     }
     function initPage() {
+        if (isAnalyticsRoute()) {
+            mountAnalyticsPage();
+            return;
+        }
         cleanAds();
         initPlayer();
         clickPlayEntry();
         startAdObserver();
+        initContentFilter();
     }
+    GM_addStyle(`
+        .av-card-hidden { display: none !important; }
+        .av-card-dimmed { opacity: .28 !important; filter: grayscale(1) !important; transition: opacity .2s ease; }
+        .av-card-dimmed:hover { opacity: .85 !important; filter: grayscale(0) !important; }
+        .av-filter-host { display: inline-flex; align-items: center; max-width: 100%; }
+        .av-filter-slot { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .av-filter-injected-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 16px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, .08);
+        }
+        .av-filter-bar {
+            position: static;
+            display: inline-flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            max-width: 100%;
+            box-sizing: border-box;
+            padding: 0;
+            color: #d8dee9;
+            font-size: 12px;
+            line-height: 1;
+            background: none;
+            border: none;
+            box-shadow: none;
+            pointer-events: auto;
+        }
+        .av-fb-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            height: 30px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+            color: #d8dee9;
+            background: rgba(255, 255, 255, .08);
+            border: 1px solid rgba(255, 255, 255, .14);
+            cursor: pointer;
+            user-select: none;
+            touch-action: manipulation;
+            text-decoration: none;
+            transition: background-color .15s, border-color .15s, color .15s, transform .1s;
+        }
+        .av-fb-chip:hover:not(:disabled) { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .3); color: #fff; }
+        .av-fb-chip:active:not(:disabled) { transform: scale(.96); }
+        .av-fb-chip:disabled { opacity: .35; cursor: not-allowed; }
+        .av-fb-chip.is-on { background: rgba(56, 189, 248, .3); border-color: rgba(56, 189, 248, .55); color: #fff; }
+        .av-fb-chip.is-on .av-fb-svg { stroke: #fff; }
+        .av-fb-chip.av-fb-cockpit { background: rgba(16, 185, 129, .22); border-color: rgba(16, 185, 129, .45); }
+        .av-fb-chip.av-fb-stat { color: #ff7c96; background: rgba(255, 90, 120, .12); border-color: rgba(255, 90, 120, .28); cursor: default; gap: 4px; padding: 0 8px; }
+        .av-fb-chip.av-fb-stat:hover { background: rgba(255, 90, 120, .12); border-color: rgba(255, 90, 120, .28); }
+        .av-fb-chip.av-fb-stat[hidden] { display: none; }
+        .av-fb-chip.av-fb-hide { padding: 4px 7px; opacity: .6; }
+        .av-fb-svg { width: 14px; height: 14px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; }
+        .av-fb-select-wrap { position: relative; padding-right: 20px; }
+        .av-fb-select {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            appearance: none;
+            border: none;
+            background: none;
+            cursor: pointer;
+        }
+        .av-fb-select:disabled { cursor: not-allowed; }
+        .av-fb-arrow { width: 8px; height: 6px; fill: none; stroke: currentColor; stroke-width: 1.5; opacity: .7; }
+        .av-fb-count { font-variant-numeric: tabular-nums; font-weight: 700; }
+        .av-fb-stat-label { opacity: .85; font-size: 11px; }
+        .av-fb-fab { position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: #50e3c2; box-shadow: 0 0 5px #50e3c2; }
+        .av-fb-fab[hidden] { display: none; }
+        .av-filter-bar .av-fb-blacklist { position: relative; }
+        .av-filter-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 10px 0 4px;
+            border-top: 1px solid rgba(255, 255, 255, .15);
+        }
+        .av-filter-panel[hidden] { display: none; }
+        .av-filter-scroll {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .av-filter-scroll > * { flex: 0 0 auto; }
+        .av-check-row[hidden], .av-text-row[hidden] { display: none; }
+        .av-filter-strip {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .av-check-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            min-height: 30px;
+            padding: 0;
+            border: 0;
+            background: none;
+            color: #cbd5e1;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .av-check-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .av-check-row .av-help { color: #64748b; font-size: 11px; line-height: 1.45; }
+        .av-check-row input {
+            appearance: none;
+            -webkit-appearance: none;
+            flex: 0 0 32px;
+            width: 32px;
+            height: 20px;
+            margin: 0;
+            padding: 2px;
+            border: 0;
+            border-radius: 9999px;
+            background: rgba(255,255,255,.18);
+            cursor: pointer;
+            transition: background-color .15s ease-out;
+        }
+        .av-check-row input::before { content: ''; display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 1px rgba(0,0,0,.06); transition: transform .15s ease-out; }
+        .av-check-row input:checked { background: #38bdf8; }
+        .av-check-row input:checked::before { transform: translate(12px); }
+        .av-check-row.is-on { color: #e2e8f0; }
+        .av-filter-text-slide {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .av-text-row { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+        .av-text-row label { opacity: .82; }
+        .av-text-row .av-help { color: #64748b; font-size: 11px; line-height: 1.45; }
+        .av-text-row textarea {
+            box-sizing: border-box;
+            width: 100%;
+            background: rgba(13,13,22,.9);
+            color: inherit;
+            border: 1px solid rgba(255,255,255,.15);
+            border-radius: 8px;
+            outline: none;
+            padding: 6px 8px;
+            font-size: 12px;
+            line-height: 1.45;
+            font-family: inherit;
+            resize: vertical;
+        }
+        .av-text-row textarea:focus { border-color: rgba(56,189,248,.6); }
+        .av-text-row input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 14px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
+        .av-text-row input[type="range"]::-webkit-slider-runnable-track { height: 4px; border: 0; border-radius: 999px; background: linear-gradient(90deg, #38bdf8 0 var(--av-range, 0%), rgba(255,255,255,.16) var(--av-range, 0%) 100%); }
+        .av-text-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,.18), 0 1px 4px rgba(0,0,0,.45); transition: box-shadow .15s ease, transform .15s ease; }
+        .av-text-row input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.26), 0 1px 4px rgba(0,0,0,.45); }
+        .av-text-row input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.12); }
+        .av-text-row input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.38); }
+        .av-text-row input[type="range"]::-moz-range-track { height: 4px; border: 0; border-radius: 999px; background: rgba(255,255,255,.16); }
+        .av-text-row input[type="range"]::-moz-range-progress { height: 4px; border: 0; border-radius: 999px; background: #38bdf8; }
+        .av-text-row input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,.18); }
+        .av-text-row input[type="range"]:hover::-moz-range-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.26); }
+        .av-filter-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+        .av-filter-actions button { flex: 1 1 auto; }
+        .av-filter-actions .av-open-cockpit {
+            flex: 1 1 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 26px;
+            padding: 4px 10px;
+            border: 1px solid rgba(59,130,246,.5);
+            border-radius: 6px;
+            background: linear-gradient(135deg,#3b82f6,#2563eb);
+            color: #f8fafc;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .av-filter-actions .av-open-cockpit:hover { filter: brightness(1.12); }
+        .av-svg { display: inline-flex; align-items: center; justify-content: center; }
+        .av-svg svg { width: 16px; height: 16px; }
+        .av-cockpit {
+            box-sizing: border-box;
+            width: 100%;
+            min-height: 100vh;
+            padding: 24px 32px 48px;
+            background-color: #090a0f;
+            background-image: radial-gradient(circle at 100% 0, rgba(16, 185, 129, .05), transparent 40%), radial-gradient(circle at 0 100%, rgba(56, 189, 248, .05), transparent 40%);
+        }
+        .av-cockpit * { box-sizing: border-box; }
+        .av-cockpit-header { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: -24px -32px 22px; padding: 20px 32px 18px; background: rgba(9, 10, 15, .94); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid rgba(148, 163, 184, .16); }
+        .av-brand { display: flex; align-items: center; gap: 10px; }
+        .av-brand-logo svg { width: 26px; height: 26px; color: #38bdf8; }
+        .av-brand-text { display: flex; align-items: center; gap: 8px; }
+        .av-brand-text h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .4px; }
+        .av-brand-badge { font-size: 10px; letter-spacing: 1px; padding: 2px 7px; border-radius: 999px; background: rgba(56, 189, 248, .16); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, .35); }
+        .av-range-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(148, 163, 184, .1); }
+        .av-range-tab { border: 0; background: transparent; color: #94a3b8; font-size: 12px; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+        .av-range-tab.active { background: rgba(56, 189, 248, .2); color: #e0f2fe; }
+        .av-range-tab:hover { color: #e0f2fe; }
+        .av-range-tab:focus-visible { outline: 2px solid rgba(56, 189, 248, .7); outline-offset: 2px; }
+        .av-cockpit-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+        .av-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(148, 163, 184, .25); background: rgba(148, 163, 184, .1); color: #e2e8f0; border-radius: 8px; padding: 7px 13px; font-size: 12px; font-family: inherit; cursor: pointer; transition: background .2s ease, border-color .2s ease, color .2s ease; }
+        .av-btn .av-svg svg { width: 15px; height: 15px; }
+        .av-btn:hover { background: rgba(148, 163, 184, .2); border-color: rgba(148, 163, 184, .4); color: #fff; }
+        .av-btn:disabled { opacity: .6; cursor: progress; }
+        .av-btn-danger { border-color: rgba(248, 113, 113, .4); background: rgba(248, 113, 113, .14); color: #fca5a5; }
+        .av-btn-danger:hover { background: rgba(248, 113, 113, .24); border-color: rgba(248, 113, 113, .6); color: #fee2e2; }
+        .av-btn-close { border-color: rgba(56, 189, 248, .4); background: rgba(56, 189, 248, .16); color: #7dd3fc; }
+        .av-btn-close:hover { background: rgba(56, 189, 248, .28); border-color: rgba(56, 189, 248, .62); color: #e0f2fe; }
+        .av-btn:focus-visible { outline: 2px solid rgba(56, 189, 248, .7); outline-offset: 2px; }
+        .av-kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
+        .av-kpi { padding: 16px 18px; border-radius: 14px; background: rgba(148, 163, 184, .07); border: 1px solid rgba(148, 163, 184, .14); }
+        .av-kpi-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .av-kpi-label { font-size: 12px; color: #94a3b8; }
+        .av-kpi-icon, .av-kpi-header .av-svg { padding: 6px; border-radius: 9px; background: rgba(56, 189, 248, .14); color: #38bdf8; }
+        .av-kpi-header .av-svg.is-emerald { background: rgba(16, 185, 129, .14); color: #34d399; }
+        .av-kpi-header .av-svg.is-violet { background: rgba(167, 139, 250, .14); color: #a78bfa; }
+        .av-kpi-header .av-svg.is-pink { background: rgba(244, 114, 182, .14); color: #f472b6; }
+        .av-kpi-value { font-size: 30px; font-weight: 700; margin: 10px 0 6px; letter-spacing: -.5px; }
+        .av-kpi-value small { font-size: 13px; font-weight: 500; color: #94a3b8; margin-left: 5px; }
+        .av-kpi-footer { font-size: 11px; color: #64748b; }
+        .av-cockpit-card { padding: 18px; border-radius: 14px; background: rgba(148, 163, 184, .06); border: 1px solid rgba(148, 163, 184, .13); margin-bottom: 18px; }
+        .av-card-head { margin-bottom: 14px; }
+        .av-card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+        .av-card-title .av-svg { color: #38bdf8; }
+        .av-card-subtitle { font-size: 11px; color: #64748b; margin-top: 3px; }
+        .av-rank-crown { font-size: 14px; }
+        .av-heatmap-wrap { display: flex; gap: 6px; }
+        .av-heatmap-weekdays { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; font-size: 9px; color: #64748b; }
+        .av-heatmap-weekdays span { line-height: 12px; }
+        .av-heatmap-boxes { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+        .av-heatmap-box { width: 12px; height: 12px; border-radius: 3px; background: rgba(148, 163, 184, .12); }
+        .av-heatmap-box.level-0 { background: rgba(148, 163, 184, .12); }
+        .av-heatmap-box.level-1 { background: rgba(16, 185, 129, .3); }
+        .av-heatmap-box.level-2 { background: rgba(16, 185, 129, .5); }
+        .av-heatmap-box.level-3 { background: rgba(16, 185, 129, .72); }
+        .av-heatmap-box.level-4 { background: rgba(16, 185, 129, .95); }
+        .av-heatmap-box.is-future { opacity: .25; }
+        .av-heatmap-legend { display: flex; align-items: center; gap: 4px; margin-top: 10px; font-size: 10px; color: #64748b; }
+        .av-duo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+        .av-bar-chart { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
+        .av-bar-col { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; height: 100%; cursor: help; }
+        .av-bar-track { flex: 1 1 auto; width: 100%; display: flex; align-items: flex-end; }
+        .av-bar-fill { width: 100%; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, #38bdf8, rgba(56, 189, 248, .35)); transition: filter .15s ease; }
+        .av-bar-col:hover .av-bar-fill { filter: brightness(1.3); }
+        .av-bar-fill.is-peak { background: linear-gradient(180deg, #34d399, rgba(16, 185, 129, .35)); }
+        .av-bar-label { font-size: 9px; color: #64748b; margin-top: 4px; height: 11px; }
+        .av-habit-list { display: flex; flex-direction: column; gap: 12px; }
+        .av-habit-label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; color: #cbd5e1; }
+        .av-progress-bar { height: 6px; border-radius: 999px; background: rgba(148, 163, 184, .14); overflow: hidden; }
+        .av-progress-bar > div { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #38bdf8, #818cf8); }
+        .av-progress-bar.is-habit > div { background: linear-gradient(90deg, #34d399, #38bdf8); }
+        .av-progress-bar.is-actress > div { background: linear-gradient(90deg, #a78bfa, #38bdf8); }
+        .av-progress-bar.is-genre > div { background: linear-gradient(90deg, #f472b6, #a78bfa); }
+        .av-rank-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; }
+        .av-rank-badge { width: 20px; height: 20px; flex: 0 0 20px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; background: rgba(148, 163, 184, .16); color: #cbd5e1; }
+        .av-rank-badge.is-gold { background: rgba(250, 204, 21, .22); color: #fde047; }
+        .av-rank-badge.is-silver { background: rgba(203, 213, 225, .2); color: #e2e8f0; }
+        .av-rank-badge.is-bronze { background: rgba(251, 146, 60, .2); color: #fdba74; }
+        .av-rank-body { flex: 1 1 auto; min-width: 0; }
+        .av-rank-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin-bottom: 5px; }
+        .av-actress-link { color: #e2e8f0; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-actress-link:hover { color: #7dd3fc; text-decoration: underline; }
+        .av-rank-meta { color: #64748b; flex: 0 0 auto; }
+        .av-genre-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; }
+        .av-genre-name { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; }
+        .av-genre-row .av-progress-bar { flex: 1 1 auto; }
+        .av-genre-count { flex: 0 0 auto; color: #64748b; }
+        .av-maker-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+        .av-maker-chip { padding: 6px 12px; border-radius: 999px; font-size: 12px; background: rgba(56, 189, 248, .12); border: 1px solid rgba(56, 189, 248, .28); color: #bae6fd; }
+        .av-empty { text-align: center; padding: 80px 20px; }
+        .av-empty-icon { display: inline-flex; padding: 14px; border-radius: 50%; background: rgba(148, 163, 184, .12); color: #94a3b8; }
+        .av-empty-icon svg { width: 30px; height: 30px; }
+        .av-empty h2 { font-size: 18px; margin: 16px 0 8px; }
+        .av-empty p { font-size: 12px; color: #64748b; max-width: 460px; margin: 0 auto; line-height: 1.7; }
+        .av-mini-empty { font-size: 12px; color: #64748b; padding: 10px 0; }
+    `);
+    const WATCHED_KEY = 'watchedList';
+    const MAX_WATCHED = 5000;
+    const ANALYTICS_KEY = 'analyticsRecords_v1';
+    const MAX_RECORDS = 3000;
+    const CARD_SELECTOR = '.thumbnail, .video-img-box, .video-item, .list-item, article.video-card, .grid > div, .row > div[class*="col-"]';
+    const DURATION_OPTIONS = [[0, '全部时长'], [300, '≥ 5 分钟'], [600, '≥ 10 分钟'], [1200, '≥ 20 分钟'], [1800, '≥ 30 分钟'], [3600, '≥ 60 分钟']];
+    let watchedCache = null;
+    function watchedSet() {
+        if (watchedCache) return watchedCache;
+        let list = [];
+        try {
+            list = JSON.parse(store.get(WATCHED_KEY) || '[]');
+        } catch (error) {
+            list = [];
+        }
+        watchedCache = new Set(Array.isArray(list) ? list.map(item => String(item).toUpperCase()) : []);
+        return watchedCache;
+    }
+    function isWatched(code) {
+        if (!code) return false;
+        return watchedSet().has(normalizeVideoCode(code).toUpperCase());
+    }
+    function markWatched(code) {
+        const key = normalizeVideoCode(code).toUpperCase();
+        if (!key) return;
+        const set = watchedSet();
+        if (set.has(key)) return;
+        set.add(key);
+        const values = [...set];
+        while (values.length > MAX_WATCHED) values.shift();
+        watchedCache = new Set(values);
+        store.set(WATCHED_KEY, JSON.stringify(values));
+        state.watchGen += 1;
+    }
+    function clearWatched() {
+        watchedCache = new Set();
+        store.set(WATCHED_KEY, '[]');
+        state.watchGen += 1;
+    }
+    function parseDurationSeconds(text) {
+        const clean = String(text || '').replace(/[^\d:]/g, '').trim();
+        if (!clean) return 0;
+        const parts = clean.split(':').map(Number);
+        if (parts.some(Number.isNaN)) return 0;
+        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        if (parts.length === 2) return parts[0] * 60 + parts[1];
+        return 0;
+    }
+    function formatDuration(seconds) {
+        const total = Math.max(0, Math.round(Number(seconds) || 0));
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        if (hours > 0) return `${hours} 小时 ${minutes} 分`;
+        if (minutes > 0) return `${minutes} 分 ${total % 60} 秒`;
+        return `${total} 秒`;
+    }
+    function cardCodeFromHref(href) {
+        if (!href) return '';
+        try {
+            const url = new URL(href, location.href);
+            if (url.origin !== location.origin) return '';
+            const segments = url.pathname.split('/').filter(Boolean);
+            if (!segments.length) return '';
+            if (segments[0] === 'videos' && segments[1]) return normalizeVideoCode(decodeURIComponent(segments[1]));
+            if (/^(en|cn|ja|zh|dm\d*)$/i.test(segments[0])) segments.shift();
+            const last = segments[segments.length - 1];
+            if (!last) return '';
+            const code = normalizeVideoCode(decodeURIComponent(last));
+            if (/^fc2/i.test(code)) return code;
+            if (/^[a-z0-9]+-[a-z0-9]+/i.test(code)) return code;
+            return '';
+        } catch (error) {
+            return '';
+        }
+    }
+    const cardParseCache = new WeakMap();
+    function parseCard(card) {
+        if (!(card instanceof HTMLElement)) return null;
+        const firstHref = card.querySelector('a[href]')?.getAttribute('href') || '';
+        const signature = `${card.childElementCount}:${card.textContent.length}:${firstHref}`;
+        const cached = cardParseCache.get(card);
+        if (cached && cached.signature === signature) {
+            if (!cached.code) return null;
+            return { el: card, code: cached.code, title: cached.title, duration: cached.duration, isWatched: isWatched(cached.code) };
+        }
+        let code = '';
+        for (const anchor of card.querySelectorAll('a[href]')) {
+            code = cardCodeFromHref(anchor.getAttribute('href'));
+            if (code) break;
+        }
+        if (!code) code = normalizeVideoCode(card.dataset ? card.dataset.code || '' : '');
+        let title = '';
+        const titleEl = card.querySelector('a.mv-full-title, .my-2.text-sm a, .video-title, .title, h3, h4, a[title]');
+        if (titleEl) title = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
+        if (!title) {
+            const img = card.querySelector('img[alt]');
+            if (img) title = (img.getAttribute('alt') || '').trim();
+        }
+        if (!code && title) {
+            const matched = title.match(/^([A-Za-z0-9]+-[A-Za-z0-9_-]+)/);
+            if (matched) code = normalizeVideoCode(matched[1]);
+        }
+        if (!code) {
+            cardParseCache.set(card, { signature, code: '', title: '', duration: 0 });
+            return null;
+        }
+        let duration = 0;
+        const durationEl = card.querySelector('span.absolute.bottom-1.right-1, .duration, .time, .video-duration');
+        if (durationEl) duration = parseDurationSeconds(durationEl.textContent);
+        if (!duration) {
+            for (const span of card.querySelectorAll('span')) {
+                const text = (span.textContent || '').trim();
+                if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(text)) {
+                    duration = parseDurationSeconds(text);
+                    break;
+                }
+            }
+        }
+        cardParseCache.set(card, { signature, code, title, duration });
+        return { el: card, code, title, duration, isWatched: isWatched(code) };
+    }
+    const cardListCache = { gen: -1, watchGen: -1, list: [] };
+    function collectCards() {
+        if (cardListCache.gen === state.domGen && cardListCache.watchGen === state.watchGen) return cardListCache.list;
+        const byCode = new Map();
+        for (const card of document.querySelectorAll(CARD_SELECTOR)) {
+            if (card.closest('.custom-ui-layer')) continue;
+            const meta = parseCard(card);
+            if (!meta) continue;
+            const existing = byCode.get(meta.code);
+            if (existing && existing.el.contains(meta.el)) continue;
+            if (existing && meta.el.contains(existing.el)) {
+                byCode.set(meta.code, meta);
+                continue;
+            }
+            if (existing) continue;
+            byCode.set(meta.code, meta);
+        }
+        const list = [...byCode.values()];
+        cardListCache.gen = state.domGen;
+        cardListCache.watchGen = state.watchGen;
+        cardListCache.list = list;
+        return list;
+    }
+    const blacklistCache = { keywords: null, keywordList: [], prefixes: null, prefixList: [] };
+    function blacklistLists() {
+        const rawKeywords = String(settings.filterKeywords || '');
+        if (blacklistCache.keywords !== rawKeywords) {
+            blacklistCache.keywords = rawKeywords;
+            blacklistCache.keywordList = rawKeywords.split(/[,，\n]/).map(item => item.trim().toLowerCase()).filter(Boolean);
+        }
+        const rawPrefixes = String(settings.filterPrefixes || '');
+        if (blacklistCache.prefixes !== rawPrefixes) {
+            blacklistCache.prefixes = rawPrefixes;
+            blacklistCache.prefixList = rawPrefixes.split(/[,，\n]/).map(item => item.trim().toUpperCase()).filter(Boolean);
+        }
+        return blacklistCache;
+    }
+    function matchesBlacklist(meta) {
+        const { keywordList, prefixList } = blacklistLists();
+        if (keywordList.length && meta.title) {
+            const title = meta.title.toLowerCase();
+            for (const keyword of keywordList) {
+                if (title.includes(keyword)) return true;
+            }
+        }
+        if (prefixList.length) {
+            const code = meta.code.toUpperCase();
+            for (const prefix of prefixList) {
+                if (code.startsWith(prefix) || code.includes(prefix)) return true;
+            }
+        }
+        return false;
+    }
+    function evaluateCard(meta) {
+        if (!settings.filterEnabled) return false;
+        if (settings.filterMinDuration > 0 && meta.duration > 0 && meta.duration < settings.filterMinDuration) return true;
+        if (settings.filterHideWatched && meta.isWatched) return true;
+        if (settings.filterEnableBlacklist && matchesBlacklist(meta)) return true;
+        return false;
+    }
+    function applyFilters() {
+        const cards = collectCards();
+        const dim = Boolean(settings.filterDimMode);
+        let filtered = 0;
+        for (const meta of cards) {
+            const el = meta.el;
+            const hit = evaluateCard(meta);
+            const wantHidden = hit && !dim;
+            const wantDimmed = hit && dim;
+            if (hit) filtered++;
+            if (el.classList.contains('av-card-hidden') !== wantHidden) el.classList.toggle('av-card-hidden', wantHidden);
+            if (el.classList.contains('av-card-dimmed') !== wantDimmed) el.classList.toggle('av-card-dimmed', wantDimmed);
+        }
+        state.filterStats = { total: cards.length, filtered, visible: cards.length - filtered };
+        syncFilterBar();
+        updateFilterBarStats();
+        return state.filterStats;
+    }
+    function refreshFilters() {
+        if (state.filterTimer) return;
+        state.filterTimer = setTimeout(() => {
+            state.filterTimer = 0;
+            applyFilters();
+        }, 40);
+    }
+    function filterBarParts() {
+        const bar = state.filterBar;
+        if (!bar) return null;
+        const cached = state.filterBarParts;
+        if (cached && cached.bar === bar) return cached;
+        const parts = {
+            bar,
+            count: bar.querySelector('.av-fb-count'),
+            stat: bar.querySelector('.av-fb-stat'),
+            toggle: bar.querySelector('.av-fb-toggle'),
+            watched: bar.querySelector('.av-fb-watched'),
+            blacklist: bar.querySelector('.av-fb-blacklist'),
+            fab: bar.querySelector('.av-fb-fab'),
+            select: bar.querySelector('.av-fb-select'),
+            selectLabel: bar.querySelector('.av-fb-select-label'),
+            selectWrap: bar.querySelector('.av-fb-select-wrap')
+        };
+        state.filterBarParts = parts;
+        return parts;
+    }
+    function updateFilterBarStats() {
+        const parts = filterBarParts();
+        if (!parts) return;
+        const value = String(state.filterStats.filtered);
+        if (parts.count && parts.count.textContent !== value) parts.count.textContent = value;
+        if (parts.stat) {
+            const hidden = !(settings.filterEnabled && state.filterStats.filtered > 0);
+            if (parts.stat.hidden !== hidden) parts.stat.hidden = hidden;
+        }
+        const toggle = parts.toggle;
+        if (toggle) {
+            const label = settings.filterEnabled ? '过滤: 开' : '过滤: 关';
+            const last = toggle.lastChild;
+            if (last && last.nodeType === 3 && last.nodeValue !== label) last.nodeValue = label;
+            toggle.classList.toggle('is-on', settings.filterEnabled);
+            toggle.title = settings.filterEnabled ? '过滤已开启，点击可快速暂停过滤' : '过滤已暂停，点击开启';
+            toggle.disabled = state.filterStats.total === 0;
+        }
+        const watched = parts.watched;
+        if (watched) {
+            watched.classList.toggle('is-on', settings.filterEnabled && settings.filterHideWatched);
+            watched.disabled = !settings.filterEnabled;
+        }
+        const blacklist = parts.blacklist;
+        if (blacklist) {
+            blacklist.classList.toggle('is-on', settings.filterEnabled && settings.filterEnableBlacklist);
+            blacklist.disabled = !settings.filterEnabled;
+            if (parts.fab) {
+                const hidden = !(settings.filterKeywords.trim() || settings.filterPrefixes.trim());
+                if (parts.fab.hidden !== hidden) parts.fab.hidden = hidden;
+            }
+        }
+        const select = parts.select;
+        if (select) {
+            if (String(select.value) !== String(settings.filterMinDuration)) select.value = String(settings.filterMinDuration);
+            select.disabled = !settings.filterEnabled;
+            const label = parts.selectLabel;
+            if (label) {
+                const current = DURATION_OPTIONS.find(item => Number(item[0]) === Number(settings.filterMinDuration));
+                const text = current ? current[1] : '全部时长';
+                if (label.textContent !== text) label.textContent = text;
+            }
+            if (parts.selectWrap) parts.selectWrap.classList.toggle('is-on', settings.filterEnabled && settings.filterMinDuration > 0);
+        }
+    }
+    const FILTER_HEADER_SELECTOR = '.flex.items-center.justify-between, .flex.justify-between';
+    function prepareFilterHost() {
+        if (state.video && state.video.isConnected) return null;
+        if (findMainVideo()) return null;
+        const firstCard = document.querySelector(CARD_SELECTOR);
+        if (!firstCard) return null;
+        const grid = (firstCard.closest && firstCard.closest('.grid')) || firstCard.parentElement;
+        if (!grid) return null;
+        let sectionHeader = null;
+        let prev = grid.previousElementSibling;
+        while (prev) {
+            if (prev.matches && prev.matches(FILTER_HEADER_SELECTOR)) {
+                sectionHeader = prev;
+                break;
+            }
+            const child = prev.querySelector ? prev.querySelector(FILTER_HEADER_SELECTOR) : null;
+            if (child) {
+                sectionHeader = child;
+                break;
+            }
+            prev = prev.previousElementSibling;
+        }
+        if (!sectionHeader) {
+            const parentPrev = grid.parentElement ? grid.parentElement.previousElementSibling : null;
+            if (parentPrev) {
+                if (parentPrev.matches && parentPrev.matches(FILTER_HEADER_SELECTOR)) sectionHeader = parentPrev;
+                else sectionHeader = parentPrev.querySelector ? parentPrev.querySelector(FILTER_HEADER_SELECTOR) : null;
+            }
+        }
+        let host = state.filterHost;
+        if (host && !host.isConnected) host = state.filterHost = null;
+        if (!host) host = document.querySelector('.av-filter-host');
+        if (sectionHeader) {
+            let slot = null;
+            for (const child of sectionHeader.children) {
+                if (child.classList && child.classList.contains('av-filter-host')) continue;
+                if (child.classList && (child.classList.contains('flex-1') || child.classList.contains('av-filter-injected-header'))) continue;
+                if (child.tagName === 'DIV') {
+                    slot = child;
+                    break;
+                }
+            }
+            if (!slot) {
+                slot = document.createElement('div');
+                slot.className = 'av-filter-slot';
+                sectionHeader.appendChild(slot);
+            }
+            if (!host) {
+                host = document.createElement('div');
+                host.className = 'av-filter-host';
+            }
+            if (host.parentElement !== slot) slot.appendChild(host);
+        } else {
+            const holder = grid.parentElement || document.body;
+            let fallback = holder.querySelector ? holder.querySelector('.av-filter-injected-header') : null;
+            if (!fallback) {
+                fallback = document.createElement('div');
+                fallback.className = 'av-filter-injected-header';
+                if (holder === document.body) holder.insertBefore(fallback, holder.firstChild);
+                else holder.insertBefore(fallback, grid);
+            }
+            if (!host) {
+                host = document.createElement('div');
+                host.className = 'av-filter-host';
+            }
+            if (host.parentElement !== fallback) fallback.appendChild(host);
+        }
+        state.filterHost = host;
+        return host;
+    }
+    function fbFab() {
+        const wrap = document.createElement('span');
+        wrap.className = 'av-fb-fab';
+        return wrap;
+    }
+    function makeFilterBar() {
+        if (state.filterBar && state.filterBar.isConnected) return state.filterBar;
+        const host = prepareFilterHost();
+        if (!host) return null;
+        state.filterBar = null;
+        const bar = document.createElement('div');
+        bar.className = 'av-filter-bar';
+        bar.setAttribute('role', 'toolbar');
+        bar.setAttribute('aria-label', '视频内容筛选');
+        const toggle = createButton('', 'av-fb-chip av-fb-toggle');
+        toggle.append(iconSvg('<path d="M13 2 4 14h7l-2 8 11-12h-7l2-8z"/>'), document.createTextNode('过滤: 开'));
+        toggle.title = '过滤已开启，点击可快速暂停过滤';
+        toggle.addEventListener('click', () => {
+            settings.filterEnabled = !settings.filterEnabled;
+            store.set('filterEnabled', settings.filterEnabled);
+            syncFilterPanel();
+            updateFilterBarStats();
+            refreshFilters();
+        });
+        const selectWrap = document.createElement('div');
+        selectWrap.className = 'av-fb-chip av-fb-select-wrap';
+        const selectIcon = iconSvg('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4M12 2v3"/>');
+        const selectLabel = document.createElement('span');
+        selectLabel.className = 'av-fb-select-label';
+        const select = document.createElement('select');
+        select.className = 'av-fb-select';
+        select.setAttribute('aria-label', '按时长过滤');
+        for (const [value, label] of DURATION_OPTIONS) {
+            const option = document.createElement('option');
+            option.value = String(value);
+            option.textContent = label;
+            select.appendChild(option);
+        }
+        select.value = String(settings.filterMinDuration);
+        select.addEventListener('change', () => {
+            settings.filterMinDuration = Number(select.value) || 0;
+            store.set('filterMinDuration', settings.filterMinDuration);
+            updateFilterBarStats();
+            refreshFilters();
+        });
+        selectWrap.append(selectIcon, selectLabel, select, iconSvg('<path d="m1 1 3 3 3-3"/>', '0 0 8 5'));
+        selectWrap.lastChild.classList.add('av-fb-arrow');
+        const watched = createButton('', 'av-fb-chip av-fb-watched');
+        watched.append(iconSvg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'), document.createTextNode('隐藏已看'));
+        watched.addEventListener('click', () => {
+            settings.filterHideWatched = !settings.filterHideWatched;
+            store.set('filterHideWatched', settings.filterHideWatched);
+            syncFilterPanel();
+            updateFilterBarStats();
+            refreshFilters();
+        });
+        const blacklist = createButton('', 'av-fb-chip av-fb-blacklist');
+        blacklist.append(iconSvg('<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>'), document.createTextNode('黑名单'));
+        blacklist.appendChild(fbFab());
+        blacklist.title = '已配置黑名单规则';
+        blacklist.addEventListener('click', () => {
+            settings.filterEnableBlacklist = !settings.filterEnableBlacklist;
+            store.set('filterEnableBlacklist', settings.filterEnableBlacklist);
+            syncFilterPanel();
+            updateFilterBarStats();
+            refreshFilters();
+        });
+        const stats = document.createElement('span');
+        stats.className = 'av-fb-chip av-fb-stat';
+        const statsNum = document.createElement('span');
+        statsNum.className = 'av-fb-count';
+        const statsLabel = document.createElement('span');
+        statsLabel.className = 'av-fb-stat-label';
+        statsLabel.textContent = '已过滤';
+        stats.title = '当前已过滤视频数';
+        stats.append(statsNum, statsLabel);
+        const cockpit = document.createElement('a');
+        cockpit.className = 'av-fb-chip av-fb-cockpit';
+        cockpit.href = analyticsUrl();
+        cockpit.target = '_blank';
+        cockpit.rel = 'noopener noreferrer';
+        cockpit.title = '在新标签页打开观影行为数据大屏';
+        cockpit.setAttribute('aria-label', '数据大屏');
+        cockpit.append(iconSvg('<path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 5-6"/>'), document.createTextNode('数据大屏'));
+        const hide = createButton('✕', 'av-fb-chip av-fb-hide');
+        hide.title = '隐藏过滤条';
+        hide.addEventListener('click', () => {
+            settings.filterBarVisible = false;
+            store.set('filterBarVisible', false);
+            syncFilterBar();
+            syncFilterPanel();
+            log('🛡 过滤条已隐藏，可在面板「内容过滤与屏蔽」中重新显示');
+        });
+        bar.append(toggle, selectWrap, watched, blacklist, stats, cockpit, hide);
+        host.appendChild(bar);
+        state.filterBar = bar;
+        updateFilterBarStats();
+        return bar;
+    }
+    function syncFilterBar() {
+        const host = state.filterHost && state.filterHost.isConnected ? state.filterHost : document.querySelector('.av-filter-host');
+        if (!settings.filterBarVisible || (state.video && state.video.isConnected) || findMainVideo() || !document.querySelector(CARD_SELECTOR)) {
+            state.filterBar?.remove();
+            state.filterBar = null;
+            if (host) host.remove();
+            state.filterHost = null;
+            return;
+        }
+        const bar = makeFilterBar();
+        if (!bar) return;
+        updateFilterBarStats();
+        syncFilterPanel();
+    }
+    function createCheckRow(labelText, key, onChange, helpText) {
+        const row = document.createElement('label');
+        row.className = 'av-check-row';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.role = 'switch';
+        input.checked = !!settings[key];
+        state.filterChecks[key] = input;
+        const span = document.createElement('span');
+        const text = document.createElement('span');
+        text.textContent = labelText;
+        span.appendChild(text);
+        if (helpText) {
+            const help = document.createElement('small');
+            help.className = 'av-help';
+            help.textContent = helpText;
+            span.appendChild(help);
+        }
+        const sync = () => {
+            const on = input.checked;
+            if (row.classList.contains('is-on') !== on) row.classList.toggle('is-on', on);
+        };
+        state.filterCheckSync[key] = sync;
+        sync();
+        input.addEventListener('change', () => {
+            settings[key] = input.checked;
+            store.set(key, input.checked);
+            sync();
+            if (onChange) onChange(input.checked);
+        });
+        row.append(span, input);
+        return row;
+    }
+    function syncFilterPanel() {
+        for (const key of Object.keys(state.filterChecks)) {
+            const box = state.filterChecks[key];
+            const want = !!settings[key];
+            if (box.checked !== want) box.checked = want;
+            const sync = state.filterCheckSync[key];
+            if (sync) sync();
+        }
+        if (state.filterPanel) {
+            const hasBlacklist = Boolean(settings.filterKeywords.trim() || settings.filterPrefixes.trim());
+            if (state.filterPanel.classList.contains('av-has-blacklist') !== hasBlacklist) state.filterPanel.classList.toggle('av-has-blacklist', hasBlacklist);
+        }
+        if (state.filterDepends) {
+            const hide = !settings.filterEnabled;
+            for (const row of state.filterDepends) {
+                if (row.hidden !== hide) row.hidden = hide;
+            }
+        }
+    }
+    function createTextRow(labelText, key, placeholder, helpText, rows) {
+        const row = document.createElement('div');
+        row.className = 'av-text-row';
+        const label = document.createElement('label');
+        label.textContent = labelText;
+        const input = document.createElement('textarea');
+        input.rows = rows || 3;
+        input.spellcheck = false;
+        input.placeholder = placeholder;
+        input.value = settings[key] || '';
+        input.addEventListener('change', () => {
+            settings[key] = input.value;
+            store.set(key, input.value);
+            updateFilterBarStats();
+            syncFilterPanel();
+            refreshFilters();
+        });
+        row.append(label, input);
+        if (helpText) {
+            const help = document.createElement('small');
+            help.className = 'av-help';
+            help.textContent = helpText;
+            row.appendChild(help);
+        }
+        return row;
+    }
+    function buildFilterPanel() {
+        const wrap = document.createElement('div');
+        wrap.className = 'av-filter-panel';
+        wrap.hidden = !settings.filterPanelOpen;
+        state.filterPanel = wrap;
+        const strip = document.createElement('div');
+        strip.className = 'av-filter-strip';
+        const rowEnabled = createCheckRow('总开关', 'filterEnabled', () => {
+            syncFilterBar();
+            refreshFilters();
+            syncFilterPanel();
+        }, '关闭后所有过滤与屏蔽立即失效');
+        const rowDim = createCheckRow('弱化显示模式', 'filterDimMode', refreshFilters, '半透明+灰度，替代彻底隐藏');
+        const rowHideWatched = createCheckRow('隐藏已看过的视频', 'filterHideWatched', refreshFilters);
+        const rowTrack = createCheckRow('自动记录已看视频', 'filterTrackWatched', undefined, '点击打开或播放时自动加入已看库');
+        const rowBlacklist = createCheckRow('启用黑名单屏蔽', 'filterEnableBlacklist', refreshFilters);
+        strip.append(
+            rowEnabled,
+            rowDim,
+            rowHideWatched,
+            rowTrack,
+            rowBlacklist,
+            createCheckRow('显示过滤条', 'filterBarVisible', syncFilterBar, '在列表页标题栏内显示快捷过滤条'),
+            createCheckRow('行为统计', 'analyticsTrack', enabled => {
+                if (enabled) startAnalyticsTracking();
+                else stopAnalyticsTracking();
+            }, '记录播放时长，供数据大屏统计')
+        );
+        const textSlide = document.createElement('div');
+        textSlide.className = 'av-filter-text-slide';
+        const textKeywords = createTextRow('标题关键词黑名单', 'filterKeywords', '例如：VR, 熟女, 动画, 3D（逗号或换行分隔）', '标题中包含任意关键词的视频将被过滤', 2);
+        const textPrefixes = createTextRow('番号前缀黑名单', 'filterPrefixes', '例如：FC2, SIRO, LUXU（逗号或换行分隔）', '以这些前缀开头的番号将被过滤', 2);
+        textSlide.append(textKeywords, textPrefixes);
+        const durationRow = document.createElement('div');
+        durationRow.className = 'av-text-row';
+        const durationLabel = document.createElement('label');
+        durationLabel.textContent = `最短时长过滤：${settings.filterMinDuration ? `${Math.round(settings.filterMinDuration / 60)} 分钟` : '关闭'}`;
+        const durationInput = document.createElement('input');
+        durationInput.type = 'range';
+        durationInput.min = '0';
+        durationInput.max = '3600';
+        durationInput.step = '60';
+        durationInput.value = String(settings.filterMinDuration);
+        durationInput.addEventListener('input', () => {
+            settings.filterMinDuration = Number(durationInput.value) || 0;
+            durationLabel.textContent = `最短时长过滤：${settings.filterMinDuration ? `${Math.round(settings.filterMinDuration / 60)} 分钟` : '关闭'}`;
+            store.set('filterMinDuration', settings.filterMinDuration);
+            updateFilterBarStats();
+            refreshFilters();
+        });
+        durationRow.append(durationLabel, durationInput);
+        const actions = document.createElement('div');
+        actions.className = 'av-filter-actions';
+        const openCockpit = document.createElement('a');
+        openCockpit.className = 'av-open-cockpit';
+        openCockpit.href = analyticsUrl();
+        openCockpit.target = '_blank';
+        openCockpit.rel = 'noopener noreferrer';
+        openCockpit.textContent = '📊 数据大屏';
+        openCockpit.title = '在新标签页打开观影行为数据大屏';
+        openCockpit.addEventListener('click', () => {
+            openCockpit.href = analyticsUrl();
+        });
+        const clearLib = createButton('🗑 清空已看库', 'btn-danger');
+        clearLib.addEventListener('click', () => {
+            clearWatched();
+            log('🗑 已看库已清空');
+            refreshFilters();
+        });
+        const rescan = createButton('🔄 立即重新过滤', 'btn-ghost');
+        rescan.addEventListener('click', () => {
+            applyFilters();
+            log(`🛡 过滤完成：共 ${state.filterStats.total} 个条目，屏蔽 ${state.filterStats.filtered} 个`);
+        });
+        actions.append(openCockpit, clearLib, rescan);
+        state.filterDepends = [rowDim, rowHideWatched, rowTrack, rowBlacklist, textKeywords, textPrefixes, durationRow];
+        const scroll = document.createElement('div');
+        scroll.className = 'av-filter-scroll';
+        scroll.append(strip, textSlide, durationRow);
+        wrap.append(scroll, actions);
+        syncFilterPanel();
+        return wrap;
+    }
+    function initContentFilter() {
+        syncFilterBar();
+        if (settings.analyticsTrack) startAnalyticsTracking();
+        if (settings.filterTrackWatched) {
+            document.addEventListener('click', event => {
+                const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+                if (!anchor || anchor.closest('.custom-ui-layer')) return;
+                const code = cardCodeFromHref(anchor.getAttribute('href'));
+                if (code) markWatched(code);
+            }, true);
+        }
+        refreshFilters();
+        const observer = new MutationObserver(mutations => {
+            for (const mutation of mutations) {
+                const node = mutation.target;
+                if (node && node.closest && node.closest('.custom-ui-layer, .av-filter-bar, .av-filter-host, .custom-control-panel, .custom-quick-controls')) continue;
+                state.domGen += 1;
+                refreshFilters();
+                return;
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        state.filterObserver = observer;
+    }
+    function analyticsRecords() {
+        if (state.analyticsRecords) return state.analyticsRecords;
+        let list = [];
+        try {
+            list = JSON.parse(store.get(ANALYTICS_KEY) || '[]');
+        } catch (error) {
+            list = [];
+        }
+        state.analyticsRecords = Array.isArray(list) ? list : [];
+        return state.analyticsRecords;
+    }
+    function saveAnalyticsRecords() {
+        const list = analyticsRecords();
+        if (list.length > MAX_RECORDS) {
+            list.sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
+            list.length = MAX_RECORDS;
+        }
+        store.set(ANALYTICS_KEY, JSON.stringify(list));
+    }
+    function extractPageMetadata() {
+        const meta = { code: '', title: '', duration: 0, actresses: [], genres: [], maker: '' };
+        meta.code = getPageVideoCode();
+        const heading = document.querySelector('h1.text-base, h1.text-lg, .video-title, h1');
+        if (heading) meta.title = (heading.textContent || '').trim();
+        const rows = document.querySelectorAll('.text-secondary, .video-info-row, .info-row, li');
+        for (const row of rows) {
+            const first = row.querySelector('span:first-child');
+            const label = first ? (first.textContent || '').trim() : '';
+            if (!meta.title && /^(Title|標題|标题|タイトル)\s*[:：]?$/i.test(label)) {
+                const value = row.querySelector('.font-medium');
+                if (value) meta.title = (value.textContent || '').trim();
+            }
+            if (!meta.maker && /^(Maker|メーカー|片商|廠商|制作)\s*[:：]?$/i.test(label)) {
+                const value = row.querySelector('.font-medium, a');
+                if (value) meta.maker = (value.textContent || '').trim();
+            }
+        }
+        const genres = new Set();
+        for (const anchor of document.querySelectorAll('a[href*="/genres/"], a[href*="/genre/"]')) {
+            const text = (anchor.textContent || '').trim();
+            if (text && text.length < 30 && !text.includes('http') && !text.includes('ranking')) genres.add(text);
+        }
+        meta.genres = [...genres];
+        const actresses = new Set();
+        const blocked = new Set(['actresses', 'actress', 'ranking', 'saved', 'collection', 'list']);
+        for (const anchor of document.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"]')) {
+            const text = (anchor.textContent || '').trim();
+            const slug = (anchor.getAttribute('href') || '').split('/').filter(Boolean).pop() || '';
+            if (text.length >= 2 && !blocked.has(slug)) actresses.add(text);
+        }
+        meta.actresses = [...actresses];
+        if (!meta.maker) {
+            const makerEl = document.querySelector('.space-y-2 a[href*="/makers/"], a[href*="/makers/"], a[href*="/labels/"]');
+            if (makerEl) meta.maker = (makerEl.textContent || '').trim();
+        }
+        const video = state.video;
+        if (video && isFinite(video.duration)) meta.duration = Math.round(video.duration);
+        return meta;
+    }
+    function startAnalyticsTracking() {
+        const video = state.video;
+        if (!video) return;
+        const code = getPageVideoCode();
+        if (!code) return;
+        if (state.analyticsSession && state.analyticsSession.code === code) return;
+        commitAnalyticsSession();
+        const meta = extractPageMetadata();
+        state.analyticsSession = {
+            code,
+            title: meta.title || code,
+            duration: meta.duration,
+            actresses: meta.actresses,
+            genres: meta.genres,
+            maker: meta.maker,
+            watchedSeconds: 0,
+            maxProgress: 0,
+            watchCount: 1,
+            lastTick: Date.now(),
+            dirty: false,
+            committed: false,
+            metaTries: 0
+        };
+        clearInterval(state.analyticsTimer);
+        state.analyticsTimer = setInterval(() => {
+            const session = state.analyticsSession;
+            if (!session || !state.video) return;
+            const now = Date.now();
+            const delta = (now - session.lastTick) / 1000;
+            session.lastTick = now;
+            if (document.hidden) return;
+            if (!state.video.paused && !state.video.seeking && delta > 0 && delta < 10) {
+                session.watchedSeconds += delta;
+                session.dirty = true;
+                if (state.video.duration > 0) {
+                    session.maxProgress = Math.max(session.maxProgress, state.video.currentTime / state.video.duration);
+                    session.duration = Math.round(state.video.duration);
+                }
+            }
+            if (!session.metaTries || ((!session.actresses.length || !session.genres.length) && session.metaTries < 3)) {
+                session.metaTries++;
+                const fresh = extractPageMetadata();
+                if (fresh.title && (!session.title || session.title === session.code)) session.title = fresh.title;
+                if (!session.actresses.length && fresh.actresses.length) session.actresses = fresh.actresses;
+                if (!session.genres.length && fresh.genres.length) session.genres = fresh.genres;
+                if (!session.maker && fresh.maker) session.maker = fresh.maker;
+            }
+            if (session.dirty && session.watchedSeconds >= 30) commitAnalyticsSession();
+        }, 2000);
+        video.addEventListener('pause', commitAnalyticsSession, { passive: true });
+        video.addEventListener('ended', commitAnalyticsSession, { passive: true });
+    }
+    function commitAnalyticsSession() {
+        const session = state.analyticsSession;
+        if (!session || !session.dirty) return;
+        const list = analyticsRecords();
+        const key = session.code.toUpperCase();
+        const now = Date.now();
+        const existing = list.find(item => String(item.code).toUpperCase() === key);
+        if (existing) {
+            existing.watchedSeconds = (existing.watchedSeconds || 0) + session.watchedSeconds;
+            existing.watchedAt = now;
+            existing.maxProgress = Math.max(existing.maxProgress || 0, session.maxProgress);
+            if (!session.committed) existing.watchCount = (existing.watchCount || 1) + 1;
+            session.committed = true;
+            if (session.duration) existing.duration = session.duration;
+            if (session.title && session.title !== session.code) existing.title = session.title;
+            if (session.actresses.length) existing.actresses = session.actresses;
+            if (session.genres.length) existing.genres = session.genres;
+            if (session.maker) existing.maker = session.maker;
+        } else {
+            list.unshift({
+                code: session.code,
+                title: session.title,
+                duration: session.duration,
+                watchedSeconds: session.watchedSeconds,
+                watchedAt: now,
+                firstWatchedAt: now,
+                actresses: session.actresses,
+                genres: session.genres,
+                maker: session.maker,
+                maxProgress: session.maxProgress,
+                watchCount: 1
+            });
+        }
+        session.watchedSeconds = 0;
+        session.dirty = false;
+        saveAnalyticsRecords();
+    }
+    function stopAnalyticsTracking() {
+        clearInterval(state.analyticsTimer);
+        state.analyticsTimer = 0;
+        commitAnalyticsSession();
+        state.analyticsSession = null;
+    }
+    function aggregateAnalytics(range) {
+        const records = analyticsRecords();
+        const now = Date.now();
+        const floor = range === '7d' ? now - 604800000 : range === '30d' ? now - 2592000000 : 0;
+        const result = {
+            totalCount: 0,
+            totalWatchedSeconds: 0,
+            completedCount: 0,
+            activeDays: new Set(),
+            hourlyCount: new Array(24).fill(0),
+            hourlySeconds: new Array(24).fill(0),
+            actressMap: new Map(),
+            genreMap: new Map(),
+            makerMap: new Map(),
+            bucketUnder5: 0,
+            bucket5to15: 0,
+            bucket15to30: 0,
+            bucketOver30: 0,
+            dayMap: new Map(),
+            daySecondsMap: new Map()
+        };
+        for (const record of records) {
+            if (floor && (record.watchedAt || 0) < floor) continue;
+            result.totalCount++;
+            const seconds = record.watchedSeconds || 0;
+            result.totalWatchedSeconds += seconds;
+            if ((record.maxProgress || 0) >= 0.75 || seconds >= 1200) result.completedCount++;
+            const date = new Date(record.watchedAt || now);
+            const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            result.activeDays.add(dayKey);
+            result.dayMap.set(dayKey, (result.dayMap.get(dayKey) || 0) + 1);
+            result.daySecondsMap.set(dayKey, (result.daySecondsMap.get(dayKey) || 0) + seconds);
+            const hour = date.getHours();
+            result.hourlyCount[hour]++;
+            result.hourlySeconds[hour] += seconds;
+            for (const name of record.actresses || []) {
+                const entry = result.actressMap.get(name) || { count: 0, seconds: 0 };
+                entry.count++;
+                entry.seconds += seconds;
+                result.actressMap.set(name, entry);
+            }
+            for (const genre of record.genres || []) {
+                result.genreMap.set(genre, (result.genreMap.get(genre) || 0) + 1);
+            }
+            if (record.maker) result.makerMap.set(record.maker, (result.makerMap.get(record.maker) || 0) + 1);
+            const minutes = seconds / 60;
+            if (minutes < 5) result.bucketUnder5++;
+            else if (minutes < 15) result.bucket5to15++;
+            else if (minutes < 30) result.bucket15to30++;
+            else result.bucketOver30++;
+        }
+        const count = Math.max(1, result.totalCount);
+        const avgWatchedMinutes = Math.round((result.totalWatchedSeconds / 60 / count) * 10) / 10;
+        const completionRate = Math.round((result.completedCount / count) * 1000) / 10;
+        const maxHourly = Math.max(1, ...result.hourlyCount);
+        const hourlyDistribution = result.hourlyCount.map((value, hour) => ({
+            hour,
+            count: value,
+            seconds: result.hourlySeconds[hour],
+            percentage: Math.round((value / maxHourly) * 100)
+        }));
+        const dayMs = 86400000;
+        const pastDays = 364 + new Date(now).getDay();
+        const dailyHeatmap = [];
+        for (let offset = pastDays; offset >= 0; offset--) {
+            const date = new Date(now - offset * dayMs);
+            const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            const dayCount = result.dayMap.get(dayKey) || 0;
+            const daySeconds = result.daySecondsMap.get(dayKey) || 0;
+            let level = 0;
+            if (dayCount > 0) {
+                if (daySeconds >= 3600 || dayCount >= 4) level = 4;
+                else if (daySeconds >= 2400 || dayCount >= 3) level = 3;
+                else if (daySeconds >= 1200 || dayCount >= 2) level = 2;
+                else level = 1;
+            }
+            dailyHeatmap.push({ date: dayKey, count: dayCount, seconds: daySeconds, level });
+        }
+        for (let offset = 1; offset <= 6 - new Date(now).getDay(); offset++) {
+            const date = new Date(now + offset * dayMs);
+            dailyHeatmap.push({
+                date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+                count: 0,
+                seconds: 0,
+                level: -1,
+                isFuture: true
+            });
+        }
+        const maxActressCount = Math.max(1, ...[...result.actressMap.values()].map(item => item.count));
+        const topActresses = [...result.actressMap.entries()]
+            .map(([name, entry]) => ({ name, count: entry.count, seconds: entry.seconds, percentage: Math.round((entry.count / maxActressCount) * 100) }))
+            .sort((a, b) => b.count - a.count || b.seconds - a.seconds)
+            .slice(0, 10);
+        const totalForGenre = Math.max(1, result.totalCount);
+        const topGenres = [...result.genreMap.entries()]
+            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / totalForGenre) * 100) }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 15);
+        const topMakers = [...result.makerMap.entries()]
+            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / totalForGenre) * 100) }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 8);
+        const habitBuckets = [
+            { label: '< 5 分钟 (速览)', count: result.bucketUnder5 },
+            { label: '5 - 15 分钟 (节选)', count: result.bucket5to15 },
+            { label: '15 - 30 分钟 (精选)', count: result.bucket15to30 },
+            { label: '> 30 分钟 (沉浸)', count: result.bucketOver30 }
+        ].map(bucket => ({ ...bucket, percentage: Math.round((bucket.count / count) * 100) }));
+        return {
+            totalCount: result.totalCount,
+            totalWatchedSeconds: result.totalWatchedSeconds,
+            avgWatchedMinutes,
+            completionRate,
+            activeDaysCount: result.activeDays.size,
+            hourlyDistribution,
+            dailyHeatmap,
+            topActresses,
+            topGenres,
+            topMakers,
+            habitBuckets
+        };
+    }
+    function iconSvg(paths, viewBox = '0 0 24 24') {
+        const span = document.createElement('span');
+        span.className = 'av-svg';
+        span.innerHTML = `<svg viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+        return span;
+    }
+    function buildKpi(label, value, unit, footer, iconPaths, tone) {
+        const card = document.createElement('div');
+        card.className = 'av-kpi';
+        const head = document.createElement('div');
+        head.className = 'av-kpi-header';
+        const labelEl = document.createElement('span');
+        labelEl.className = 'av-kpi-label';
+        labelEl.textContent = label;
+        const icon = iconSvg(iconPaths);
+        icon.classList.add(`is-${tone}`);
+        head.append(labelEl, icon);
+        const valueEl = document.createElement('div');
+        valueEl.className = 'av-kpi-value';
+        valueEl.textContent = String(value);
+        if (unit) {
+            const unitEl = document.createElement('small');
+            unitEl.textContent = unit;
+            valueEl.appendChild(unitEl);
+        }
+        const footerEl = document.createElement('div');
+        footerEl.className = 'av-kpi-footer';
+        footerEl.textContent = footer;
+        card.append(head, valueEl, footerEl);
+        return card;
+    }
+    function buildCardTitle(iconPaths, text, subtitle, crown) {
+        const wrap = document.createElement('div');
+        wrap.className = 'av-card-head';
+        const title = document.createElement('div');
+        title.className = 'av-card-title';
+        if (crown) {
+            const crownEl = document.createElement('span');
+            crownEl.className = 'av-rank-crown';
+            crownEl.textContent = '👑';
+            title.appendChild(crownEl);
+        }
+        title.append(iconSvg(iconPaths), (() => {
+            const span = document.createElement('span');
+            span.textContent = text;
+            return span;
+        })());
+        wrap.appendChild(title);
+        if (subtitle) {
+            const sub = document.createElement('div');
+            sub.className = 'av-card-subtitle';
+            sub.textContent = subtitle;
+            wrap.appendChild(sub);
+        }
+        return wrap;
+    }
+    function buildAnalyticsBody(data, range) {
+        const main = document.createElement('main');
+        main.className = 'av-cockpit-main';
+        if (!data.totalCount) {
+            const empty = document.createElement('div');
+            empty.className = 'av-empty';
+            const icon = document.createElement('div');
+            icon.className = 'av-empty-icon';
+            icon.append(iconSvg('<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>'));
+            const heading = document.createElement('h2');
+            heading.textContent = '暂无行为数据';
+            const text = document.createElement('p');
+            text.textContent = '正常观看视频时，脚本会在后台自动记录有效播放时长、番号、女优及题材标签，并实时在此大屏生成数据图表。';
+            empty.append(icon, heading, text);
+            main.appendChild(empty);
+            return main;
+        }
+        const kpiGrid = document.createElement('div');
+        kpiGrid.className = 'av-kpi-grid';
+        kpiGrid.append(
+            buildKpi('累计观影部数', data.totalCount, '部', '独立番号记录库', '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3z"/>', 'cyan'),
+            buildKpi('真实有效时长', formatDuration(data.totalWatchedSeconds), '', '心跳累计，排除挂机与暂停', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', 'emerald'),
+            buildKpi('平均单片投入', data.avgWatchedMinutes, '分钟', '单部作品平均停留', '<path d="M12 2v20"/><path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>', 'violet'),
+            buildKpi('深度完播率', data.completionRate, '%', '播放超 75% 或超 20 分钟', '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="m9 15 2 2 4-4"/>', 'pink')
+        );
+        main.appendChild(kpiGrid);
+        const heat = document.createElement('section');
+        heat.className = 'av-cockpit-card';
+        heat.appendChild(buildCardTitle('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>', '观影节律热力图 (近 365 天)', `近一年累计活跃 ${data.activeDaysCount} 天`));
+        const weekdays = document.createElement('div');
+        weekdays.className = 'av-heatmap-weekdays';
+        for (const name of ['日', '一', '二', '三', '四', '五', '六']) {
+            const span = document.createElement('span');
+            span.textContent = name;
+            weekdays.appendChild(span);
+        }
+        const heatWrap = document.createElement('div');
+        heatWrap.className = 'av-heatmap-wrap';
+        heatWrap.appendChild(weekdays);
+        const boxes = document.createElement('div');
+        boxes.className = 'av-heatmap-boxes';
+        for (const day of data.dailyHeatmap) {
+            const box = document.createElement('div');
+            box.className = `av-heatmap-box level-${day.level}${day.isFuture ? ' is-future' : ''}`;
+            box.title = `${day.date}：观看 ${day.count} 部 · ${formatDuration(day.seconds)}`;
+            boxes.appendChild(box);
+        }
+        heatWrap.appendChild(boxes);
+        heat.appendChild(heatWrap);
+        const legend = document.createElement('div');
+        legend.className = 'av-heatmap-legend';
+        const less = document.createElement('span');
+        less.textContent = '少';
+        legend.appendChild(less);
+        for (let level = 0; level <= 4; level++) {
+            const box = document.createElement('div');
+            box.className = `av-heatmap-box level-${level}`;
+            legend.appendChild(box);
+        }
+        const more = document.createElement('span');
+        more.textContent = '多';
+        legend.appendChild(more);
+        heat.appendChild(legend);
+        main.appendChild(heat);
+        const duo = document.createElement('div');
+        duo.className = 'av-duo-grid';
+        const hourly = document.createElement('section');
+        hourly.className = 'av-cockpit-card';
+        hourly.appendChild(buildCardTitle('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>', '24 小时活跃时段分布', '作息节律洞察'));
+        const bars = document.createElement('div');
+        bars.className = 'av-bar-chart';
+        for (const item of data.hourlyDistribution) {
+            const col = document.createElement('div');
+            col.className = 'av-bar-col';
+            col.title = `${item.hour}:00 - ${item.hour}:59：观看 ${item.count} 次 · ${formatDuration(item.seconds)}`;
+            const track = document.createElement('div');
+            track.className = 'av-bar-track';
+            const fill = document.createElement('div');
+            fill.className = `av-bar-fill${item.percentage >= 70 ? ' is-peak' : ''}`;
+            fill.style.height = `${Math.max(4, item.percentage)}%`;
+            track.appendChild(fill);
+            const label = document.createElement('span');
+            label.className = 'av-bar-label';
+            label.textContent = item.hour % 3 === 0 ? `${item.hour}h` : '';
+            col.append(track, label);
+            bars.appendChild(col);
+        }
+        hourly.appendChild(bars);
+        const habit = document.createElement('section');
+        habit.className = 'av-cockpit-card';
+        habit.appendChild(buildCardTitle('<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>', '单片投入时长分布模型', '观赏模式画像'));
+        const habitList = document.createElement('div');
+        habitList.className = 'av-habit-list';
+        for (const bucket of data.habitBuckets) {
+            const row = document.createElement('div');
+            row.className = 'av-habit-row';
+            const labelRow = document.createElement('div');
+            labelRow.className = 'av-habit-label';
+            const name = document.createElement('span');
+            name.textContent = bucket.label;
+            const value = document.createElement('span');
+            value.textContent = `${bucket.count} 部 (${bucket.percentage}%)`;
+            labelRow.append(name, value);
+            const bar = document.createElement('div');
+            bar.className = 'av-progress-bar is-habit';
+            const fill = document.createElement('div');
+            fill.style.width = `${Math.min(100, bucket.percentage)}%`;
+            bar.appendChild(fill);
+            row.append(labelRow, bar);
+            habitList.appendChild(row);
+        }
+        habit.appendChild(habitList);
+        duo.append(hourly, habit);
+        main.appendChild(duo);
+        const rankGrid = document.createElement('div');
+        rankGrid.className = 'av-duo-grid';
+        const actressCard = document.createElement('section');
+        actressCard.className = 'av-cockpit-card';
+        actressCard.appendChild(buildCardTitle('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', '偏好女优 TOP 10', '按陪伴频次与时长加权', true));
+        if (!data.topActresses.length) {
+            const empty = document.createElement('div');
+            empty.className = 'av-mini-empty';
+            empty.textContent = '暂无女优信息（将在观看带演员标签的影片时更新）';
+            actressCard.appendChild(empty);
+        } else {
+            data.topActresses.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'av-rank-row';
+                const badge = document.createElement('span');
+                badge.className = `av-rank-badge ${index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : ''}`;
+                badge.textContent = String(index + 1);
+                const body = document.createElement('div');
+                body.className = 'av-rank-body';
+                const head = document.createElement('div');
+                head.className = 'av-rank-head';
+                const link = document.createElement('a');
+                link.className = 'av-actress-link';
+                link.href = `https://missav.ai/search/${encodeURIComponent(item.name)}`;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = item.name;
+                const meta = document.createElement('span');
+                meta.className = 'av-rank-meta';
+                meta.textContent = `${item.count} 次 · ${formatDuration(item.seconds)}`;
+                head.append(link, meta);
+                const bar = document.createElement('div');
+                bar.className = 'av-progress-bar is-actress';
+                const fill = document.createElement('div');
+                fill.style.width = `${Math.min(100, item.percentage)}%`;
+                bar.appendChild(fill);
+                body.append(head, bar);
+                row.append(badge, body);
+                actressCard.appendChild(row);
+            });
+        }
+        const genreCard = document.createElement('section');
+        genreCard.className = 'av-cockpit-card';
+        genreCard.appendChild(buildCardTitle('<path d="M20.6 13.4 12 22l-9-9V3h10z"/><path d="M7.5 7.5h.01"/>', '偏好题材 TOP 15', '性癖雷达分布'));
+        if (!data.topGenres.length) {
+            const empty = document.createElement('div');
+            empty.className = 'av-mini-empty';
+            empty.textContent = '暂无题材信息';
+            genreCard.appendChild(empty);
+        } else {
+            data.topGenres.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'av-genre-row';
+                const name = document.createElement('span');
+                name.className = 'av-genre-name';
+                name.textContent = `${index + 1}. ${item.name}`;
+                const bar = document.createElement('div');
+                bar.className = 'av-progress-bar is-genre';
+                const fill = document.createElement('div');
+                fill.style.width = `${Math.min(100, item.percentage * 2.5)}%`;
+                bar.appendChild(fill);
+                const count = document.createElement('span');
+                count.className = 'av-genre-count';
+                count.textContent = `${item.count} 部`;
+                row.append(name, bar, count);
+                genreCard.appendChild(row);
+            });
+        }
+        rankGrid.append(actressCard, genreCard);
+        main.appendChild(rankGrid);
+        const makerCard = document.createElement('section');
+        makerCard.className = 'av-cockpit-card';
+        makerCard.appendChild(buildCardTitle('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>', '偏爱片商 TOP 8', '厂牌出品偏好'));
+        if (!data.topMakers.length) {
+            const empty = document.createElement('div');
+            empty.className = 'av-mini-empty';
+            empty.textContent = '暂无片商信息';
+            makerCard.appendChild(empty);
+        } else {
+            const chips = document.createElement('div');
+            chips.className = 'av-maker-chips';
+            for (const item of data.topMakers) {
+                const chip = document.createElement('span');
+                chip.className = 'av-maker-chip';
+                chip.textContent = `${item.name} · ${item.count} 部`;
+                chips.appendChild(chip);
+            }
+            makerCard.appendChild(chips);
+        }
+        main.appendChild(makerCard);
+        main.dataset.range = range;
+        return main;
+    }
+    function renderAnalytics() {
+        const page = state.analyticsPage;
+        if (!page) return;
+        state.analyticsSignature = store.get(ANALYTICS_KEY) || '[]';
+        const range = state.analyticsRange;
+        const data = aggregateAnalytics(range);
+        const main = page.querySelector('.av-cockpit-main');
+        if (main) main.replaceWith(buildAnalyticsBody(data, range));
+        for (const tab of page.querySelectorAll('.av-range-tab')) {
+            const active = tab.dataset.range === range;
+            tab.classList.toggle('active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            tab.tabIndex = active ? 0 : -1;
+        }
+    }
+    function exportAnalyticsJson() {
+        const payload = {
+            app: 'AV Helper Analytics',
+            version: '1.0',
+            exportedAt: new Date().toISOString(),
+            recordsCount: analyticsRecords().length,
+            records: analyticsRecords()
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `av-helper-analytics-${new Date().toISOString().slice(0, 10)}.json`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+    function clearAnalyticsData() {
+        state.analyticsRecords = [];
+        store.set(ANALYTICS_KEY, '[]');
+    }
+    function refreshCockpit() {
+        if (!state.analyticsPage) return;
+        state.analyticsRecords = null;
+        analyticsRecords();
+        renderAnalytics();
+    }
+    function syncCockpit() {
+        if (!state.analyticsPage || document.hidden) return;
+        if ((store.get(ANALYTICS_KEY) || '[]') === state.analyticsSignature) return;
+        state.analyticsRecords = null;
+        renderAnalytics();
+    }
+    function handleClearAnalytics() {
+        if (!confirm('确定要清空全部观影统计与行为数据吗？此操作无法撤销。')) return;
+        clearAnalyticsData();
+        refreshCockpit();
+        log('🗑 数据大屏记录已清空');
+    }
+    function closeCockpit() {
+        analyticsRequested = false;
+        cockpitSticky = false;
+        try {
+            sessionStorage.removeItem('avSub:cockpit');
+        } catch (_) {
+        }
+        if (analyticsObserver) {
+            analyticsObserver.disconnect();
+            analyticsObserver = null;
+        }
+        window.close();
+        setTimeout(() => {
+            if (window.closed || !state.analyticsPage) return;
+            if (history.length > 1) history.back();
+            else location.href = analyticsUrl().replace('#av-analytics', '');
+        }, 160);
+    }
+    function buildCockpitAction(iconPaths, label, className, title, onClick) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = className;
+        button.title = title;
+        button.appendChild(iconSvg(iconPaths));
+        if (label) {
+            const text = document.createElement('span');
+            text.textContent = label;
+            button.appendChild(text);
+        }
+        button.addEventListener('click', onClick);
+        return button;
+    }
+    let cockpitFocusHooked = false;
+    function hookCockpitFocus() {
+        if (cockpitFocusHooked) return;
+        cockpitFocusHooked = true;
+        window.addEventListener('visibilitychange', syncCockpit);
+        window.addEventListener('focus', syncCockpit);
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && state.analyticsPage) closeCockpit();
+        });
+    }
+    function analyticsUrl() {
+        try {
+            const url = new URL(location.href);
+            url.hash = '#av-analytics';
+            return url.href;
+        } catch (error) {
+            return '#av-analytics';
+        }
+    }
+    const ANALYTICS_TITLE = '观影行为数据 — 增强助手';
+    let analyticsGuard = 0;
+    let analyticsObserver = null;
+    let analyticsRequested = false;
+    let analyticsSweeping = false;
+    function evictForeignNodes() {
+        if (analyticsSweeping || !state.analyticsPage) return;
+        analyticsSweeping = true;
+        for (const node of Array.from(document.body.children)) {
+            if (node !== state.analyticsPage) node.remove();
+        }
+        analyticsSweeping = false;
+    }
+    function watchAnalyticsBody() {
+        if (analyticsObserver) return;
+        analyticsObserver = new MutationObserver(evictForeignNodes);
+        analyticsObserver.observe(document.body, { childList: true });
+    }
+    function buildAnalyticsPage() {
+        document.body.replaceChildren();
+        document.body.style.margin = '0';
+        document.body.style.padding = '0';
+        document.body.style.background = '#090a0f';
+        document.documentElement.style.background = '#090a0f';
+        document.documentElement.style.colorScheme = 'dark';
+        const page = document.createElement('div');
+        page.className = 'av-analytics-page';
+        const cockpit = document.createElement('div');
+        cockpit.className = 'av-cockpit';
+        const header = document.createElement('header');
+        header.className = 'av-cockpit-header';
+        const brand = document.createElement('div');
+        brand.className = 'av-brand';
+        const logo = iconSvg('<path d="M3 17l5-6 4 4 5-8 4 6"/>');
+        logo.classList.add('av-brand-logo');
+        const brandText = document.createElement('div');
+        brandText.className = 'av-brand-text';
+        const heading = document.createElement('h1');
+        heading.textContent = '观影行为数据';
+        const badge = document.createElement('span');
+        badge.className = 'av-brand-badge';
+        badge.textContent = '数据专业版';
+        brandText.append(heading, badge);
+        brand.append(logo, brandText);
+        const tabs = document.createElement('div');
+        tabs.className = 'av-range-tabs';
+        tabs.setAttribute('role', 'tablist');
+        tabs.setAttribute('aria-label', '统计时间范围');
+        for (const [value, label] of [['all', '全部历史'], ['30d', '近 30 天'], ['7d', '近 7 天']]) {
+            const tab = document.createElement('button');
+            tab.type = 'button';
+            tab.className = 'av-range-tab';
+            tab.dataset.range = value;
+            tab.setAttribute('role', 'tab');
+            tab.setAttribute('aria-selected', value === state.analyticsRange ? 'true' : 'false');
+            tab.tabIndex = value === state.analyticsRange ? 0 : -1;
+            tab.textContent = label;
+            tab.addEventListener('click', () => {
+                if (state.analyticsRange !== value) window.scrollTo(0, 0);
+                state.analyticsRange = value;
+                renderAnalytics();
+            });
+            tabs.appendChild(tab);
+        }
+        tabs.addEventListener('keydown', event => {
+            const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+            if (!step) return;
+            event.preventDefault();
+            const list = Array.from(tabs.querySelectorAll('.av-range-tab'));
+            const index = list.indexOf(document.activeElement);
+            const next = list[(index + step + list.length) % list.length];
+            if (!next) return;
+            next.focus();
+            next.click();
+        });
+        const actions = document.createElement('div');
+        actions.className = 'av-cockpit-actions';
+        const refresh = buildCockpitAction('<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16M21 21v-5h-5"/>', '刷新', 'av-btn av-btn-secondary', '刷新统计数据', refreshCockpit);
+        const exportBtn = buildCockpitAction('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>', '导出 JSON', 'av-btn av-btn-secondary', '导出 JSON 格式数据备份', exportAnalyticsJson);
+        const clearBtn = buildCockpitAction('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', '清空', 'av-btn av-btn-danger', '清空全部行为记录', handleClearAnalytics);
+        const close = buildCockpitAction('<path d="M18 6 6 18M6 6l12 12"/>', '', 'av-btn av-btn-close', '关闭大屏', closeCockpit);
+        actions.append(refresh, exportBtn, clearBtn, close);
+        header.append(brand, tabs, actions);
+        const main = document.createElement('main');
+        main.className = 'av-cockpit-main';
+        cockpit.append(header, main);
+        page.appendChild(cockpit);
+        document.body.appendChild(page);
+        state.analyticsPage = page;
+        watchAnalyticsBody();
+        hookCockpitFocus();
+        applyUiStyles();
+        renderAnalytics();
+    }
+    function mountAnalyticsPage() {
+        analyticsRequested = true;
+        document.title = ANALYTICS_TITLE;
+        const boot = () => {
+            if (document.querySelector('.av-analytics-page')) return;
+            buildAnalyticsPage();
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+        else boot();
+        if (!analyticsGuard) {
+            analyticsGuard = setInterval(() => {
+                if (!analyticsRequested) {
+                    clearInterval(analyticsGuard);
+                    analyticsGuard = 0;
+                    return;
+                }
+                if (document.hidden) return;
+                if (document.title !== ANALYTICS_TITLE) document.title = ANALYTICS_TITLE;
+                if (!state.analyticsPage || !state.analyticsPage.isConnected) buildAnalyticsPage();
+            }, 800);
+        }
+    }
+    const isAnalyticsRoute = () => cockpitSticky || analyticsRequested || /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
     function installSpaWatch() {
         let lastUrl = location.href;
         const handleRouteChange = () => {
             if (location.href === lastUrl) return;
             lastUrl = location.href;
+            if (isAnalyticsRoute()) {
+                mountAnalyticsPage();
+                return;
+            }
             log('🔀 页面已切换，重新初始化播放器');
             closeSubtitlePicker();
             closeInfoSection();
@@ -2775,6 +4859,11 @@
             state.infoSession++;
             state.infoData = null;
             state.listMovies = null;
+            state.domGen += 1;
+            videoProbeEl = null;
+            videoProbeAt = 0;
+            stopAnalyticsTracking();
+            refreshFilters();
             document.querySelector('.info-rating-badge')?.remove();
             state.player = null;
             state.video = null;
@@ -2782,6 +4871,7 @@
             setTimeout(() => {
                 initPlayer();
                 clickPlayEntry();
+                syncFilterBar();
             }, 600);
         };
         const onRouteChange = debounce(handleRouteChange, 400);
@@ -2802,12 +4892,13 @@
     } else {
         initPage();
     }
-    installSpaWatch();
+    if (!isAnalyticsRoute()) installSpaWatch();
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && state.infoSection) setInfoExpanded(false);
     });
     window.addEventListener('beforeunload', () => {
         state.adObserver?.disconnect();
+        stopAnalyticsTracking();
         stopPlayerPoll();
         cancelAnimationFrame(state.subtitleRAF);
         clearTimeout(state.holdTimer);
