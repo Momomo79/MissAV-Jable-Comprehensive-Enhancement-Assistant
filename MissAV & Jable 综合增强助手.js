@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      10.5
+// @version      10.6
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -505,6 +505,7 @@
             for (const record of records) {
                 for (const node of record.addedNodes) {
                     if (node.nodeType !== 1) continue;
+                    if (state.analyticsPage && typeof state.analyticsPage.contains === 'function' && state.analyticsPage.contains(node)) continue;
                     if (node.tagName === 'VIDEO' || node.tagName === 'AUDIO' || (node.querySelector && node.querySelector('video, audio'))) {
                         silenceMedia();
                         return;
@@ -4938,8 +4939,14 @@
     function hookCockpitFocus() {
         if (cockpitFocusHooked) return;
         cockpitFocusHooked = true;
-        window.addEventListener('visibilitychange', syncCockpit);
-        window.addEventListener('focus', syncCockpit);
+        window.addEventListener('visibilitychange', () => {
+            ensureCockpit();
+            syncCockpit();
+        });
+        window.addEventListener('focus', () => {
+            ensureCockpit();
+            syncCockpit();
+        });
         window.addEventListener('keydown', event => {
             if (event.key === 'Escape' && state.analyticsPage) closeCockpit();
         });
@@ -4962,7 +4969,10 @@
         if (analyticsSweeping || !state.analyticsPage) return;
         analyticsSweeping = true;
         for (const node of Array.from(document.body.children)) {
-            if (node !== state.analyticsPage) node.remove();
+            if (node === state.analyticsPage) continue;
+            if (node.style && typeof node.style.setProperty === 'function') node.style.setProperty('display', 'none', 'important');
+            else if (node.style) node.style.display = 'none';
+            node.setAttribute('aria-hidden', 'true');
         }
         analyticsSweeping = false;
     }
@@ -4970,6 +4980,26 @@
         if (analyticsObserver) return;
         analyticsObserver = new MutationObserver(evictForeignNodes);
         analyticsObserver.observe(document.body, { childList: true });
+    }
+    let cockpitPinGuard = '';
+    function ensureCockpit() {
+        if (!analyticsRequested && !cockpitSticky) return;
+        engageCockpitGuard();
+        armMediaKiller();
+        silenceMedia();
+        if (document.title !== ANALYTICS_TITLE) document.title = ANALYTICS_TITLE;
+        if (!/^#av-analytics\b/.test(location.hash) && location.href !== cockpitPinGuard) {
+            cockpitPinGuard = location.href;
+            try {
+                if (typeof history.replaceState === 'function') history.replaceState(null, '', analyticsUrl());
+            } catch (_) {
+            }
+        }
+        const live = document.querySelector('.av-analytics-page');
+        if (live && live === state.analyticsPage && live.isConnected) return;
+        if (!document.body) return;
+        state.analyticsPage = null;
+        buildAnalyticsPage();
     }
     function silenceMedia() {
         for (const media of document.querySelectorAll('video, audio')) {
@@ -5080,7 +5110,6 @@
                 else setTimeout(boot, 60);
                 return;
             }
-            disarmMediaKiller();
             if (document.querySelector('.av-analytics-page')) return;
             buildAnalyticsPage();
         };
@@ -5093,11 +5122,8 @@
                     analyticsGuard = 0;
                     return;
                 }
-                if (document.hidden) return;
-                silenceMedia();
-                if (document.title !== ANALYTICS_TITLE) document.title = ANALYTICS_TITLE;
-                if (!state.analyticsPage || !state.analyticsPage.isConnected) buildAnalyticsPage();
-            }, 800);
+                ensureCockpit();
+            }, 500);
         }
     }
     const isAnalyticsRoute = () => cockpitSticky || analyticsRequested || /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
@@ -5136,13 +5162,27 @@
         const onRouteChange = debounce(handleRouteChange, 400);
         const analyticsKick = () => {
             if (!isAnalyticsRoute()) return;
-            if (state.analyticsPage) return;
-            mountAnalyticsPage();
+            ensureCockpit();
         };
         window.addEventListener('popstate', onRouteChange, { passive: true });
         window.addEventListener('hashchange', onRouteChange, { passive: true });
         window.addEventListener('hashchange', analyticsKick, { passive: true });
         window.addEventListener('popstate', analyticsKick, { passive: true });
+        let watchPending = false;
+        const watchHostChurn = () => {
+            if (watchPending) return;
+            watchPending = true;
+            setTimeout(() => {
+                watchPending = false;
+                if (!isAnalyticsRoute()) return;
+                ensureCockpit();
+            }, 250);
+        };
+        const hostObserver = new MutationObserver(() => {
+            if (isAnalyticsRoute()) watchHostChurn();
+        });
+        hostObserver.observe(document.documentElement, { childList: true });
+        if (document.body) hostObserver.observe(document.body, { childList: true });
         for (const method of ['pushState', 'replaceState']) {
             const original = history[method];
             if (typeof original !== 'function') continue;
