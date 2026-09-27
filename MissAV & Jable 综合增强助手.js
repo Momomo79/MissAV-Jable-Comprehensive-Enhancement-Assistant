@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      10.15
-// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      11.0
+// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏（用户画像、记录明细、全局搜索与标题自动补全）、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
+// @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
+// @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @match        *://missav.ws/*
 // @match        *://missav.live/*
 // @match        *://missav.ai/*
@@ -29,6 +31,16 @@
 // @connect      javdb.com
 // @connect      api.allorigins.win
 // @connect      api.codetabs.com
+// @connect      jable.tv
+// @connect      www.jable.tv
+// @connect      missav.ai
+// @connect      missav.ws
+// @connect      missav.live
+// @connect      missav.com
+// @connect      missav123.com
+// @connect      missav.fans
+// @connect      missav.media
+// @connect      thisav.com
 // @run-at       document-start
 // @noframes
 // @license      MIT
@@ -43,6 +55,7 @@
     const POLL_INTERVAL = 400;
     const POLL_TIMEOUT = 15000;
     const MUTATION_THROTTLE = 400;
+    const SUBTITLE_IDLE_DELAY = 500;
     const QUICK_HIDE_DELAY = 2200;
     const QUICK_LEAVE_DELAY = 800;
     const MIN_PLAYER_WIDTH = 480;
@@ -424,6 +437,7 @@
         activeCueText: '',
         subtitleLoading: false,
         subtitleRAF: 0,
+        subtitleIdleTimer: 0,
         panel: null,
         panelBody: null,
         quick: null,
@@ -478,6 +492,7 @@
         analyticsRecords: null,
         analyticsPage: null,
         analyticsRange: 'all',
+        analyticsQuery: '',
         reviewsCode: '',
         reviewsPage: 1,
         reviewsHasMore: false,
@@ -586,12 +601,48 @@
             }
         }
     }
+    function sweepAdNodes(root) {
+        if (!root || root.nodeType !== 1) return;
+        for (const element of root.querySelectorAll(AD_SELECTORS)) {
+            if (isProtectedNode(element)) continue;
+            if (element.tagName === 'IFRAME') {
+                if (isProtectedFrame(element)) continue;
+                element.remove();
+            } else if (element.style.display !== 'none') {
+                element.style.display = 'none';
+            }
+        }
+        if (isProtectedNode(root)) return;
+        if (root.tagName === 'IFRAME') {
+            if (!isProtectedFrame(root)) root.remove();
+            return;
+        }
+        if (root.matches && root.matches(AD_SELECTORS) && root.style.display !== 'none') root.style.display = 'none';
+    }
     function startAdObserver() {
         if (state.adObserver || !document.body) return;
-        state.adObserver = new MutationObserver(throttle(() => {
-            cleanAds();
+        const pending = [];
+        let frames = false;
+        const sweep = throttle(() => {
+            if (!pending.length) return;
+            const nodes = pending.splice(0, pending.length);
+            const patchFrames = frames;
+            frames = false;
+            patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+            if (patchFrames) patchAllIframeWindows();
+            for (const node of nodes) sweepAdNodes(node);
             if (!state.bound) initPlayer();
-        }, MUTATION_THROTTLE));
+        }, MUTATION_THROTTLE);
+        state.adObserver = new MutationObserver(records => {
+            for (const record of records) {
+                for (const node of record.addedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    pending.push(node);
+                    if (!frames && (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe')))) frames = true;
+                }
+            }
+            if (pending.length) sweep();
+        });
         state.adObserver.observe(document.body, { childList: true, subtree: true });
     }
     const LOG_LIMIT = 80;
@@ -787,6 +838,20 @@
         .lightbox-nav.next { right: 6px; }
         .av-info-section { margin: 12px 0; border-radius: 12px; background: rgba(20,22,30,.72); border: 1px solid rgba(255,255,255,.12); overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,.24); color: #e2e8f0; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; }
         .av-info-section:hover { border-color: rgba(255,255,255,.2); }
+        .av-jable-meta { margin: 12px auto; max-width: 100%; padding: 12px 14px; border-radius: 12px; background: rgba(20,22,30,.72); border: 1px solid rgba(255,255,255,.12); box-shadow: 0 4px 16px rgba(0,0,0,.24); color: #e2e8f0; font: 13px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-align: left; }
+        .av-jable-meta:hover { border-color: rgba(255,255,255,.2); }
+        .av-jable-meta-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .av-jable-meta-title { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+        .av-jable-meta-src { margin-left: auto; padding: 1px 8px; border-radius: 9999px; background: rgba(96,165,250,.14); border: 1px solid rgba(96,165,250,.4); color: #93c5fd; font-size: 11px; line-height: 1.6; white-space: nowrap; text-decoration: none; }
+        a.av-jable-meta-src:hover { color: #bfdbfe; border-color: rgba(96,165,250,.7); }
+        .av-jable-meta-grid { display: grid; gap: 8px; }
+        .av-jable-meta-item { display: grid; grid-template-columns: 62px 1fr; gap: 10px; align-items: start; }
+        .av-jable-meta-label { color: #94a3b8; font-size: 12px; line-height: 1.7; white-space: nowrap; }
+        .av-jable-meta-values { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; color: #e2e8f0; font-size: 13px; line-height: 1.7; word-break: break-word; }
+        .av-jable-model { display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 9999px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); color: #e2e8f0; font-size: 12px; line-height: 1.6; text-decoration: none; }
+        a.av-jable-model:hover { background: rgba(96,165,250,.18); border-color: rgba(96,165,250,.5); color: #fff; }
+        .av-jable-meta-pending { color: #64748b; }
+        @media (max-width: 640px) { .av-jable-meta { padding: 10px 12px; } .av-jable-meta-item { grid-template-columns: 54px 1fr; gap: 8px; } }
         .av-info-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; user-select: none; background: rgba(255,255,255,.02); transition: background .15s; }
         .av-info-head:hover { background: rgba(255,255,255,.05); }
         .av-info-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; color: #f1f5f9; letter-spacing: -.01em; }
@@ -1814,10 +1879,18 @@
     }
     function startSubtitleLoop() {
         cancelAnimationFrame(state.subtitleRAF);
+        clearTimeout(state.subtitleIdleTimer);
+        state.subtitleRAF = 0;
+        state.subtitleIdleTimer = 0;
         const tick = () => {
-            state.subtitleRAF = requestAnimationFrame(tick);
             const video = state.video;
-            if (!video) return;
+            if (!video || (!state.loopActive && !state.cueIndex?.items.length)) {
+                state.subtitleRAF = 0;
+                state.subtitleIdleTimer = setTimeout(tick, SUBTITLE_IDLE_DELAY);
+                return;
+            }
+            state.subtitleRAF = requestAnimationFrame(tick);
+            if (document.hidden) return;
             if (state.loopActive) {
                 const time = video.currentTime;
                 if (time >= state.loopStart + state.loopDuration || time < state.loopStart - 0.5) {
@@ -2252,7 +2325,7 @@
         return out;
     }
     async function fetchJavDbInfo(code, onPartial) {
-        const empty = { rating: undefined, stills: [], reviews: [], lists: [], javDbMovieId: '' };
+        const empty = { rating: undefined, stills: [], reviews: [], lists: [], credits: null, javDbMovieId: '' };
         const cleanId = code.replace(/[-_]/g, '').toLowerCase();
         const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
             q: code, page: '1', type: 'movie', limit: '5',
@@ -2276,12 +2349,15 @@
         const once = url => jdApiFetch(url).catch(() => '').then(raw => raw || jdApiFetch(url).catch(() => ''));
         const [detailRaw, reviewsRaw, listsRaw] = await Promise.all([once(detailUrl), once(reviewsUrl), once(listsUrl)]);
         let rating;
+        let credits = null;
         const stills = [];
         const reviews = [];
         const lists = [];
         try {
             const detail = JSON.parse(detailRaw)?.data?.movie;
             if (detail) {
+                credits = javDbCreditsFrom(movie, detail);
+                rememberJavDbCredits(code, credits);
                 const raw = Number(detail.score);
                 if (Number.isFinite(raw) && raw > 0 && raw <= 5) {
                     const watched = Number(detail.watched_count);
@@ -2338,7 +2414,7 @@
             }
         } catch (_) {
         }
-        const partial = { rating, stills, reviews, lists, javDbMovieId: String(movie.id) };
+        const partial = { rating, stills, reviews, lists, credits, javDbMovieId: String(movie.id) };
         onPartial?.(partial);
         return partial;
     }
@@ -2439,6 +2515,7 @@
                 acceptLists(partial.lists);
                 state.infoData.lists = [...seenLists];
             }
+            if (partial.credits) state.infoData.credits = partial.credits;
             if (partial.javDbMovieId) state.infoData.javDbMovieId = partial.javDbMovieId;
             applyInfoToPage(state.infoData);
         };
@@ -2462,6 +2539,7 @@
             stills: [...seenStills],
             reviews: dedupeReviews(merged),
             lists: [...seenLists],
+            credits: javDb.credits || state.infoData.credits || null,
             javDbMovieId: javDb.javDbMovieId || ''
         };
         state.infoData = finalData;
@@ -3097,10 +3175,217 @@
         if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
         return String(num);
     }
+    const JAVDB_CREDITS_DONE = new Map();
+    const JAVDB_CREDITS_TASKS = new Map();
+    const JABLE_CARD_DELAY = 1200;
+    let jableCardCode = '';
+    function javDbCreditsFrom(movie, detail) {
+        const source = detail || movie || {};
+        const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+        const actors = (Array.isArray(detail?.actors) ? detail.actors : []).map(actor => clean(actor?.name)).filter(Boolean);
+        const credits = {
+            code: clean(source.number || movie?.number),
+            releaseDate: clean(source.release_date),
+            maker: clean(source.maker_name),
+            director: clean(source.director_name),
+            series: clean(source.series_name),
+            actors,
+            url: movie?.id ? `https://javdb.com/v/${encodeURIComponent(String(movie.id))}` : ''
+        };
+        const filled = credits.releaseDate || credits.maker || credits.director || credits.series || actors.length;
+        return filled ? credits : null;
+    }
+    function rememberJavDbCredits(code, credits) {
+        const target = String(code || '').trim().toUpperCase();
+        if (!target || !credits || JAVDB_CREDITS_DONE.has(target)) return;
+        JAVDB_CREDITS_DONE.set(target, credits);
+    }
+    async function fetchJavDbCredits(code) {
+        const cleanId = code.replace(/[-_]/g, '').toLowerCase();
+        const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
+            q: code, page: '1', type: 'movie', limit: '5',
+            movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
+        });
+        let movies = [];
+        try {
+            movies = JSON.parse(await jdApiFetch(searchUrl))?.data?.movies ?? [];
+        } catch (_) {
+            movies = [];
+        }
+        const movie = (Array.isArray(movies) ? movies : []).find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === cleanId);
+        if (!movie?.id) return null;
+        let detail = null;
+        try {
+            detail = JSON.parse(await jdApiFetch(`${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(movie.id)}`))?.data?.movie ?? null;
+        } catch (_) {
+            detail = null;
+        }
+        return javDbCreditsFrom(movie, detail);
+    }
+    function javDbCreditsFor(code) {
+        const target = String(code || '').trim().toUpperCase();
+        if (!target) return Promise.resolve(null);
+        if (JAVDB_CREDITS_DONE.has(target)) return Promise.resolve(JAVDB_CREDITS_DONE.get(target));
+        const pending = JAVDB_CREDITS_TASKS.get(target);
+        if (pending) return pending;
+        const task = fetchJavDbCredits(target).catch(() => null).then(credits => {
+            JAVDB_CREDITS_TASKS.delete(target);
+            JAVDB_CREDITS_DONE.set(target, credits || null);
+            return credits || null;
+        });
+        JAVDB_CREDITS_TASKS.set(target, task);
+        return task;
+    }
+    function jableInfoCredits(code) {
+        const info = state.infoData;
+        if (!info || !info.credits) return null;
+        return String(info.code || '').trim().toUpperCase() === code ? info.credits : null;
+    }
+    function jableActressLinks() {
+        const found = [];
+        const seen = new Set();
+        const anchors = typeof metaAnchors === 'function' ? metaAnchors(META_ACTRESS_SELECTOR, 40) : [];
+        for (const anchor of anchors) {
+            const name = typeof metaText === 'function' ? metaText(anchor) : '';
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            found.push({ name, href: typeof anchor.href === 'string' ? anchor.href : '' });
+        }
+        return found;
+    }
+    function jableCardHost() {
+        const tags = document.querySelector('.video-info h5.tags') || document.querySelector('h5.tags.h6-md') || document.querySelector('h5.tags');
+        if (tags?.parentElement) return { parent: tags.parentElement, before: tags };
+        const actionRow = document.querySelector('.video-info .text-center .my-3') || document.querySelector('.video-info .my-3');
+        if (actionRow?.parentElement) return { parent: actionRow.parentElement, before: actionRow.nextSibling };
+        const box = document.querySelector('.video-info .text-center') || document.querySelector('section.video-info');
+        return box ? { parent: box, before: null } : null;
+    }
+    function jablePendingNode() {
+        const node = document.createElement('span');
+        node.className = 'av-jable-meta-pending';
+        node.textContent = '读取中…';
+        return node;
+    }
+    function jableCreditsNodes(credits, key) {
+        if (!credits) return [jablePendingNode()];
+        const value = String(credits[key] || '').trim();
+        const node = document.createElement('span');
+        if (value) {
+            node.className = 'av-jable-meta-text';
+            node.textContent = value;
+        } else {
+            node.className = 'av-jable-meta-pending';
+            node.textContent = '—';
+        }
+        return [node];
+    }
+    function jableActressNodes(credits) {
+        const nodes = [];
+        const seen = new Set();
+        for (const item of jableActressLinks()) {
+            if (!item.name || seen.has(item.name)) continue;
+            seen.add(item.name);
+            const node = document.createElement(item.href ? 'a' : 'span');
+            node.className = 'av-jable-model';
+            node.textContent = item.name;
+            if (item.href) {
+                node.href = item.href;
+                node.target = '_blank';
+                node.rel = 'noopener noreferrer';
+                node.title = `${item.name} 的作品`;
+            }
+            nodes.push(node);
+        }
+        if (!nodes.length) {
+            for (const name of credits?.actors ?? []) {
+                if (!name || seen.has(name)) continue;
+                seen.add(name);
+                const node = document.createElement('span');
+                node.className = 'av-jable-model';
+                node.textContent = name;
+                nodes.push(node);
+            }
+        }
+        return nodes.length ? nodes : [jablePendingNode()];
+    }
+    function jableMetaItem(label, nodes) {
+        const item = document.createElement('div');
+        item.className = 'av-jable-meta-item';
+        const name = document.createElement('span');
+        name.className = 'av-jable-meta-label';
+        name.textContent = label;
+        const values = document.createElement('div');
+        values.className = 'av-jable-meta-values';
+        values.append(...nodes);
+        item.append(name, values);
+        return item;
+    }
+    function renderJableCreditsCard(code, credits) {
+        const target = String(code || '').trim().toUpperCase();
+        if (!target) return null;
+        const host = jableCardHost();
+        if (!host) return null;
+        let card = document.querySelector('.av-jable-meta');
+        if (card && String(card.dataset?.code || '') !== target) {
+            card.remove();
+            card = null;
+        }
+        if (!card) {
+            card = document.createElement('div');
+            card.className = 'av-jable-meta';
+            if (card.dataset) card.dataset.code = target;
+        }
+        if (card.parentElement !== host.parent) host.parent.insertBefore(card, host.before || null);
+        const head = document.createElement('div');
+        head.className = 'av-jable-meta-head';
+        const caption = document.createElement('span');
+        caption.className = 'av-jable-meta-title';
+        caption.textContent = '作品资料';
+        const source = document.createElement(credits?.url ? 'a' : 'span');
+        source.className = 'av-jable-meta-src';
+        source.textContent = 'JavDB';
+        if (credits?.url) {
+            source.href = credits.url;
+            source.target = '_blank';
+            source.rel = 'noopener noreferrer';
+            source.title = '在 JavDB 查看该作品';
+        }
+        head.append(caption, source);
+        const grid = document.createElement('div');
+        grid.className = 'av-jable-meta-grid';
+        grid.append(
+            jableMetaItem('女优', jableActressNodes(credits)),
+            jableMetaItem('发行时间', jableCreditsNodes(credits, 'releaseDate')),
+            jableMetaItem('片商', jableCreditsNodes(credits, 'maker')),
+            jableMetaItem('导演', jableCreditsNodes(credits, 'director')),
+            jableMetaItem('系列', jableCreditsNodes(credits, 'series'))
+        );
+        card.replaceChildren(head, grid);
+        return card;
+    }
+    function startJableCreditsCard(code) {
+        if (!IS_JABLE) return null;
+        const target = String(code || getPageVideoCode() || '').trim().toUpperCase();
+        if (!target) return null;
+        const known = JAVDB_CREDITS_DONE.has(target) ? JAVDB_CREDITS_DONE.get(target) : jableInfoCredits(target);
+        renderJableCreditsCard(target, known || null);
+        if (known || jableCardCode === target) return null;
+        jableCardCode = target;
+        return setTimeout(() => {
+            if (jableCardCode !== target) return;
+            javDbCreditsFor(target).then(credits => {
+                if (jableCardCode !== target) return;
+                if (String(getPageVideoCode() || '').trim().toUpperCase() !== target) return;
+                renderJableCreditsCard(target, credits);
+            });
+        }, JABLE_CARD_DELAY);
+    }
     function applyInfoToPage(data) {
         if (!data) return;
         if (data.rating) injectRatingBadge(data.rating);
         renderInfoSection(data);
+        startJableCreditsCard(data.code);
     }
     function openLightbox(images, index) {
         closeLightbox();
@@ -3318,6 +3603,7 @@
             loadActressSocialFromPage();
             loadVideoInfo();
         }
+        startJableCreditsCard();
         log('🎬 播放器已就绪');
         if (settings.analyticsTrack) setTimeout(startAnalyticsTracking, 1200);
     }
@@ -3647,6 +3933,77 @@
         .av-empty h2 { font-size: 18px; margin: 16px 0 8px; }
         .av-empty p { font-size: 12px; color: #64748b; max-width: 460px; margin: 0 auto; line-height: 1.7; }
         .av-mini-empty { font-size: 12px; color: #64748b; padding: 10px 0; }
+        .av-persona-card { padding: 20px 22px; border-radius: 14px; margin-bottom: 18px; background-image: linear-gradient(135deg, rgba(56, 189, 248, .1), rgba(167, 139, 250, .07)); background-color: rgba(148, 163, 184, .06); border: 1px solid rgba(56, 189, 248, .24); }
+        .av-persona-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid rgba(148, 163, 184, .16); }
+        .av-persona-title-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .av-persona-kicker { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #7dd3fc; }
+        .av-persona-archetype { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.25; color: #f1f5f9; }
+        .av-persona-scope { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; white-space: nowrap; color: #94a3b8; background: rgba(148, 163, 184, .12); border: 1px solid rgba(148, 163, 184, .2); }
+        .av-persona-body { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; gap: 20px; }
+        .av-persona-narrative-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+        .av-persona-narrative { margin: 0; font-size: 13px; line-height: 1.75; color: #cbd5e1; }
+        .av-persona-tags-wrap { display: flex; flex-direction: column; gap: 6px; }
+        .av-persona-tags-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #64748b; }
+        .av-persona-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+        .av-persona-tag { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; color: #7dd3fc; background: rgba(56, 189, 248, .1); border: 1px solid rgba(56, 189, 248, .28); }
+        .av-persona-traits { display: flex; flex-direction: column; gap: 8px; }
+        .av-trait-card { display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; border-radius: 10px; background: rgba(148, 163, 184, .08); border: 1px solid rgba(148, 163, 184, .14); }
+        .av-trait-label { font-size: 11px; font-weight: 600; color: #64748b; }
+        .av-trait-val { font-size: 13px; font-weight: 600; line-height: 1.3; color: #f1f5f9; }
+        .av-trait-sub { font-size: 11px; line-height: 1.4; color: #94a3b8; }
+        .av-records-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+        .av-records-title-group { display: flex; flex-direction: column; gap: 3px; }
+        .av-records-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; color: #e2e8f0; }
+        .av-records-title .av-svg { color: #38bdf8; }
+        .av-records-subtitle { margin: 0; font-size: 11px; color: #64748b; }
+        .av-records-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+        .av-search-box { position: relative; display: inline-flex; align-items: center; height: 32px; }
+        .av-search-input { box-sizing: border-box; width: 240px; height: 32px; padding: 0 28px 0 10px; border-radius: 8px; font-family: inherit; font-size: 12px; color: #e2e8f0; background: rgba(15, 23, 42, .75); border: 1px solid rgba(148, 163, 184, .28); outline: none; }
+        .av-search-input::placeholder { color: #64748b; }
+        .av-search-input:focus { border-color: rgba(56, 189, 248, .7); box-shadow: 0 0 0 1px rgba(56, 189, 248, .5); }
+        .av-search-input::-webkit-search-cancel-button { display: none; }
+        .av-search-clear { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #94a3b8; cursor: pointer; }
+        .av-search-clear:hover { background: rgba(148, 163, 184, .18); color: #e2e8f0; }
+        .av-search-clear svg { width: 12px; height: 12px; }
+        .av-records-count { font-size: 12px; color: #94a3b8; }
+        .av-records-list { display: flex; flex-direction: column; }
+        .av-record-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 150px 96px 72px; align-items: center; gap: 12px; padding: 10px 8px; border-top: 1px solid rgba(148, 163, 184, .1); font-size: 12px; }
+        .av-record-row:first-child { border-top: 0; }
+        .av-record-row:hover { background: rgba(148, 163, 184, .05); }
+        .av-record-code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #7dd3fc; text-decoration: none; }
+        .av-record-code:hover { text-decoration: underline; }
+        .av-record-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .av-record-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e2e8f0; }
+        .av-record-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+        .av-record-tag { padding: 1px 7px; border-radius: 999px; font-size: 10px; color: #94a3b8; background: rgba(148, 163, 184, .12); border: 1px solid rgba(148, 163, 184, .16); }
+        .av-record-progress { display: flex; flex-direction: column; gap: 5px; }
+        .av-record-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+        .av-record-progress-left { display: inline-flex; align-items: center; gap: 6px; }
+        .av-record-badge { padding: 1px 6px; border-radius: 999px; font-size: 10px; color: #6ee7b7; background: rgba(16, 185, 129, .16); border: 1px solid rgba(16, 185, 129, .32); }
+        .av-record-date { font-size: 11px; color: #64748b; }
+        .av-record-actions { display: flex; justify-content: flex-end; gap: 6px; }
+        .av-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .22); background: rgba(148, 163, 184, .1); color: #cbd5e1; cursor: pointer; text-decoration: none; }
+        .av-icon-btn svg { width: 14px; height: 14px; }
+        .av-icon-btn:hover { background: rgba(148, 163, 184, .2); color: #fff; }
+        .av-icon-btn.is-danger { border-color: rgba(248, 113, 113, .32); background: rgba(248, 113, 113, .12); color: #fca5a5; }
+        .av-icon-btn.is-danger:hover { background: rgba(248, 113, 113, .24); color: #fee2e2; }
+        .av-records-empty { padding: 34px 16px; text-align: center; font-size: 12px; color: #64748b; }
+        .av-records-more { display: flex; justify-content: center; padding-top: 14px; }
+        @media (max-width: 720px) {
+            .av-persona-card { padding: 16px; }
+            .av-persona-head { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .av-persona-archetype { font-size: 18px; }
+            .av-persona-body { grid-template-columns: 1fr; gap: 16px; }
+            .av-records-controls { width: 100%; }
+            .av-search-box { width: 100%; }
+            .av-search-input { width: 100%; }
+            .av-record-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+            .av-record-code { order: 1; }
+            .av-record-main { order: 2; flex: 1 1 100%; }
+            .av-record-date { order: 3; margin-left: auto; }
+            .av-record-actions { order: 4; flex: 0 0 auto; }
+            .av-record-progress { order: 5; flex: 1 1 100%; }
+        }
     `);
     const WATCHED_KEY = 'watchedList';
     const MAX_WATCHED = 5000;
@@ -4450,6 +4807,7 @@
             list = [];
         }
         state.analyticsRecords = Array.isArray(list) ? list : [];
+        if (repairAnalyticsTitles(state.analyticsRecords)) persistAnalyticsRecords(true);
         return state.analyticsRecords;
     }
     function saveAnalyticsRecords() {
@@ -4470,7 +4828,33 @@
         }
         saveAnalyticsRecords();
     }
-    const META_SKIP_SELECTOR = 'nav, header, footer, .app-nav, .navbar, .site-header, .site-nav, .dropdown-menu, .pagination, .breadcrumb, .modal, .custom-ui-layer, .custom-control-panel, .av-analytics-page';
+    const META_SKIP_SELECTOR = 'nav, header, footer, .app-nav, .navbar, .site-header, .site-nav, .dropdown-menu, .pagination, .breadcrumb, .modal, .custom-ui-layer, .custom-control-panel, .av-analytics-page, .av-info-section, .av-hub-tabs, .av-stills-grid, .av-review-list, .av-list-grid, #comments, .comments, .comment-list, .comment, .reply-area';
+    const META_TITLE_NOISE = /(?:sukebei|javbus|javdb|javlibrary|avmoo|avsox|kjav|jav321|dmm\.co\.jp|missav|jable|sextb|netflav|supjav|njav|javgg|javtiful|hsex|18av|thisav)/i;
+    const META_TITLE_RATING = /^[★☆\s]*\d{1,2}(?:[.,]\d+)?(?:\s*(?:\/\s*10|分|點|点|星))?$/;
+    const META_TITLE_LABELS = /^(?:編輯留言|编辑留言|留言|留言板|评论|評論|发表评论|發表評論|相关影片|相關影片|推荐影片|推薦影片|猜你喜欢|猜你喜歡|热门|熱門|标签|標籤|演员|演員|女优|女優|简介|簡介|影片信息|影片資訊|基本資料|基本信息|下载|下載|收藏|分享|举报|檢舉|报错|報錯|更多|更多影片|播放列表|片单|片單|排行榜|排行|分类|分類|首页|首頁|搜索|搜尋|登录|登錄|注册|註冊|观看记录|觀看記錄|历史记录|歷史記錄|上传|上傳|預覽|预览)$/;
+    function metaCleanTitle(value) {
+        let text = String(value || '').replace(/\s+/g, ' ').trim();
+        if (!text) return '';
+        const noiseAt = text.search(META_TITLE_NOISE);
+        if (noiseAt >= 0) text = text.slice(0, noiseAt).replace(/[\s|丨\-–—·•,，、/:：]+$/, '').trim();
+        if (text.length < 2 || text.length > 160) return '';
+        if (META_TITLE_LABELS.test(text)) return '';
+        if (META_TITLE_RATING.test(text)) return '';
+        return text;
+    }
+    function repairAnalyticsTitles(list) {
+        let changed = false;
+        for (const record of list) {
+            if (!record || typeof record !== 'object') continue;
+            const current = typeof record.title === 'string' ? record.title.replace(/\s+/g, ' ').trim() : '';
+            if (!current) continue;
+            const cleaned = metaCleanTitle(current);
+            if (cleaned === record.title) continue;
+            record.title = cleaned && cleaned !== record.code ? cleaned : '';
+            changed = true;
+        }
+        return changed;
+    }
     const META_ACTRESS_SELECTOR = 'a[href*="/actresses/"], a[href*="/actress/"], a[href*="/models/"], a[href*="/model/"], a[href*="/actors/"], a[href*="/stars/"], .models [data-original-title], .placeholder[data-original-title]';
     const META_GENRE_SELECTOR = 'a[href*="/genres/"], a[href*="/genre/"], a[href*="/tags/"], a[href*="/categories/"], a[href*="/category/"], a[href*="/themes/"]';
     const META_MAKER_SELECTOR = 'a[href*="/makers/"], a[href*="/maker/"], a[href*="/labels/"], a[href*="/label/"], a[href*="/studios/"], a[href*="/studio/"]';
@@ -4531,16 +4915,58 @@
         if (alt) return alt;
         return '';
     }
-    function metaHeading() {
-        const selectors = ['.video-info .info-header h4', '.video-info h4', '.video-detail .info-header h4', '.video-title', 'h1.text-base', 'h1.text-lg', '.video-detail h1', 'h1', 'h4'];
-        for (const selector of selectors) {
-            for (const element of document.querySelectorAll(selector)) {
-                if (metaSkipped(element)) continue;
-                const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
-                if (text.length >= 2 && text.length <= 200) return text;
+    function metaTitleFallbacks() {
+        const found = [];
+        for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]', 'meta[name="og:title"]']) {
+            for (const node of document.querySelectorAll(selector)) {
+                const value = metaCleanTitle(metaAttr(node, 'content'));
+                if (value) {
+                    found.push(value);
+                    break;
+                }
             }
         }
-        return '';
+        const docTitle = metaCleanTitle(typeof document.title === 'string' ? document.title : '');
+        if (docTitle) found.push(docTitle);
+        return found;
+    }
+    const META_INJECTED_SELECTOR = '.info-rating-badge, .social-badges, .av-record-tag, .av-persona-tag';
+    function metaHeadingText(element) {
+        if (typeof element.cloneNode === 'function') {
+            const clone = element.cloneNode(true);
+            if (clone && typeof clone.querySelectorAll === 'function') {
+                for (const injected of clone.querySelectorAll(META_INJECTED_SELECTOR)) {
+                    if (injected && typeof injected.remove === 'function') injected.remove();
+                }
+                return metaCleanTitle(clone.textContent);
+            }
+        }
+        let text = element.textContent || '';
+        if (typeof element.querySelectorAll === 'function') {
+            for (const injected of element.querySelectorAll(META_INJECTED_SELECTOR)) {
+                const inner = String(injected.textContent || '').replace(/\s+/g, ' ').trim();
+                if (inner) text = text.split(inner).join(' ');
+            }
+        }
+        return metaCleanTitle(text);
+    }
+    function metaHeading() {
+        const scoped = ['.video-info .info-header h4', '.video-info h4', '.video-detail .info-header h4', '.video-title', 'h1.text-base', 'h1.text-lg', '.video-detail h1'];
+        const loose = ['h1', 'h4'];
+        const pick = selectors => {
+            for (const selector of selectors) {
+                for (const element of document.querySelectorAll(selector)) {
+                    if (metaSkipped(element)) continue;
+                    const text = metaHeadingText(element);
+                    if (text) return text;
+                }
+            }
+            return '';
+        };
+        const scopedText = pick(scoped);
+        if (scopedText) return scopedText;
+        for (const fallback of metaTitleFallbacks()) return fallback;
+        return pick(loose);
     }
     let pageMetaCache = { code: '', gen: -1, meta: null };
     function extractPageMetadata() {
@@ -4624,6 +5050,7 @@
         state.analyticsSession = {
             code,
             title: meta.title || code,
+            url: location.origin + location.pathname,
             duration: meta.duration,
             actresses: meta.actresses,
             genres: meta.genres,
@@ -4714,10 +5141,12 @@
             if (session.actresses.length) existing.actresses = session.actresses;
             if (session.genres.length) existing.genres = session.genres;
             if (session.maker) existing.maker = session.maker;
+            if (session.url) existing.url = session.url;
         } else {
             list.unshift({
                 code: session.code,
                 title: session.title,
+                url: session.url || '',
                 duration: session.duration,
                 watchedSeconds: session.watchedSeconds,
                 watchedAt: now,
@@ -4759,7 +5188,8 @@
             bucket15to30: 0,
             bucketOver30: 0,
             dayMap: new Map(),
-            daySecondsMap: new Map()
+            daySecondsMap: new Map(),
+            rangeRecords: []
         };
         for (const record of records) {
             const seconds = record.watchedSeconds || 0;
@@ -4769,6 +5199,7 @@
             result.dayMap.set(dayKey, (result.dayMap.get(dayKey) || 0) + 1);
             result.daySecondsMap.set(dayKey, (result.daySecondsMap.get(dayKey) || 0) + seconds);
             if (floor && (record.watchedAt || 0) < floor) continue;
+            result.rangeRecords.push(record);
             result.totalCount++;
             result.totalWatchedSeconds += seconds;
             if ((record.maxProgress || 0) >= 0.75) result.completedCount++;
@@ -4862,8 +5293,193 @@
             topActresses,
             topGenres,
             topMakers,
-            habitBuckets
+            habitBuckets,
+            records: result.rangeRecords.slice().sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0))
         };
+    }
+    function recordWatchUrl(record) {
+        if (record && record.url) return record.url;
+        const code = encodeURIComponent(record && record.code ? record.code : '');
+        return IS_JABLE ? `https://jable.tv/videos/${code}/` : `https://missav.ai/${code}`;
+    }
+    function recordProgress(record) {
+        const watched = Math.max(0, Number(record.watchedSeconds) || 0);
+        const total = Math.max(0, Number(record.duration) || 0);
+        const ratio = total > 0 ? watched / total : 0;
+        const percent = Math.max(0, Math.min(100, Math.round(Math.max(Number(record.maxProgress) || 0, ratio) * 100)));
+        return { percent, isCompleted: percent >= 80 || watched >= 1200 || (total > 0 && ratio >= .75), timeText: total > 0 ? `${formatDuration(watched)} / ${formatDuration(total)}` : formatDuration(watched) };
+    }
+    function formatRecordDate(timestamp) {
+        const at = Number(timestamp) || 0;
+        if (!at) return '未知时间';
+        const diff = Date.now() - at;
+        if (diff < 60000) return '刚刚';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
+        if (diff < 604800000) return `${Math.floor(diff / 86400000)} 天前`;
+        const date = new Date(at);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+    const TITLE_SYNC_LIMIT = 8;
+    const TITLE_SYNC_FAIL_RETRY = 1800000;
+    let titleSyncBusy = false;
+    let titleRefillQueued = false;
+    function analyticsFetchUrl(record) {
+        if (record && record.url) return record.url;
+        const raw = record && record.code ? String(record.code).trim().toLowerCase() : '';
+        if (!raw) return '';
+        const code = encodeURIComponent(raw);
+        return IS_JABLE ? `https://jable.tv/videos/${code}/` : `https://missav.ai/${code}`;
+    }
+    function decodeHtmlEntities(value) {
+        return String(value || '').replace(/&(#x?[0-9a-f]+|amp|lt|gt|quot|apos|nbsp);/gi, (match, code) => {
+            const key = String(code).toLowerCase();
+            if (key === 'amp') return '&';
+            if (key === 'lt') return '<';
+            if (key === 'gt') return '>';
+            if (key === 'quot') return '"';
+            if (key === 'apos' || key === '#39') return "'";
+            if (key === 'nbsp') return ' ';
+            const hex = key.startsWith('#x');
+            const point = parseInt(hex ? key.slice(2) : key.slice(1), hex ? 16 : 10);
+            return Number.isFinite(point) && point > 0 ? String.fromCodePoint(point) : match;
+        });
+    }
+    function titleFromHtml(html) {
+        const head = String(html || '').slice(0, 40000);
+        const meta = head.match(/<meta[^>]+(?:property|name)\s*=\s*["'](?:og:title|twitter:title)["'][^>]*>/i);
+        if (meta) {
+            const content = meta[0].match(/content\s*=\s*["']([^"']*)["']/i);
+            const value = metaCleanTitle(decodeHtmlEntities(content ? content[1] : ''));
+            if (value) return value;
+        }
+        const docTitle = head.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        return metaCleanTitle(decodeHtmlEntities(docTitle ? docTitle[1] : ''));
+    }
+    function titleSyncPending(record) {
+        if (!record || !record.code) return false;
+        const title = typeof record.title === 'string' ? record.title.trim() : '';
+        if (title && title !== record.code) return false;
+        const failedAt = Number(record.titleSyncFailedAt) || 0;
+        return !failedAt || Date.now() - failedAt > TITLE_SYNC_FAIL_RETRY;
+    }
+    async function javDbTitle(code) {
+        const raw = String(code || '').trim();
+        const cleanId = raw.replace(/[-_]/g, '').toLowerCase();
+        if (!cleanId) return '';
+        const query = new URLSearchParams({
+            q: raw, page: '1', type: 'movie', limit: '5',
+            movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
+        });
+        let body;
+        try {
+            body = JSON.parse(await jdApiFetch(`${JDFORREPAM_API}/api/v2/search?${query}`));
+        } catch (_) {
+            return '';
+        }
+        const movies = Array.isArray(body?.data?.movies) ? body.data.movies : [];
+        const movie = movies.find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === cleanId);
+        if (!movie) return '';
+        return metaCleanTitle(movie.title || movie.origin_title || movie.name || movie.translated_title || '');
+    }
+    async function refillAnalyticsTitles() {
+        if (titleSyncBusy) return;
+        const targets = analyticsRecords().filter(titleSyncPending).slice(0, TITLE_SYNC_LIMIT);
+        if (!targets.length) return;
+        titleSyncBusy = true;
+        let filled = 0;
+        try {
+            for (const record of targets) {
+                let title = await javDbTitle(record.code);
+                if (!title) {
+                    const url = analyticsFetchUrl(record);
+                    if (!url) continue;
+                    title = titleFromHtml(await fetchHtml(url, { skipProxy: true, timeout: 8000 }));
+                }
+                if (title && title !== record.code) {
+                    record.title = title;
+                    record.titleSyncedAt = Date.now();
+                    delete record.titleSyncFailedAt;
+                    filled++;
+                } else {
+                    record.titleSyncFailedAt = Date.now();
+                }
+                await new Promise(resolve => setTimeout(resolve, 350));
+            }
+        } catch (error) {
+            console.warn('[av-helper] 标题补全失败:', error && error.message ? error.message : error);
+        } finally {
+            titleSyncBusy = false;
+        }
+        saveAnalyticsRecords();
+        if (filled) {
+            renderAnalytics();
+            log(`📝 已补全 ${filled} 部影片标题`);
+        }
+    }
+    function scheduleTitleRefill() {
+        if (titleRefillQueued || titleSyncBusy) return;
+        if (!analyticsRecords().some(titleSyncPending)) return;
+        titleRefillQueued = true;
+        setTimeout(() => {
+            titleRefillQueued = false;
+            refillAnalyticsTitles();
+        }, 1500);
+    }
+    const CREDITS_SYNC_LIMIT = 8;
+    const CREDITS_SYNC_FAIL_RETRY = 1800000;
+    let creditsSyncBusy = false;
+    let creditsRefillQueued = false;
+    function creditsSyncPending(record) {
+        if (!IS_JABLE || !record || !record.code) return false;
+        if (String(record.maker || '').trim()) return false;
+        const failedAt = Number(record.creditsSyncFailedAt) || 0;
+        return !failedAt || Date.now() - failedAt > CREDITS_SYNC_FAIL_RETRY;
+    }
+    async function refillAnalyticsCredits() {
+        if (creditsSyncBusy) return;
+        const targets = analyticsRecords().filter(creditsSyncPending).slice(0, CREDITS_SYNC_LIMIT);
+        if (!targets.length) return;
+        creditsSyncBusy = true;
+        let filled = 0;
+        try {
+            for (const record of targets) {
+                const credits = await javDbCreditsFor(record.code);
+                const maker = credits && credits.maker ? String(credits.maker).trim() : '';
+                if (maker) {
+                    record.maker = maker;
+                    record.creditsSyncedAt = Date.now();
+                    delete record.creditsSyncFailedAt;
+                    filled++;
+                } else {
+                    record.creditsSyncFailedAt = Date.now();
+                }
+                await new Promise(resolve => setTimeout(resolve, 350));
+            }
+        } catch (error) {
+            console.warn('[av-helper] 片商补全失败:', error && error.message ? error.message : error);
+        } finally {
+            creditsSyncBusy = false;
+        }
+        saveAnalyticsRecords();
+        if (filled) {
+            renderAnalytics();
+            log(`🏷️ 已补全 ${filled} 部影片片商`);
+        }
+    }
+    function scheduleCreditsRefill() {
+        if (creditsRefillQueued || creditsSyncBusy) return;
+        if (!analyticsRecords().some(creditsSyncPending)) return;
+        creditsRefillQueued = true;
+        setTimeout(() => {
+            creditsRefillQueued = false;
+            refillAnalyticsCredits();
+        }, 1800);
+    }
+    function deleteAnalyticsRecord(code) {
+        const key = String(code || '').toUpperCase();
+        state.analyticsRecords = analyticsRecords().filter(item => String(item && item.code ? item.code : '').toUpperCase() !== key);
+        saveAnalyticsRecords();
     }
     function iconSvg(paths, viewBox = '0 0 24 24') {
         const span = document.createElement('span');
@@ -4921,6 +5537,355 @@
         }
         return wrap;
     }
+    function computeUserPersona(records, summary) {
+        const list = Array.isArray(records) ? records : [];
+        const totalCount = list.length;
+        if (!totalCount) {
+            return {
+                archetype: '初登探索者',
+                summary: '暂无足够的观影数据，开始观看影片后将自动生成您的专属画像与偏好洞察。',
+                timeSlotTrait: { label: '尚未形成', percentage: 0, description: '记录累积中' },
+                pacingTrait: { label: '探索中', avgDurationText: '0 分钟', completionBadge: '0%' },
+                tasteLoyalty: { label: '待发掘', actressDiversityText: '未确定', topMakerText: '多元厂牌' },
+                signatureTags: []
+            };
+        }
+        const slotCounts = [0, 0, 0, 0];
+        for (const record of list) {
+            const hour = new Date(Number(record.watchedAt) || 0).getHours();
+            slotCounts[hour < 6 ? 0 : hour < 12 ? 1 : hour < 18 ? 2 : 3]++;
+        }
+        const timeSlots = [
+            { type: 'night', name: '深夜漫游', label: '深夜时段 (00:00 - 06:00)', desc: '习惯在静谧深宵专属探索', count: slotCounts[0] },
+            { type: 'evening', name: '晚间黄金档', label: '晚间黄金档 (18:00 - 24:00)', desc: '多在晚间闲暇时段静心品鉴', count: slotCounts[3] },
+            { type: 'afternoon', name: '午后休憩', label: '午后闲暇 (12:00 - 18:00)', desc: '倾向于在白昼空隙或午后放松', count: slotCounts[2] },
+            { type: 'morning', name: '晨光早起', label: '晨间时段 (06:00 - 12:00)', desc: '偏好在清晨或上午开启观影', count: slotCounts[1] }
+        ];
+        timeSlots.sort((a, b) => b.count - a.count);
+        const dominantSlot = timeSlots[0];
+        const slotPercent = Math.round(dominantSlot.count / totalCount * 100);
+        const avgMinutes = summary.avgWatchedMinutes;
+        const completionRate = summary.completionRate;
+        let pacingType = 'balanced';
+        let pacingLabel = '精选聚焦型';
+        if (avgMinutes >= 25 || completionRate >= 50) {
+            pacingType = 'immersive';
+            pacingLabel = '深度沉浸型';
+        } else if (avgMinutes < 8 && summary.habitBuckets[0] && summary.habitBuckets[0].percentage > 40) {
+            pacingType = 'speed';
+            pacingLabel = '敏锐速览型';
+        }
+        const topActress = summary.topActresses[0];
+        const topMaker = summary.topMakers[0];
+        let loyaltyType = 'free';
+        let loyaltyLabel = '自由漫游';
+        let actressDiversityText = '博览群芳';
+        if (topActress && (topActress.count >= 3 || topActress.count / totalCount >= .3)) {
+            loyaltyType = 'devoted';
+            loyaltyLabel = `专情长情 (${topActress.name})`;
+            actressDiversityText = `深宠 ${topActress.name}`;
+        } else if (summary.topActresses.length >= 4) {
+            loyaltyType = 'diverse';
+            loyaltyLabel = '广泛涉猎';
+            actressDiversityText = '涉猎多元女优';
+        } else if (topActress) {
+            loyaltyType = 'focused';
+            loyaltyLabel = `聚焦偏好 (${topActress.name})`;
+            actressDiversityText = `偏爱 ${topActress.name}`;
+        }
+        const topMakerText = topMaker ? `${topMaker.name} 阵营` : '多元厂牌';
+        const signatureTags = summary.topGenres.slice(0, 4).map(item => item.name).filter(Boolean);
+        let archetype = '专注品味鉴赏家';
+        if (pacingType === 'immersive') {
+            if (dominantSlot.type === 'night') archetype = '暗夜沉浸品鉴家';
+            else if (dominantSlot.type === 'evening') archetype = '晚间深度鉴赏者';
+            else archetype = '全景剧情探索家';
+        } else if (pacingType === 'speed') {
+            if (dominantSlot.type === 'night') archetype = '深宵敏锐搜寻者';
+            else if (dominantSlot.type === 'evening') archetype = '黄金档快节奏先锋';
+            else archetype = '敏锐速览探索者';
+        } else if (loyaltyType === 'devoted') {
+            archetype = '专情专注鉴赏者';
+        } else if (dominantSlot.type === 'night') {
+            archetype = '夜阑精准品味家';
+        } else if (dominantSlot.type === 'evening') {
+            archetype = '晚风闲适鉴赏家';
+        } else {
+            archetype = '敏慧平衡探索者';
+        }
+        const genreStr = signatureTags.length ? signatureTags.map(name => `「${name}」`).join('、') : '';
+        const makerStr = topMaker ? `（常驻 ${topMaker.name}）` : '';
+        const actressStr = topActress ? `，特别钟情于 ${topActress.name} 的作品` : '';
+        let summaryText = `观影集中在${dominantSlot.name}（占比 ${slotPercent}%），节奏呈现${pacingLabel}（平均单部停留 ${avgMinutes} 分钟，完播率 ${completionRate}%）。`;
+        summaryText += genreStr
+            ? `核心题材基因聚焦于 ${genreStr}${makerStr}${actressStr}，展现出鲜明且专注的个人品味取向。`
+            : '整体鉴赏习惯稳定，展现出专注的个人品味取向。';
+        return {
+            archetype,
+            summary: summaryText,
+            timeSlotTrait: { label: dominantSlot.label, percentage: slotPercent, description: `${dominantSlot.desc} (占比 ${slotPercent}%)` },
+            pacingTrait: { label: pacingLabel, avgDurationText: `单部均长 ${avgMinutes} 分钟`, completionBadge: `${completionRate}%` },
+            tasteLoyalty: { label: loyaltyLabel, actressDiversityText, topMakerText },
+            signatureTags
+        };
+    }
+    function buildPersonaCard(persona, range) {
+        const section = document.createElement('section');
+        section.className = 'av-persona-card';
+        const head = document.createElement('div');
+        head.className = 'av-persona-head';
+        const titleGroup = document.createElement('div');
+        titleGroup.className = 'av-persona-title-group';
+        const kicker = document.createElement('div');
+        kicker.className = 'av-persona-kicker';
+        kicker.textContent = '用户画像 · 鉴赏档案';
+        const archetype = document.createElement('h2');
+        archetype.className = 'av-persona-archetype';
+        archetype.textContent = persona.archetype;
+        titleGroup.append(kicker, archetype);
+        const scope = document.createElement('span');
+        scope.className = 'av-persona-scope';
+        scope.textContent = range === 'all' ? '全历史画像' : range === '30d' ? '近 30 天画像' : '近 7 天画像';
+        head.append(titleGroup, scope);
+        const body = document.createElement('div');
+        body.className = 'av-persona-body';
+        const narrativeCol = document.createElement('div');
+        narrativeCol.className = 'av-persona-narrative-col';
+        const narrative = document.createElement('p');
+        narrative.className = 'av-persona-narrative';
+        narrative.textContent = persona.summary;
+        narrativeCol.appendChild(narrative);
+        if (persona.signatureTags.length) {
+            const tagWrap = document.createElement('div');
+            tagWrap.className = 'av-persona-tags-wrap';
+            const tagLabel = document.createElement('span');
+            tagLabel.className = 'av-persona-tags-label';
+            tagLabel.textContent = '核心题材基因';
+            const tags = document.createElement('div');
+            tags.className = 'av-persona-tags';
+            for (const name of persona.signatureTags) {
+                const chip = document.createElement('span');
+                chip.className = 'av-persona-tag';
+                chip.textContent = `#${name}`;
+                tags.appendChild(chip);
+            }
+            tagWrap.append(tagLabel, tags);
+            narrativeCol.appendChild(tagWrap);
+        }
+        const traits = document.createElement('div');
+        traits.className = 'av-persona-traits';
+        const traitRows = [
+            ['活跃时段型态', persona.timeSlotTrait.label, persona.timeSlotTrait.description],
+            ['观影节奏偏好', persona.pacingTrait.label, `${persona.pacingTrait.avgDurationText} · 完播率 ${persona.pacingTrait.completionBadge}`],
+            ['专属偏好专注度', persona.tasteLoyalty.label, `${persona.tasteLoyalty.actressDiversityText} · ${persona.tasteLoyalty.topMakerText}`]
+        ];
+        for (const [label, value, sub] of traitRows) {
+            const card = document.createElement('div');
+            card.className = 'av-trait-card';
+            const labelEl = document.createElement('span');
+            labelEl.className = 'av-trait-label';
+            labelEl.textContent = label;
+            const valueEl = document.createElement('span');
+            valueEl.className = 'av-trait-val';
+            valueEl.textContent = value;
+            const subEl = document.createElement('span');
+            subEl.className = 'av-trait-sub';
+            subEl.textContent = sub;
+            card.append(labelEl, valueEl, subEl);
+            traits.appendChild(card);
+        }
+        body.append(narrativeCol, traits);
+        section.append(head, body);
+        return section;
+    }
+    function recordMatches(record, query) {
+        for (const value of [record.code, record.title, record.maker]) {
+            if (String(value || '').toLowerCase().includes(query)) return true;
+        }
+        for (const value of record.actresses || []) {
+            if (String(value).toLowerCase().includes(query)) return true;
+        }
+        for (const value of record.genres || []) {
+            if (String(value).toLowerCase().includes(query)) return true;
+        }
+        return false;
+    }
+    function buildRecordRow(record) {
+        const progress = recordProgress(record);
+        const row = document.createElement('div');
+        row.className = 'av-record-row';
+        const codeLink = document.createElement('a');
+        codeLink.className = 'av-record-code';
+        codeLink.href = recordWatchUrl(record);
+        codeLink.target = '_blank';
+        codeLink.rel = 'noopener noreferrer';
+        codeLink.title = `${record.code} · 在新标签页观看`;
+        codeLink.textContent = record.code;
+        const main = document.createElement('div');
+        main.className = 'av-record-main';
+        const title = document.createElement('div');
+        title.className = 'av-record-title';
+        title.textContent = record.title || record.code;
+        title.title = title.textContent;
+        const tags = document.createElement('div');
+        tags.className = 'av-record-tags';
+        const tagTexts = [];
+        if (record.maker) tagTexts.push(record.maker);
+        for (const name of (record.actresses || []).slice(0, 3)) tagTexts.push(name);
+        for (const name of (record.genres || []).slice(0, 3)) tagTexts.push(name);
+        for (const text of tagTexts) {
+            const tag = document.createElement('span');
+            tag.className = 'av-record-tag';
+            tag.textContent = text;
+            tags.appendChild(tag);
+        }
+        main.append(title, tags);
+        const prog = document.createElement('div');
+        prog.className = 'av-record-progress';
+        const progHead = document.createElement('div');
+        progHead.className = 'av-record-progress-head';
+        const progLeft = document.createElement('span');
+        progLeft.className = 'av-record-progress-left';
+        const pct = document.createElement('span');
+        pct.textContent = `${progress.percent}%`;
+        progLeft.appendChild(pct);
+        if (progress.isCompleted) {
+            const badge = document.createElement('span');
+            badge.className = 'av-record-badge';
+            badge.textContent = '完播';
+            progLeft.appendChild(badge);
+        }
+        const time = document.createElement('span');
+        time.textContent = progress.timeText;
+        progHead.append(progLeft, time);
+        const track = document.createElement('div');
+        track.className = 'av-progress-bar';
+        const fill = document.createElement('div');
+        fill.style.width = `${progress.percent}%`;
+        track.appendChild(fill);
+        prog.append(progHead, track);
+        const date = document.createElement('span');
+        date.className = 'av-record-date';
+        date.title = new Date(Number(record.watchedAt) || 0).toLocaleString();
+        date.textContent = formatRecordDate(record.watchedAt);
+        const actions = document.createElement('div');
+        actions.className = 'av-record-actions';
+        const play = document.createElement('a');
+        play.className = 'av-icon-btn';
+        play.href = recordWatchUrl(record);
+        play.target = '_blank';
+        play.rel = 'noopener noreferrer';
+        play.title = '在新标签页观看';
+        play.setAttribute('aria-label', '播放');
+        play.appendChild(iconSvg('<polygon points="6 3 20 12 6 21 6 3"/>'));
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'av-icon-btn is-danger';
+        remove.title = '移除此记录';
+        remove.setAttribute('aria-label', '移除此记录');
+        remove.appendChild(iconSvg('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'));
+        remove.addEventListener('click', () => {
+            if (!confirm(`确定要移除番号 ${record.code} 的观看记录吗？`)) return;
+            deleteAnalyticsRecord(record.code);
+            renderAnalytics();
+            log(`🗑 已移除观影记录 ${record.code}`);
+        });
+        actions.append(play, remove);
+        row.append(codeLink, main, prog, date, actions);
+        return row;
+    }
+    function buildRecordsSection(data, range) {
+        const records = data.records || [];
+        const section = document.createElement('section');
+        section.className = 'av-cockpit-card';
+        const head = document.createElement('div');
+        head.className = 'av-records-head';
+        const titleGroup = document.createElement('div');
+        titleGroup.className = 'av-records-title-group';
+        const title = document.createElement('h2');
+        title.className = 'av-records-title';
+        title.appendChild(iconSvg('<path d="M4 19.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13.5"/><path d="M8 9h8M8 13h5"/>'));
+        const titleText = document.createElement('span');
+        titleText.textContent = '观影记录明细';
+        title.appendChild(titleText);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'av-records-subtitle';
+        subtitle.textContent = '本地记录的播放历史与时长清单';
+        titleGroup.append(title, subtitle);
+        const controls = document.createElement('div');
+        controls.className = 'av-records-controls';
+        const box = document.createElement('div');
+        box.className = 'av-search-box';
+        const input = document.createElement('input');
+        input.type = 'search';
+        input.className = 'av-search-input';
+        input.placeholder = '搜索番号 / 标题 / 女优 / 题材';
+        input.setAttribute('aria-label', '搜索观影记录');
+        input.value = state.analyticsQuery || '';
+        const clearSearch = document.createElement('button');
+        clearSearch.type = 'button';
+        clearSearch.className = 'av-search-clear';
+        clearSearch.title = '清空搜索';
+        clearSearch.setAttribute('aria-label', '清空搜索');
+        clearSearch.appendChild(iconSvg('<path d="M18 6 6 18M6 6l12 12"/>'));
+        clearSearch.hidden = !input.value;
+        box.append(input, clearSearch);
+        const count = document.createElement('span');
+        count.className = 'av-records-count';
+        controls.append(box, count);
+        head.append(titleGroup, controls);
+        const list = document.createElement('div');
+        list.className = 'av-records-list';
+        const more = document.createElement('div');
+        more.className = 'av-records-more';
+        const limitState = { value: 25 };
+        const paint = () => {
+            const query = (state.analyticsQuery || '').trim().toLowerCase();
+            const found = query ? records.filter(record => recordMatches(record, query)) : records;
+            const shown = found.slice(0, limitState.value);
+            list.replaceChildren();
+            more.replaceChildren();
+            if (!found.length) {
+                const empty = document.createElement('div');
+                empty.className = 'av-records-empty';
+                empty.textContent = query ? `未找到匹配「${state.analyticsQuery}」的观影记录` : '本时间范围内暂无观影记录';
+                list.appendChild(empty);
+            } else {
+                for (const record of shown) list.appendChild(buildRecordRow(record));
+            }
+            count.textContent = `共 ${found.length} 部影片`;
+            const rest = found.length - shown.length;
+            if (rest > 0) {
+                const moreBtn = document.createElement('button');
+                moreBtn.type = 'button';
+                moreBtn.className = 'av-btn';
+                moreBtn.textContent = `加载更多记录 (剩余 ${rest} 部)`;
+                moreBtn.addEventListener('click', () => {
+                    limitState.value += 25;
+                    paint();
+                });
+                more.appendChild(moreBtn);
+            }
+        };
+        input.addEventListener('input', () => {
+            state.analyticsQuery = input.value;
+            clearSearch.hidden = !input.value;
+            limitState.value = 25;
+            paint();
+        });
+        clearSearch.addEventListener('click', () => {
+            state.analyticsQuery = '';
+            input.value = '';
+            clearSearch.hidden = true;
+            limitState.value = 25;
+            paint();
+            input.focus();
+        });
+        section.append(head, list, more);
+        section.dataset.range = range;
+        paint();
+        return section;
+    }
     function buildAnalyticsBody(data, range) {
         const main = document.createElement('main');
         main.className = 'av-cockpit-main';
@@ -4947,6 +5912,7 @@
             buildKpi('深度完播率', data.completionRate, '%', '播放进度达 75% 以上', '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="m9 15 2 2 4-4"/>', 'pink')
         );
         main.appendChild(kpiGrid);
+        main.appendChild(buildPersonaCard(computeUserPersona(data.records || [], data), range));
         const heat = document.createElement('section');
         heat.className = 'av-cockpit-card';
         const heatSubtitle = range === 'all'
@@ -5114,7 +6080,7 @@
         if (!data.topMakers.length) {
             const empty = document.createElement('div');
             empty.className = 'av-mini-empty';
-            empty.textContent = IS_JABLE ? 'Jable 未提供片商信息' : '暂无片商信息';
+            empty.textContent = IS_JABLE ? '暂无片商信息（已尝试从 JavDB 补全）' : '暂无片商信息';
             makerCard.appendChild(empty);
         } else {
             const chips = document.createElement('div');
@@ -5128,6 +6094,7 @@
             makerCard.appendChild(chips);
         }
         main.appendChild(makerCard);
+        main.appendChild(buildRecordsSection(data, range));
         main.dataset.range = range;
         return main;
     }
@@ -5145,14 +6112,17 @@
             tab.setAttribute('aria-selected', active ? 'true' : 'false');
             tab.tabIndex = active ? 0 : -1;
         }
+        scheduleTitleRefill();
+        scheduleCreditsRefill();
     }
     function exportAnalyticsJson() {
+        const records = analyticsRecords();
         const payload = {
             app: 'AV Helper Analytics',
             version: '1.0',
             exportedAt: new Date().toISOString(),
-            recordsCount: analyticsRecords().length,
-            records: analyticsRecords()
+            recordsCount: records.length,
+            records
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -5184,6 +6154,7 @@
     function handleClearAnalytics() {
         if (!confirm('确定要清空全部观影统计与行为数据吗？此操作无法撤销。')) return;
         clearAnalyticsData();
+        state.analyticsQuery = '';
         refreshCockpit();
         log('🗑 数据大屏记录已清空');
     }
@@ -5436,6 +6407,8 @@
             cancelHold();
             state.infoSession++;
             state.infoData = null;
+            jableCardCode = '';
+            document.querySelector('.av-jable-meta')?.remove();
             state.listMovies = null;
             state.domGen += 1;
             videoProbeEl = null;
