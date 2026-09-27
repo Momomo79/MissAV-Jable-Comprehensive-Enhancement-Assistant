@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      10.13
+// @version      10.14
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -47,6 +47,7 @@
     const QUICK_LEAVE_DELAY = 800;
     const MIN_PLAYER_WIDTH = 480;
     const MIN_PLAYER_HEIGHT = 260;
+    const QUICK_BOTTOM_OFFSET = 48;
     const PLAYER_HOST_SELECTOR = '.plyr__video-wrapper, .plyr, .video-js, .vjs-tech, #player, .player-wrapper, .player-container, .artplayer, .dplayer, .jwplayer';
     const PREVIEW_HOST_SELECTOR = '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .jable-carousel, .owl-carousel, .owl-stage, .owl-stage-outer, .owl-item, .horizontal-img-box, .av-info-section, .av-analytics-page, .custom-ui-layer, .custom-control-panel, .custom-quick-controls, .av-stills-grid, .av-review-list, .av-list-grid';
     const REPEAT_SEEK_INTERVAL = 120;
@@ -705,7 +706,7 @@
         .panel-status-log { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
-        .custom-quick-controls { position: absolute; left: 50%; bottom: 48px; transform: translateX(-50%) scale(var(--quick-scale, 1)); transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box; }
+        .custom-quick-controls { position: fixed; left: 0; top: 0; transform: translate(-50%, -100%) scale(var(--quick-scale, 1)); transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100vw - 16px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box; }
         .custom-quick-controls.quick-visible,
         .custom-quick-controls:hover { opacity: 1; visibility: visible; pointer-events: auto; }
         .quick-jump-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; }
@@ -1409,9 +1410,32 @@
         log('▶️ 系统初始化完成');
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
+    function positionQuickControls() {
+        const quick = state.quick;
+        if (!quick || !quick.isConnected) return false;
+        const video = state.video;
+        if (!video || !video.isConnected || isPreviewVideo(video)) return false;
+        const rect = video.getBoundingClientRect();
+        if (rect.width < MIN_PLAYER_WIDTH || rect.height < MIN_PLAYER_HEIGHT) return false;
+        quick.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
+        quick.style.top = `${Math.round(rect.bottom - QUICK_BOTTOM_OFFSET)}px`;
+        return true;
+    }
+    function quickHome() {
+        const fullscreen = document.fullscreenElement;
+        if (fullscreen && state.video && fullscreen.contains(state.video)) return fullscreen;
+        return getUiLayer();
+    }
+    function placeQuickControls() {
+        const quick = state.quick;
+        if (!quick) return;
+        const home = quickHome();
+        if (quick.parentElement !== home) home.appendChild(quick);
+    }
     function showQuickControls() {
         const quick = state.quick;
         if (!quick) return;
+        if (!positionQuickControls()) return;
         quick.classList.add('quick-visible');
         clearTimeout(state.quickHideTimer);
         state.quickHideTimer = setTimeout(() => {
@@ -1420,16 +1444,19 @@
         }, QUICK_HIDE_DELAY);
     }
     function hideQuickControls() {
-        if (!state.quick || isLoopMenuOpen()) return;
+        const quick = state.quick;
+        if (!quick || isLoopMenuOpen()) return;
+        if (quick.matches(':hover')) return;
         clearTimeout(state.quickHideTimer);
-        state.quick.classList.remove('quick-visible');
+        quick.classList.remove('quick-visible');
     }
     function fitQuickControls() {
         const quick = state.quick;
         if (!quick?.isConnected) return;
+        positionQuickControls();
         quick.classList.remove('quick-compact');
-        const host = quick.offsetParent || quick.parentElement;
-        const available = (host?.clientWidth || window.innerWidth) - 16;
+        const video = state.video;
+        const available = (video && video.isConnected ? video.getBoundingClientRect().width : window.innerWidth) - 16;
         const needed = quick.scrollWidth;
         if (needed > available) quick.classList.add('quick-compact');
         const stillTooWide = quick.scrollWidth;
@@ -1437,14 +1464,18 @@
     }
     let quickGlobalBound = false;
     let quickResizeHandler = null;
+    let quickScrollHandler = null;
     let quickFullscreenHandler = null;
-    function setupQuickAutoHide() {
-        const { container, quick } = state;
-        if (!container || container.dataset.quickAutohide === '1') return;
+    function bindQuickHost(container) {
+        if (!container || !container.dataset || container.dataset.quickAutohide === '1') return;
         container.dataset.quickAutohide = '1';
         container.addEventListener('mousemove', showQuickControls, { passive: true });
         container.addEventListener('mouseleave', hideQuickControls);
         container.addEventListener('click', showQuickControls);
+    }
+    function setupQuickAutoHide() {
+        const { container, quick } = state;
+        bindQuickHost(container);
         if (!quick) return;
         quick.addEventListener('mouseenter', () => {
             clearTimeout(state.quickHideTimer);
@@ -1458,8 +1489,15 @@
         if (!quickGlobalBound) {
             quickGlobalBound = true;
             quickResizeHandler = throttle(fitQuickControls, MUTATION_THROTTLE);
-            quickFullscreenHandler = () => setTimeout(fitQuickControls, 120);
+            quickScrollHandler = throttle(() => {
+                if (state.quick?.classList.contains('quick-visible')) positionQuickControls();
+            }, 60);
+            quickFullscreenHandler = () => setTimeout(() => {
+                placeQuickControls();
+                fitQuickControls();
+            }, 120);
             window.addEventListener('resize', quickResizeHandler, { passive: true });
+            window.addEventListener('scroll', quickScrollHandler, { passive: true, capture: true });
             document.addEventListener('fullscreenchange', quickFullscreenHandler);
         }
         setTimeout(fitQuickControls, 0);
@@ -1505,23 +1543,29 @@
         if (state.quickWatchTimer) return;
         state.quickWatchTimer = setInterval(() => {
             if (!state.bound || isAnalyticsRoute()) return;
-            if (quickControlsAlive() && state.quick.parentElement === state.container) return;
             const video = findMainVideo();
             if (!video) return;
-            const container = playerContainer(video);
-            if (!container) return;
-            bindPlayer(video, container, true);
+            if (video !== state.video || !quickControlsAlive()) {
+                const container = playerContainer(video);
+                if (!container) return;
+                bindPlayer(video, container, true);
+                return;
+            }
+            placeQuickControls();
+            positionQuickControls();
         }, 1200);
     }
     function createQuickControls() {
         const container = state.container;
         if (!container) return;
         if (container.closest(PREVIEW_HOST_SELECTOR)) return;
-        if (quickControlsAlive() && state.quick.parentElement === container) return;
-        for (const stale of document.querySelectorAll('.custom-quick-controls')) {
-            if (stale.parentElement === container) continue;
-            stale.remove();
+        if (quickControlsAlive()) {
+            bindQuickHost(container);
+            placeQuickControls();
+            positionQuickControls();
+            return;
         }
+        for (const stale of document.querySelectorAll('.custom-quick-controls')) stale.remove();
         ensurePositioned(container);
         const quick = document.createElement('div');
         quick.className = 'custom-quick-controls';
@@ -1593,7 +1637,8 @@
         loopWrapper.append(state.loopBtn, state.loopMenu);
         group.appendChild(loopWrapper);
         quick.appendChild(group);
-        container.appendChild(quick);
+        placeQuickControls();
+        positionQuickControls();
         document.addEventListener('click', event => {
             if (!loopWrapper.contains(event.target)) state.loopMenu.classList.remove('show');
         });
@@ -3168,6 +3213,9 @@
     let videoProbeAt = 0;
     const VIDEO_PROBE_TTL = 1000;
     function isPreviewVideo(video) {
+        if (video.classList && video.classList.contains('preview')) return true;
+        if (typeof video.id === 'string' && video.id.startsWith('preview-')) return true;
+        if (video.hasAttribute && video.hasAttribute('data-src')) return true;
         if (video.closest(PREVIEW_HOST_SELECTOR)) return true;
         if (video.closest('a')) return true;
         if (video.loop && video.muted && video.autoplay) return true;
@@ -3188,13 +3236,31 @@
             video.parentElement
         );
     }
+    function playerMetricsOk(video) {
+        if (!video || !video.isConnected) return false;
+        if (isPreviewVideo(video)) return false;
+        let width = video.videoWidth || 0;
+        let height = video.videoHeight || 0;
+        if (!width || !height) {
+            const rect = video.getBoundingClientRect();
+            width = rect.width;
+            height = rect.height;
+        }
+        return width >= MIN_PLAYER_WIDTH && height >= MIN_PLAYER_HEIGHT;
+    }
     function findMainVideo() {
         if (videoProbeEl && videoProbeEl.isConnected && Date.now() - videoProbeAt < VIDEO_PROBE_TTL) return videoProbeEl;
+        const explicit = document.querySelector('.plyr__video-wrapper video, .plyr video, .video-js video, .artplayer video, .dplayer video, #player video');
+        if (playerMetricsOk(explicit)) {
+            videoProbeAt = Date.now();
+            videoProbeEl = explicit;
+            return videoProbeEl;
+        }
         let best = null;
         let bestScore = 0;
         for (const video of document.querySelectorAll('video')) {
             if (isPreviewVideo(video)) continue;
-            const explicit = video.closest(PLAYER_HOST_SELECTOR);
+            const host = video.closest(PLAYER_HOST_SELECTOR);
             let width = video.videoWidth || 0;
             let height = video.videoHeight || 0;
             if (!width || !height) {
@@ -3203,7 +3269,7 @@
                 height = rect.height;
             }
             if (width < MIN_PLAYER_WIDTH || height < MIN_PLAYER_HEIGHT) continue;
-            const score = width * height * (explicit ? 100 : 1);
+            const score = width * height * (host ? 100 : 1);
             if (score > bestScore) {
                 bestScore = score;
                 best = video;
@@ -3233,11 +3299,15 @@
         state.pollTimeout = setTimeout(stopPlayerPoll, POLL_TIMEOUT);
     }
     function sweepUiOrphans(container) {
-        for (const selector of ['.custom-quick-controls', '.custom-subtitle', '.speed-hud-host']) {
+        for (const selector of ['.custom-subtitle', '.speed-hud-host']) {
             for (const node of document.querySelectorAll(selector)) {
                 if (container.contains(node)) continue;
                 node.remove();
             }
+        }
+        for (const node of document.querySelectorAll('.custom-quick-controls')) {
+            if (node === state.quick) continue;
+            node.remove();
         }
         if (state.quick && !state.quick.isConnected) state.quick = null;
         if (state.subtitleEl && !state.subtitleEl.isConnected) state.subtitleEl = null;
