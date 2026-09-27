@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      10.14
+// @version      10.15
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @match        *://missav.ws/*
@@ -706,7 +706,7 @@
         .panel-status-log { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
-        .custom-quick-controls { position: fixed; left: 0; top: 0; transform: translate(-50%, -100%) scale(var(--quick-scale, 1)); transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100vw - 16px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box; }
+        .custom-quick-controls { position: absolute; left: 50%; bottom: ${QUICK_BOTTOM_OFFSET}px; transform: translateX(-50%) scale(var(--quick-scale, 1)); transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box; }
         .custom-quick-controls.quick-visible,
         .custom-quick-controls:hover { opacity: 1; visibility: visible; pointer-events: auto; }
         .quick-jump-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; }
@@ -1410,32 +1410,10 @@
         log('▶️ 系统初始化完成');
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
-    function positionQuickControls() {
-        const quick = state.quick;
-        if (!quick || !quick.isConnected) return false;
-        const video = state.video;
-        if (!video || !video.isConnected || isPreviewVideo(video)) return false;
-        const rect = video.getBoundingClientRect();
-        if (rect.width < MIN_PLAYER_WIDTH || rect.height < MIN_PLAYER_HEIGHT) return false;
-        quick.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
-        quick.style.top = `${Math.round(rect.bottom - QUICK_BOTTOM_OFFSET)}px`;
-        return true;
-    }
-    function quickHome() {
-        const fullscreen = document.fullscreenElement;
-        if (fullscreen && state.video && fullscreen.contains(state.video)) return fullscreen;
-        return getUiLayer();
-    }
-    function placeQuickControls() {
-        const quick = state.quick;
-        if (!quick) return;
-        const home = quickHome();
-        if (quick.parentElement !== home) home.appendChild(quick);
-    }
     function showQuickControls() {
         const quick = state.quick;
-        if (!quick) return;
-        if (!positionQuickControls()) return;
+        if (!quick || !quick.isConnected) return;
+        if (!playerMetricsOk(state.video)) return;
         quick.classList.add('quick-visible');
         clearTimeout(state.quickHideTimer);
         state.quickHideTimer = setTimeout(() => {
@@ -1453,10 +1431,10 @@
     function fitQuickControls() {
         const quick = state.quick;
         if (!quick?.isConnected) return;
-        positionQuickControls();
         quick.classList.remove('quick-compact');
-        const video = state.video;
-        const available = (video && video.isConnected ? video.getBoundingClientRect().width : window.innerWidth) - 16;
+        const host = state.container && state.container.isConnected ? state.container : state.video;
+        const base = host && host.isConnected ? host.getBoundingClientRect().width : window.innerWidth;
+        const available = base - 16;
         const needed = quick.scrollWidth;
         if (needed > available) quick.classList.add('quick-compact');
         const stillTooWide = quick.scrollWidth;
@@ -1464,7 +1442,6 @@
     }
     let quickGlobalBound = false;
     let quickResizeHandler = null;
-    let quickScrollHandler = null;
     let quickFullscreenHandler = null;
     function bindQuickHost(container) {
         if (!container || !container.dataset || container.dataset.quickAutohide === '1') return;
@@ -1489,15 +1466,8 @@
         if (!quickGlobalBound) {
             quickGlobalBound = true;
             quickResizeHandler = throttle(fitQuickControls, MUTATION_THROTTLE);
-            quickScrollHandler = throttle(() => {
-                if (state.quick?.classList.contains('quick-visible')) positionQuickControls();
-            }, 60);
-            quickFullscreenHandler = () => setTimeout(() => {
-                placeQuickControls();
-                fitQuickControls();
-            }, 120);
+            quickFullscreenHandler = () => setTimeout(fitQuickControls, 120);
             window.addEventListener('resize', quickResizeHandler, { passive: true });
-            window.addEventListener('scroll', quickScrollHandler, { passive: true, capture: true });
             document.addEventListener('fullscreenchange', quickFullscreenHandler);
         }
         setTimeout(fitQuickControls, 0);
@@ -1537,7 +1507,8 @@
         const quick = state.quick;
         if (!quick || !quick.isConnected) return false;
         const host = quick.parentElement;
-        return Boolean(host && host.isConnected && document.body.contains(host));
+        if (!host || !host.isConnected || !document.body.contains(host)) return false;
+        return !state.container || host === state.container;
     }
     function watchQuickControls() {
         if (state.quickWatchTimer) return;
@@ -1549,10 +1520,7 @@
                 const container = playerContainer(video);
                 if (!container) return;
                 bindPlayer(video, container, true);
-                return;
             }
-            placeQuickControls();
-            positionQuickControls();
         }, 1200);
     }
     function createQuickControls() {
@@ -1561,8 +1529,7 @@
         if (container.closest(PREVIEW_HOST_SELECTOR)) return;
         if (quickControlsAlive()) {
             bindQuickHost(container);
-            placeQuickControls();
-            positionQuickControls();
+            fitQuickControls();
             return;
         }
         for (const stale of document.querySelectorAll('.custom-quick-controls')) stale.remove();
@@ -1637,8 +1604,7 @@
         loopWrapper.append(state.loopBtn, state.loopMenu);
         group.appendChild(loopWrapper);
         quick.appendChild(group);
-        placeQuickControls();
-        positionQuickControls();
+        container.appendChild(quick);
         document.addEventListener('click', event => {
             if (!loopWrapper.contains(event.target)) state.loopMenu.classList.remove('show');
         });
@@ -3299,15 +3265,11 @@
         state.pollTimeout = setTimeout(stopPlayerPoll, POLL_TIMEOUT);
     }
     function sweepUiOrphans(container) {
-        for (const selector of ['.custom-subtitle', '.speed-hud-host']) {
+        for (const selector of ['.custom-subtitle', '.speed-hud-host', '.custom-quick-controls']) {
             for (const node of document.querySelectorAll(selector)) {
                 if (container.contains(node)) continue;
                 node.remove();
             }
-        }
-        for (const node of document.querySelectorAll('.custom-quick-controls')) {
-            if (node === state.quick) continue;
-            node.remove();
         }
         if (state.quick && !state.quick.isConnected) state.quick = null;
         if (state.subtitleEl && !state.subtitleEl.isConnected) state.subtitleEl = null;
