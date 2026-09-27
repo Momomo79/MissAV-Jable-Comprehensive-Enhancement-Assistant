@@ -1,6 +1,6 @@
 # 🚀 MissAV & Jable 综合增强助手
 
-![Version](https://img.shields.io/badge/version-10.14-blue.svg)
+![Version](https://img.shields.io/badge/version-10.15-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-PC%20(Desktop)-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -10,7 +10,7 @@
 
 ---
 
-## 🆕 v10.14 全新更新内容
+## 🆕 v10.15 全新更新内容
 
 ### 1️⃣ 长按画面倍速 + HUD
 
