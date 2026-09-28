@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      11.0
+// @version      11.1
 // @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏（用户画像、记录明细、全局搜索与标题自动补全）、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -757,9 +757,9 @@
         .panel-status-log { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
-        .custom-quick-controls { position: absolute; left: 50%; bottom: ${QUICK_BOTTOM_OFFSET}px; transform: translateX(-50%) scale(var(--quick-scale, 1)); transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box; }
+        .custom-quick-controls { position: absolute !important; left: 50% !important; right: auto !important; top: auto !important; bottom: ${QUICK_BOTTOM_OFFSET}px !important; transform: translateX(-50%) scale(var(--quick-scale, 1)) !important; transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; justify-content: center; gap: 4px; width: max-content !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px) !important; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box !important; }
         .custom-quick-controls.quick-visible,
-        .custom-quick-controls:hover { opacity: 1; visibility: visible; pointer-events: auto; }
+        .custom-quick-controls:hover { opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; }
         .quick-jump-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; }
         .quick-btn { min-width: 48px; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: rgba(255,255,255,.92); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; line-height: 1; white-space: nowrap; flex: 0 0 auto; overflow: visible; text-overflow: clip; }
         .quick-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
@@ -1476,9 +1476,14 @@
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
     function showQuickControls() {
+        const video = state.video;
+        if (!video || !playerMetricsOk(video)) return;
+        if (state.quick && state.quick.isConnected && !quickControlsAlive()) {
+            const container = playerContainer(video);
+            if (container) bindPlayer(video, container, true);
+        }
         const quick = state.quick;
         if (!quick || !quick.isConnected) return;
-        if (!playerMetricsOk(state.video)) return;
         quick.classList.add('quick-visible');
         clearTimeout(state.quickHideTimer);
         state.quickHideTimer = setTimeout(() => {
@@ -1496,6 +1501,18 @@
     function fitQuickControls() {
         const quick = state.quick;
         if (!quick?.isConnected) return;
+        quick.style.setProperty('position', 'absolute', 'important');
+        quick.style.setProperty('left', '50%', 'important');
+        quick.style.setProperty('right', 'auto', 'important');
+        quick.style.setProperty('top', 'auto', 'important');
+        quick.style.setProperty('bottom', `${QUICK_BOTTOM_OFFSET}px`, 'important');
+        quick.style.setProperty('width', 'max-content', 'important');
+        quick.style.setProperty('height', 'auto', 'important');
+        quick.style.setProperty('min-height', '0', 'important');
+        quick.style.setProperty('max-width', 'calc(100% - 16px)', 'important');
+        quick.style.setProperty('margin', '0', 'important');
+        quick.style.setProperty('box-sizing', 'border-box', 'important');
+        quick.style.setProperty('transform', 'translateX(-50%) scale(var(--quick-scale, 1))', 'important');
         quick.classList.remove('quick-compact');
         const host = state.container && state.container.isConnected ? state.container : state.video;
         const base = host && host.isConnected ? host.getBoundingClientRect().width : window.innerWidth;
@@ -1503,7 +1520,8 @@
         const needed = quick.scrollWidth;
         if (needed > available) quick.classList.add('quick-compact');
         const stillTooWide = quick.scrollWidth;
-        quick.style.setProperty('--quick-scale', stillTooWide > available ? (available / stillTooWide).toFixed(3) : '1');
+        const scale = stillTooWide > available && available > 120 ? (available / stillTooWide).toFixed(3) : '1';
+        quick.style.setProperty('--quick-scale', scale);
     }
     let quickGlobalBound = false;
     let quickResizeHandler = null;
@@ -1572,8 +1590,12 @@
         const quick = state.quick;
         if (!quick || !quick.isConnected) return false;
         const host = quick.parentElement;
-        if (!host || !host.isConnected || !document.body.contains(host)) return false;
-        return !state.container || host === state.container;
+        if (!host || !host.isConnected) return false;
+        if (state.container && host !== state.container) return false;
+        const video = state.video;
+        if (!video || !video.isConnected) return true;
+        if (!host.contains(video)) return false;
+        return host === playerContainer(video);
     }
     function watchQuickControls() {
         if (state.quickWatchTimer) return;
@@ -1675,6 +1697,7 @@
         });
         setupQuickAutoHide();
         hideQuickControls();
+        fitQuickControls();
     }
     function normalizeKey(value, fallback) {
         const key = String(value ?? '').trim().toLowerCase();
@@ -4818,12 +4841,14 @@
         }
         state.analyticsSavedAt = Date.now();
         state.analyticsSavePending = false;
+        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
         store.set(ANALYTICS_KEY, JSON.stringify(list));
     }
     function persistAnalyticsRecords(force) {
         if (!state.analyticsRecords && !state.analyticsSavePending) return;
         if (!force && state.analyticsSavedAt && Date.now() - state.analyticsSavedAt < ANALYTICS_SAVE_INTERVAL) {
             state.analyticsSavePending = true;
+            state.analyticsVersion = (state.analyticsVersion || 0) + 1;
             return;
         }
         saveAnalyticsRecords();
@@ -5170,6 +5195,9 @@
     }
     function aggregateAnalytics(range) {
         const records = analyticsRecords();
+        const aggKey = `${range}|${Math.floor(Date.now() / 1000)}|${state.analyticsVersion || 0}|${records.length}`;
+        const aggCached = state.analyticsAggCache;
+        if (aggCached && aggCached.key === aggKey) return aggCached.data;
         const now = Date.now();
         const floor = range === '7d' ? now - 604800000 : range === '30d' ? now - 2592000000 : 0;
         const result = {
@@ -5281,7 +5309,7 @@
             { label: '15 - 30 分钟 (精选)', count: result.bucket15to30 },
             { label: '> 30 分钟 (沉浸)', count: result.bucketOver30 }
         ].map(bucket => ({ ...bucket, percentage: Math.round((bucket.count / count) * 100) }));
-        return {
+        const data = {
             totalCount: result.totalCount,
             totalWatchedSeconds: result.totalWatchedSeconds,
             avgWatchedMinutes,
@@ -5296,6 +5324,8 @@
             habitBuckets,
             records: result.rangeRecords.slice().sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0))
         };
+        state.analyticsAggCache = { key: aggKey, data };
+        return data;
     }
     function recordWatchUrl(record) {
         if (record && record.url) return record.url;
@@ -5710,6 +5740,22 @@
         }
         return false;
     }
+    function recordRowKey(record) {
+        const progress = recordProgress(record);
+        return JSON.stringify([
+            record.code,
+            record.title || '',
+            record.maker || '',
+            Array.prototype.slice.call(record.actresses || [], 0, 3),
+            Array.prototype.slice.call(record.genres || [], 0, 3),
+            recordWatchUrl(record),
+            progress.percent,
+            progress.timeText,
+            progress.isCompleted ? 1 : 0,
+            formatRecordDate(record.watchedAt),
+            new Date(Number(record.watchedAt) || 0).toLocaleString()
+        ]);
+    }
     function buildRecordRow(record) {
         const progress = recordProgress(record);
         const row = document.createElement('div');
@@ -5843,6 +5889,13 @@
             const query = (state.analyticsQuery || '').trim().toLowerCase();
             const found = query ? records.filter(record => recordMatches(record, query)) : records;
             const shown = found.slice(0, limitState.value);
+            const pooled = new Map();
+            for (const entry of state.analyticsRowPool || []) {
+                const bucket = pooled.get(entry.key);
+                if (bucket) bucket.push(entry.row);
+                else pooled.set(entry.key, [entry.row]);
+            }
+            const nextPool = [];
             list.replaceChildren();
             more.replaceChildren();
             if (!found.length) {
@@ -5851,8 +5904,15 @@
                 empty.textContent = query ? `未找到匹配「${state.analyticsQuery}」的观影记录` : '本时间范围内暂无观影记录';
                 list.appendChild(empty);
             } else {
-                for (const record of shown) list.appendChild(buildRecordRow(record));
+                for (const record of shown) {
+                    const rowKey = recordRowKey(record);
+                    const bucket = pooled.get(rowKey);
+                    const row = bucket && bucket.length ? bucket.shift() : buildRecordRow(record);
+                    nextPool.push({ key: rowKey, row });
+                    list.appendChild(row);
+                }
             }
+            state.analyticsRowPool = nextPool;
             count.textContent = `共 ${found.length} 部影片`;
             const rest = found.length - shown.length;
             if (rest > 0) {
@@ -5931,10 +5991,19 @@
         heatWrap.appendChild(weekdays);
         const boxes = document.createElement('div');
         boxes.className = 'av-heatmap-boxes';
-        for (const day of data.dailyHeatmap) {
-            const box = document.createElement('div');
-            box.className = `av-heatmap-box level-${day.level}${day.isFuture ? ' is-future' : ''}`;
-            box.title = `${day.date}：观看 ${day.count} 部 · ${formatDuration(day.seconds)}`;
+        const tilePool = state.analyticsHeatTiles || (state.analyticsHeatTiles = []);
+        for (let tileIndex = 0; tileIndex < data.dailyHeatmap.length; tileIndex++) {
+            const day = data.dailyHeatmap[tileIndex];
+            if (!tilePool[tileIndex]) {
+                const fresh = document.createElement('div');
+                fresh.className = 'av-heatmap-box';
+                tilePool[tileIndex] = fresh;
+            }
+            const box = tilePool[tileIndex];
+            const boxClass = `av-heatmap-box level-${day.level}${day.isFuture ? ' is-future' : ''}`;
+            if (box.className !== boxClass) box.className = boxClass;
+            const boxTip = `${day.date}：观看 ${day.count} 部 · ${formatDuration(day.seconds)}`;
+            if (box.title !== boxTip) box.title = boxTip;
             boxes.appendChild(box);
         }
         heatWrap.appendChild(boxes);
@@ -6137,11 +6206,13 @@
     }
     function clearAnalyticsData() {
         state.analyticsRecords = [];
+        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
         store.set(ANALYTICS_KEY, '[]');
     }
     function refreshCockpit() {
         if (!state.analyticsPage) return;
         state.analyticsRecords = null;
+        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
         analyticsRecords();
         renderAnalytics();
     }
@@ -6149,6 +6220,7 @@
         if (!state.analyticsPage || document.hidden) return;
         if ((store.get(ANALYTICS_KEY) || '[]') === state.analyticsSignature) return;
         state.analyticsRecords = null;
+        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
         renderAnalytics();
     }
     function handleClearAnalytics() {
