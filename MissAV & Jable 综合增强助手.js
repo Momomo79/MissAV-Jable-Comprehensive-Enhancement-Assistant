@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      11.1
-// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏（用户画像、记录明细、全局搜索与标题自动补全）、内容过滤与屏蔽、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      12.1
+// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -20,6 +20,9 @@
 // @grant        GM_addStyle
 // @grant        GM_openInTab
 // @grant        unsafeWindow
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
 // @connect      xunlei.com
 // @connect      geilijiasu.com
 // @connect      subtitle.v.geilijiasu.com
@@ -41,6 +44,7 @@
 // @connect      missav.fans
 // @connect      missav.media
 // @connect      thisav.com
+// @connect      *
 // @run-at       document-start
 // @noframes
 // @license      MIT
@@ -360,6 +364,93 @@
         }
     };
     const SITE_TAG = IS_JABLE ? 'jable' : 'missav';
+    const CREDENTIAL_PREFIX = 'avCred:';
+    function credentialXor(text) {
+        const salt = `av-${SITE_TAG}-${location.hostname}`;
+        let out = '';
+        for (let index = 0; index < text.length; index += 1) out += String.fromCharCode(text.charCodeAt(index) ^ salt.charCodeAt(index % salt.length));
+        return out;
+    }
+    function credentialEncode(value) {
+        try {
+            return btoa(credentialXor(unescape(encodeURIComponent(String(value)))));
+        } catch (_) {
+            return '';
+        }
+    }
+    function credentialDecode(raw) {
+        try {
+            return decodeURIComponent(escape(credentialXor(atob(String(raw)))));
+        } catch (_) {
+            return '';
+        }
+    }
+    const loginVault = {
+        key(name) {
+            return `${CREDENTIAL_PREFIX}${name}@${SITE_TAG}`;
+        },
+        legacyKey(name) {
+            return `${name}@${SITE_TAG}`;
+        },
+        gmReady() {
+            return typeof GM_getValue === 'function' && typeof GM_setValue === 'function' && typeof GM_deleteValue === 'function';
+        },
+        read(name) {
+            if (this.gmReady()) {
+                try {
+                    const value = GM_getValue(this.key(name), '');
+                    if (value !== undefined && value !== null && value !== '') return String(value);
+                } catch (_) {
+                }
+            }
+            const encoded = store.get(this.key(name));
+            if (encoded) return credentialDecode(encoded);
+            const legacy = store.get(this.legacyKey(name));
+            return legacy === null || legacy === undefined ? '' : String(legacy);
+        },
+        write(name, value) {
+            const text = value === null || value === undefined ? '' : String(value);
+            store.remove(this.key(name));
+            store.remove(this.legacyKey(name));
+            if (!text) {
+                if (this.gmReady()) {
+                    try {
+                        GM_deleteValue(this.key(name));
+                    } catch (_) {
+                    }
+                }
+                return;
+            }
+            if (this.gmReady()) {
+                try {
+                    GM_setValue(this.key(name), text);
+                    return;
+                } catch (_) {
+                }
+            }
+            store.set(this.key(name), credentialEncode(text));
+        },
+        remove(name) {
+            store.remove(this.key(name));
+            store.remove(this.legacyKey(name));
+            if (typeof GM_deleteValue === 'function') {
+                try {
+                    GM_deleteValue(this.key(name));
+                } catch (_) {
+                }
+            }
+        },
+        migrate() {
+            if (!this.gmReady()) return;
+            for (const name of ['loginUser', 'loginPass']) {
+                const legacy = store.get(this.legacyKey(name));
+                if (!legacy) continue;
+                if (!this.read(name)) this.write(name, legacy);
+                store.remove(this.legacyKey(name));
+            }
+        }
+    };
+    loginVault.migrate();
     const siteOffsetKey = () => `offset@${SITE_TAG}`;
     const settings = {
         accelerationRate: store.getNumber('accelerationRate', 3, SPEED_MIN, SPEED_MAX),
@@ -389,6 +480,15 @@
         filterBarVisible: store.getBool('filterBarVisible', true),
         filterPanelOpen: store.getBool('filterPanelOpen', false),
         analyticsTrack: store.getBool('analyticsTrack', true),
+        loginUser: loginVault.read('loginUser'),
+        loginPass: loginVault.read('loginPass'),
+        autoLogin: store.getBool('autoLogin', true),
+        loginPanelOpen: store.getBool('loginPanelOpen', false),
+        backupFields: store.getKeyName('backupFields', 'name,code'),
+        backupLimit: store.getNumber('backupLimit', 50, 1, 2000),
+        backupSource: store.getKeyName('backupSource', ''),
+        backupX: store.getNumber('backupX', NaN, 0, 99999),
+        backupY: store.getNumber('backupY', NaN, 0, 99999),
         keys: {
             accelerate: store.getKeyName('keyAccelerate', 'z'),
             forward: store.getKeyName('keyForward', 'x'),
@@ -421,6 +521,13 @@
         store.set('filterBarVisible', settings.filterBarVisible);
         store.set('filterPanelOpen', settings.filterPanelOpen);
         store.set('analyticsTrack', settings.analyticsTrack);
+        loginVault.write('loginUser', settings.loginUser || '');
+        loginVault.write('loginPass', settings.loginPass || '');
+        store.set('autoLogin', settings.autoLogin);
+        store.set('loginPanelOpen', settings.loginPanelOpen);
+        store.set('backupFields', settings.backupFields);
+        store.set('backupLimit', settings.backupLimit);
+        store.set('backupSource', settings.backupSource);
     }
     const state = {
         video: null,
@@ -431,6 +538,7 @@
         bound: false,
         subtitleEl: null,
         subtitlePicker: null,
+        favoriteBackup: null,
         subtitleSource: '',
         cueIndex: null,
         cueCursor: -1,
@@ -440,6 +548,9 @@
         subtitleIdleTimer: 0,
         panel: null,
         panelBody: null,
+        loginPanel: null,
+        loginStatusEl: null,
+        loginBusy: false,
         quick: null,
         quickHost: null,
         quickWatchTimer: 0,
@@ -625,7 +736,20 @@
         let frames = false;
         const sweep = throttle(() => {
             if (!pending.length) return;
-            const nodes = pending.splice(0, pending.length);
+            const batch = new Set(pending.splice(0, pending.length));
+            const nodes = [];
+            for (const node of batch) {
+                let ancestor = node.parentElement;
+                let nested = false;
+                while (ancestor) {
+                    if (batch.has(ancestor)) {
+                        nested = true;
+                        break;
+                    }
+                    ancestor = ancestor.parentElement;
+                }
+                if (!nested) nodes.push(node);
+            }
             const patchFrames = frames;
             frames = false;
             patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
@@ -752,8 +876,12 @@
         .btn-group button.btn-danger { background: rgba(239,68,68,.25); color: #fecaca; border-color: rgba(239,68,68,.4); }
         .btn-group button.btn-ghost { background: rgba(148,163,184,.18); color: #e2e8f0; border-color: rgba(148,163,184,.32); }
         .btn-group button.btn-ghost:hover { background: rgba(148,163,184,.3); }
+        .btn-group .av-open-cockpit { display: inline-flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; width: 100%; min-height: 26px; padding: 4px 5px; border: 1px solid rgba(59,130,246,.5); border-radius: 6px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #f8fafc; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; text-decoration: none; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: pointer; transition: filter .2s ease; }
+        .btn-group .av-open-cockpit:hover { filter: brightness(1.12); }
         .panel-full-btn { display: block; width: 100%; min-height: 24px; margin-top: 4px; padding: 2px 8px; border: 0; border-radius: 6px; background: rgba(255,255,255,.06); color: #cbd5e1; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .2s ease, color .2s ease; }
         .panel-full-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
+        .av-collapse { overflow: hidden; max-height: 2000px; opacity: 1; transform: translateY(0); visibility: visible; pointer-events: auto; transition: max-height .3s cubic-bezier(.4,0,.2,1), opacity .22s ease, transform .3s cubic-bezier(.4,0,.2,1), margin-top .3s ease, padding-top .3s ease, padding-bottom .3s ease, border-top-width .3s ease, visibility .3s; }
+        .av-collapse.av-collapsed { max-height: 0 !important; margin-top: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; border-top-width: 0 !important; opacity: 0 !important; transform: translateY(-6px) !important; visibility: hidden !important; pointer-events: none !important; }
         .panel-status-log { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
@@ -774,8 +902,7 @@
         .custom-quick-controls.quick-compact .quick-play-btn { min-width: 64px; padding: 0 8px; }
         .custom-quick-controls.quick-compact .quick-loop-btn { min-width: 40px; padding: 0 5px; }
         .custom-subtitle { position: absolute; left: 50%; bottom: 10%; z-index: 10000; max-width: 85%; transform: translateX(-50%); color: #fff; font-size: 24px; font-weight: 700; text-align: center; white-space: pre-line; text-shadow: -1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,2px 2px 4px rgba(0,0,0,.8); pointer-events: none; }
-        .slider-row-container { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 0 14px; border-top: 1px solid rgba(255,255,255,.15); opacity: 1; overflow: visible; transition: opacity .3s ease; }
-        .slider-row-container[hidden] { display: none; }
+        .slider-row-container { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 0 14px; border-top: 1px solid rgba(255,255,255,.15); }
         .slider-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; }
         .slider-group label { width: 65px; flex-shrink: 0; white-space: nowrap; }
         .slider-group input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1; width: 100%; height: 14px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
@@ -812,6 +939,30 @@
         .subtitle-picker-close:hover { color: #fff; }
         .subtitle-picker-row { padding: 8px; margin-top: 5px; border-bottom: 1px solid rgba(255,255,255,.1); cursor: pointer; word-break: break-all; }
         .subtitle-picker-row:hover { background: rgba(96,165,250,.16); }
+        .av-backup-window { position: fixed; left: 15px; top: 12%; z-index: 1; box-sizing: border-box; width: min(560px, 94vw); max-height: min(78vh, 640px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border-radius: 12px; --ui-bg-opacity: .34; --ui-blur: 1px; --ui-hover-opacity: .94; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45); color: #f8fafc; font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); transition: background .2s ease, box-shadow .2s ease; pointer-events: auto; contain: layout style; }
+        .av-backup-window:hover, .av-backup-window:focus-within { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55); }
+        .av-backup-window.panel-dragging { transition: none; }
+        .av-backup-header { position: sticky; top: -12px; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: -12px -12px 0; padding: 12px 12px 8px; background: rgba(0,0,0,.4); border-bottom: 1px solid rgba(255,255,255,.15); border-radius: 12px 12px 0 0; cursor: move; user-select: none; }
+        .av-backup-title { color: #60a5fa; font-weight: 700; }
+        .av-backup-close { cursor: pointer; color: #94a3b8; }
+        .av-backup-close:hover { color: #fff; }
+        .av-backup-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 8px 0 6px; }
+        .av-backup-field { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: rgba(255,255,255,.06); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }
+        .av-backup-field input { margin: 0; cursor: pointer; }
+        .av-backup-field.is-on { border-color: rgba(96,165,250,.6); background: rgba(59,130,246,.2); }
+        .av-backup-line { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+        .av-backup-line > span { flex: 0 0 auto; color: #cbd5e1; font-weight: 600; }
+        .av-backup-line input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.2); background: rgba(0,0,0,.35); color: #f8fafc; font: inherit; }
+        .av-backup-line input[type="number"] { flex: 0 0 78px; }
+        .av-backup-actions { display: flex; gap: 6px; margin-top: 8px; }
+        .av-backup-btn { flex: 1; padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.1); color: #f8fafc; font: 600 12px/1.2 inherit; cursor: pointer; }
+        .av-backup-btn:hover:not(:disabled) { background: rgba(255,255,255,.18); }
+        .av-backup-btn.primary { border-color: rgba(59,130,246,.55); background: linear-gradient(135deg,#3b82f6,#2563eb); }
+        .av-backup-btn:disabled { opacity: .5; cursor: not-allowed; }
+        .av-backup-progress { margin-top: 9px; height: 6px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden; }
+        .av-backup-progress > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#3b82f6,#22d3ee); transition: width .2s ease; }
+        .av-backup-log { margin-top: 8px; max-height: 150px; overflow-y: auto; overscroll-behavior: contain; padding: 8px; border-radius: 8px; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.12); color: #cbd5e1; font: 11px/1.5 ui-monospace,Consolas,monospace; white-space: pre-wrap; word-break: break-all; }
+        .av-backup-hint { color: #94a3b8; font-size: 11px; line-height: 1.5; margin-top: 4px; }
         .speed-hud-host { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; padding-top: 24px; pointer-events: none; z-index: 26; }
         .speed-hud { display: inline-flex; align-items: center; justify-content: center; padding: 8px 18px; border-radius: 9999px; background: rgba(10,10,10,.85); border: 1px solid rgba(255,255,255,.16); color: #ededed; box-shadow: 0 4px 20px rgba(0,0,0,.5); pointer-events: none; user-select: none; -webkit-user-select: none; animation: speed-hud-pulse 1.2s ease-in-out infinite alternate; }
         .speed-hud-content { display: flex; align-items: center; gap: 8px; font: 500 14px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; letter-spacing: -.2px; }
@@ -1263,6 +1414,12 @@
             target.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
         }
     }
+    function setCollapsed(node, collapsed) {
+        if (!node) return;
+        if (node.hasAttribute && node.hasAttribute('hidden')) node.removeAttribute('hidden');
+        node.classList.toggle('av-collapsed', Boolean(collapsed));
+        node.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+    }
     function createPanel() {
         if (state.panel || document.querySelector('.custom-control-panel')) return;
         const panel = document.createElement('div');
@@ -1358,9 +1515,9 @@
         const btnLocal = createButton('加载本地');
         const btnWeb = createButton('网页搜字幕');
         const btnAPI = createButton('API搜字幕');
-        const btnClear = createButton('清除字幕', 'btn-danger');
+        const btnClear = createButton('清除字幕');
         const btnSave = createButton('保存设置', 'btn-primary');
-        const btnResetOffset = createButton('重置本站偏移', 'btn-danger');
+        const btnResetOffset = createButton('重置本站偏移');
         btnSave.style.gridColumn = 'span 2';
         btnLocal.addEventListener('click', () => fileInput.click());
         btnWeb.addEventListener('click', searchSubtitleWeb);
@@ -1398,10 +1555,31 @@
             layoutPanel();
             log('面板已复位到左上角');
         });
-        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, btnSave);
+        const openCockpit = document.createElement('a');
+        openCockpit.className = 'av-open-cockpit';
+        openCockpit.href = analyticsUrl();
+        openCockpit.target = '_blank';
+        openCockpit.rel = 'noopener noreferrer';
+        openCockpit.title = '在新标签页打开观影行为数据大屏';
+        openCockpit.setAttribute('aria-label', '数据大屏');
+        openCockpit.append(document.createTextNode('📊 数据大屏'));
+        openCockpit.addEventListener('click', () => {
+            openCockpit.href = analyticsUrl();
+        });
+        const btnClearLib = createButton('🗑 清空已看库');
+        btnClearLib.addEventListener('click', () => {
+            clearWatched();
+            log('已看库已清空');
+            refreshFilters();
+        });
+        const btnBackup = createButton('收藏批量备份');
+        btnBackup.style.gridColumn = 'span 2';
+        btnBackup.title = '把收藏的名称、缩略图、番号、女优、类型、发行商批量打包下载到本地';
+        btnBackup.addEventListener('click', openFavoriteBackup);
+        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, openCockpit, btnClearLib, btnSave, btnBackup);
         const sliderRow = document.createElement('div');
-        sliderRow.className = 'slider-row-container';
-        sliderRow.hidden = true;
+        sliderRow.className = 'slider-row-container av-collapse';
+        setCollapsed(sliderRow, true);
         const createSlider = (labelText, key, min, max, step, onApply = applyUiStyles, format = String) => {
             const group = document.createElement('div');
             group.className = 'slider-group';
@@ -1432,21 +1610,30 @@
             createSlider('字幕字号', 'subtitleFontSize', FONT_SIZE_MIN, FONT_SIZE_MAX, 1, applySubtitleStyle, value => `${value}px`),
             createSlider('字幕高度', 'subtitleBottom', SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX, 1, applySubtitleStyle, value => `${value}%`)
         );
-        const toggleSliderBtn = createButton('👁 隐藏/显示透明UI设置', 'btn-primary panel-full-btn');
+        const loginToggleBtn = createButton('👤 隐藏/显示自动登录', 'btn-primary panel-full-btn');
+        const loginPanel = buildLoginPanel();
+        loginToggleBtn.addEventListener('click', () => {
+            const collapsed = !loginPanel.classList.contains('av-collapsed');
+            setCollapsed(loginPanel, collapsed);
+            settings.loginPanelOpen = !collapsed;
+            store.set('loginPanelOpen', settings.loginPanelOpen);
+        });
+        const toggleSliderBtn = createButton('隐藏/显示透明UI设置', 'btn-primary panel-full-btn');
         toggleSliderBtn.addEventListener('click', () => {
-            sliderRow.hidden = !sliderRow.hidden;
+            setCollapsed(sliderRow, !sliderRow.classList.contains('av-collapsed'));
         });
         const filterToggleBtn = createButton('🛡 隐藏/显示内容过滤与屏蔽', 'btn-primary panel-full-btn');
         const filterPanel = buildFilterPanel();
         filterToggleBtn.addEventListener('click', () => {
-            filterPanel.hidden = !filterPanel.hidden;
-            settings.filterPanelOpen = !filterPanel.hidden;
+            const collapsed = !filterPanel.classList.contains('av-collapsed');
+            setCollapsed(filterPanel, collapsed);
+            settings.filterPanelOpen = !collapsed;
             store.set('filterPanelOpen', settings.filterPanelOpen);
         });
         state.logEl = document.createElement('div');
         state.logEl.className = 'panel-status-log';
         footer.appendChild(state.logEl);
-        body.append(keysRow, actionRow, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
+        body.append(keysRow, actionRow, loginToggleBtn, loginPanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
         collapsibleInner.append(body, footer);
         panel.append(header, collapsible);
         getUiLayer().appendChild(panel);
@@ -1473,18 +1660,36 @@
         });
         syncRangeFills(panel);
         log('▶️ 系统初始化完成');
+        autoLogin();
     }
     const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
+    let quickMetricsVideo = null;
+    let quickMetricsAt = 0;
+    let quickMetricsValue = false;
+    let quickArmAt = 0;
+    function quickMetricsReady(video) {
+        const now = Date.now();
+        if (video !== quickMetricsVideo || now - quickMetricsAt > 400) {
+            quickMetricsVideo = video;
+            quickMetricsAt = now;
+            quickMetricsValue = playerMetricsOk(video);
+        }
+        return quickMetricsValue;
+    }
     function showQuickControls() {
         const video = state.video;
-        if (!video || !playerMetricsOk(video)) return;
+        if (!video || !quickMetricsReady(video)) return;
         if (state.quick && state.quick.isConnected && !quickControlsAlive()) {
             const container = playerContainer(video);
             if (container) bindPlayer(video, container, true);
         }
         const quick = state.quick;
         if (!quick || !quick.isConnected) return;
+        const now = Date.now();
+        const wasVisible = quick.classList.contains('quick-visible');
         quick.classList.add('quick-visible');
+        if (wasVisible && now - quickArmAt < 400) return;
+        quickArmAt = now;
         clearTimeout(state.quickHideTimer);
         state.quickHideTimer = setTimeout(() => {
             if (quick.matches(':hover') || quick.contains(document.activeElement) || isLoopMenuOpen()) return;
@@ -1518,7 +1723,11 @@
         const base = host && host.isConnected ? host.getBoundingClientRect().width : window.innerWidth;
         const available = base - 16;
         const needed = quick.scrollWidth;
-        if (needed > available) quick.classList.add('quick-compact');
+        if (needed <= available) {
+            quick.style.setProperty('--quick-scale', '1');
+            return;
+        }
+        quick.classList.add('quick-compact');
         const stillTooWide = quick.scrollWidth;
         const scale = stillTooWide > available && available > 120 ? (available / stillTooWide).toFixed(3) : '1';
         quick.style.setProperty('--quick-scale', scale);
@@ -1601,6 +1810,7 @@
         if (state.quickWatchTimer) return;
         state.quickWatchTimer = setInterval(() => {
             if (!state.bound || isAnalyticsRoute()) return;
+            if (state.video?.isConnected && quickControlsAlive()) return;
             const video = findMainVideo();
             if (!video) return;
             if (video !== state.video || !quickControlsAlive()) {
@@ -1898,7 +2108,7 @@
         }
         renderSubtitleBanner();
         closeSubtitlePicker();
-        log('🗑️ 字幕已清除');
+        log('字幕已清除');
     }
     function startSubtitleLoop() {
         cancelAnimationFrame(state.subtitleRAF);
@@ -1940,10 +2150,10 @@
         log(`🌐 网页搜索: ${id}`);
         GM_openInTab(`https://subtitlecat.com/index.php?search=${encodeURIComponent(id)}`, { active: true });
     }
-    function gmSend(url, { headers = null, timeout = 15000, responseType = undefined, anonymous = false } = {}) {
+    function gmSend(url, { headers = null, timeout = 15000, responseType = undefined, anonymous = false, method = 'GET', data = null } = {}) {
         return new Promise((resolve, reject) => {
             const options = {
-                method: 'GET',
+                method,
                 url,
                 timeout,
                 onload: resolve,
@@ -1952,6 +2162,7 @@
                 onabort: () => reject(Object.assign(new Error('请求已取消'), { network: true }))
             };
             if (headers) options.headers = headers;
+            if (data !== null) options.data = data;
             if (responseType) options.responseType = responseType;
             if (anonymous) options.anonymous = true;
             GM_xmlhttpRequest(options);
@@ -1960,8 +2171,8 @@
     function gmRaw(url, { headers = null, timeout = 15000 } = {}) {
         return gmSend(url, { headers, timeout });
     }
-    async function gmRequest(url, { timeout = 15000, binary = false, headers = null } = {}) {
-        const response = await gmSend(url, { headers, timeout, responseType: binary ? 'arraybuffer' : undefined });
+    async function gmRequest(url, { timeout = 15000, binary = false, headers = null, method = 'GET', data = null } = {}) {
+        const response = await gmSend(url, { headers, timeout, method, data, responseType: binary ? 'arraybuffer' : undefined });
         if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
         if (binary) {
             if (response.response instanceof ArrayBuffer) return response.response;
@@ -2266,6 +2477,1162 @@
             store.set('pickerX', x);
             store.set('pickerY', y);
         }
+    }
+    const BACKUP_FIELDS = [
+        { key: 'name', label: '名称' },
+        { key: 'thumb', label: '缩略图' },
+        { key: 'code', label: '番号' },
+        { key: 'actress', label: '女优' },
+        { key: 'genre', label: '类型' },
+        { key: 'maker', label: '发行商' }
+    ];
+    const BACKUP_DETAIL_FIELDS = new Set(['actress', 'genre', 'maker']);
+    const BACKUP_CARD_SELECTOR = 'div[class*="aspect-w-16"], .video-img-box, .thumbnail, article.video-card, .grid > div, .video-list > div, .col-6, .col-sm-4, .col-lg-3';
+    const BACKUP_JUNK_PATH_RE = /\/(?:recent|latest|new|new-release|contact|contact-us|about|about-us|help|faq|dmca|terms|privacy|policy|login|signin|signup|register|search|my|account|profile|premium|vip|favorit|collection|playlist|bookmark)(?:\/|$)/i;
+    const BACKUP_JUNK_NAME_RE = /^(?:最近更新|最新更新|聯絡我們|联系我们|關於我們|关于我们|首頁|首页|主頁|主页|登入|登录|註冊|注册|收藏|我的收藏|我的最愛|帳號|账号|服務條款|服务条款|隱私政策|隐私政策|DMCA|説明|帮助|幫助|回報|回报|意見|意见)$/i;
+    const BACKUP_IMAGE_ATTRS = ['data-src', 'data-original', 'data-lazy', 'data-lazy-src', 'data-webp', 'data-cover', 'data-thumb', 'src'];
+    const BACKUP_LINK_JUNK_RE = /(?:排行|排名|排行榜|人氣|人气|新作|最新|全部|更多|一覧|一覽|名单|名單|検索|检索|分類|分类一览|カテゴリ一覧|ログイン|登録|無料|免費|免费|下载|下載|APP|アプリ)/i;
+    const BACKUP_MONTH_YEAR_RE = /(?:\b(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b[\s.,/-]*\d{2,4}\b|\b20\d{2}\b|\d{1,2}月\d{0,2}日?轮?)/i;
+    const BACKUP_DATE_TEXT_RE = /^(?:\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}\s*(?:分钟|分鐘|小时|小時|天|日|週|周|个月|個月|月|年)前|\d{1,2}:\d{2}(?::\d{2})?|\d{4}年\d{1,2}月(?:\d{1,2}日)?)(?:\s*\d{1,2}:\d{2}(?::\d{2})?)?$/;
+    const BACKUP_ENTITY_SLUG_JUNK = new Set(['ranking', 'ranks', 'rank', 'popular', 'new', 'new-release', 'all', 'list', 'index', 'best', 'top', 'featured', 'recommend', 'category', 'categories', 'tag', 'tags', 'genre', 'genres', 'uncensored', 'censored', 'western', 'amateur', 'search', 'month', 'year', 'page']);
+    const JABLE_FAVORITES_PATH = '/my/favourites/videos/';
+    function backupSleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    function backupLog(text) {
+        const ui = state.favoriteBackup;
+        if (!ui?.logEl) return;
+        const line = document.createElement('div');
+        line.textContent = text;
+        ui.logEl.appendChild(line);
+        ui.logEl.scrollTop = ui.logEl.scrollHeight;
+        while (ui.logEl.childElementCount > 200) ui.logEl.firstElementChild?.remove();
+    }
+    function setBackupProgress(ui, ratio) {
+        if (!ui?.bar) return;
+        ui.bar.style.width = `${Math.round(clamp(Number(ratio) || 0, 0, 1) * 100)}%`;
+    }
+    function setBackupBusy(ui, busy) {
+        if (!ui) return;
+        if (ui.startBtn) ui.startBtn.disabled = busy;
+        if (ui.stopBtn) ui.stopBtn.disabled = !busy;
+    }
+    function sanitizeBackupName(text, fallback = '未命名') {
+        const clean = String(text ?? '').replace(/[\\/:*?"<>|\r\n\t]+/g, '_').replace(/\s+/g, ' ').trim();
+        return clean.slice(0, 80) || fallback;
+    }
+    function backupAbsUrl(raw) {
+        if (!raw) return '';
+        try {
+            return new URL(String(raw), location.origin).href;
+        } catch (_) {
+            return '';
+        }
+    }
+    function backupImageUrl(node) {
+        if (!node) return '';
+        let raw = '';
+        for (const name of BACKUP_IMAGE_ATTRS) {
+            const value = node.getAttribute?.(name);
+            if (value) {
+                raw = value;
+                break;
+            }
+        }
+        if (!raw) {
+            const set = String(node.getAttribute?.('srcset') || node.getAttribute?.('data-srcset') || '').split(',')[0] || '';
+            raw = set.trim().split(/\s+/)[0] || '';
+        }
+        const url = backupAbsUrl(raw);
+        if (!url || /^(?:data|blob|about|javascript):/i.test(url)) return '';
+        if (/(?:now_printing|blank\.|placeholder|loading\.|spacer\.|pixel\.|1x1\.)/i.test(url)) return '';
+        return url;
+    }
+    function backupImageFormat(bytes) {
+        if (!bytes || bytes.length < 12) return '';
+        if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpg';
+        if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png';
+        if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'gif';
+        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'webp';
+        return '';
+    }
+    async function fetchBackupImage(url, pageHref) {
+        if (!url) return null;
+        let referer = '';
+        try {
+            referer = new URL(pageHref || url, location.origin).origin;
+        } catch (_) {
+            referer = '';
+        }
+        const accept = 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8';
+        const attempts = [];
+        if (referer) attempts.push({ Referer: `${referer}/`, Accept: accept });
+        attempts.push({ Accept: accept });
+        attempts.push(null);
+        for (const headers of attempts) {
+            try {
+                const buffer = await gmRequest(url, { timeout: 20000, binary: true, headers });
+                const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+                const ext = backupImageFormat(bytes);
+                if (ext) return { bytes, ext };
+            } catch (_) {
+            }
+        }
+        return null;
+    }
+    const JAVDB_BACKUP_CACHE = new Map();
+    function backupJavDbList(source, keys) {
+        const out = [];
+        for (const key of keys) {
+            const list = source?.[key];
+            if (!Array.isArray(list)) continue;
+            for (const item of list) {
+                const text = String(typeof item === 'string' ? item : item?.name ?? item?.title ?? '').replace(/\s+/g, ' ').trim();
+                if (text && text.length <= 40 && !out.includes(text)) out.push(text);
+            }
+        }
+        return out;
+    }
+    function backupJavDbInfo(movie, detail) {
+        const source = detail || movie || {};
+        const text = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+        const unique = list => list.filter((item, index) => list.indexOf(item) === index);
+        const info = {
+            title: text(source.title || movie?.title),
+            actress: unique(backupJavDbList(detail, ['actors', 'actress', 'actresses']).concat(backupJavDbList(movie, ['actors', 'actress']))),
+            genre: unique(backupJavDbList(detail, ['tags', 'genres', 'categories']).concat(backupJavDbList(movie, ['tags', 'genres']))),
+            maker: text(source.maker_name || source.maker || source.label_name || source.studio_name || movie?.maker_name),
+            cover: backupAbsUrl(source.cover_url || source.thumb_url || source.cover || source.image_url || movie?.cover_url || movie?.thumb_url),
+            url: movie?.id ? `https://javdb.com/v/${encodeURIComponent(String(movie.id))}` : ''
+        };
+        const filled = info.title || info.actress.length || info.genre.length || info.maker || info.cover;
+        return filled ? info : null;
+    }
+    async function fetchJavDbBackupInfo(code) {
+        const clean = normalizeVideoCode(code);
+        if (!clean || !/\d/.test(clean)) return null;
+        if (JAVDB_BACKUP_CACHE.has(clean)) return JAVDB_BACKUP_CACHE.get(clean);
+        const task = (async () => {
+            const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
+                q: clean, page: '1', type: 'movie', limit: '5',
+                movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
+            });
+            let movies = [];
+            try {
+                movies = JSON.parse(await jdApiFetch(searchUrl))?.data?.movies ?? [];
+            } catch (_) {
+                movies = [];
+            }
+            const key = clean.replace(/[-_]/g, '').toLowerCase();
+            const movie = (Array.isArray(movies) ? movies : []).find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === key);
+            if (!movie?.id) return null;
+            let detail = null;
+            try {
+                detail = JSON.parse(await jdApiFetch(`${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(movie.id)}`))?.data?.movie ?? null;
+            } catch (_) {
+                detail = null;
+            }
+            return backupJavDbInfo(movie, detail);
+        })().catch(() => null);
+        JAVDB_BACKUP_CACHE.set(clean, task);
+        return task;
+    }
+    function backupCleanTitle(raw, code) {
+        let text = String(raw ?? '').replace(/\s+/g, ' ').trim();
+        if (!text) return '';
+        text = text.replace(/\s*[-|｜–—]+\s*(?:Jable\.?TV|Jable|MissAV|线上看|線上看|在线看|免費.*|免费.*)\s*$/i, '').trim();
+        text = text.replace(/(?:^|\s)(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{4}年\d{1,2}月\d{1,2}日)(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
+        if (code) {
+            const upper = text.toUpperCase();
+            const head = String(code).toUpperCase();
+            if (upper.startsWith(head)) text = text.slice(String(code).length).replace(/^[\s\-_|:：]+/, '').trim();
+        }
+        if (BACKUP_DATE_TEXT_RE.test(text)) return '';
+        return text;
+    }
+    function backupValidEntity(text) {
+        const value = String(text ?? '').replace(/\s+/g, ' ').trim();
+        if (!value || value.length > 40) return '';
+        if (BACKUP_LINK_JUNK_RE.test(value) || BACKUP_MONTH_YEAR_RE.test(value)) return '';
+        return value;
+    }
+    function backupEntitySlug(href) {
+        let path = '';
+        try {
+            path = new URL(String(href || ''), location.origin).pathname;
+        } catch (_) {
+            return '';
+        }
+        const match = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:actresses?|actors?|models?|stars?|genres?|categories|category|tags?|makers?|companies|company|studios?|labels?)\/(.+?)\/?$/i.exec(path);
+        if (!match) return '';
+        let slug = match[1];
+        try {
+            slug = decodeURIComponent(slug);
+        } catch (_) {
+        }
+        const head = slug.toLowerCase();
+        if (!slug || BACKUP_ENTITY_SLUG_JUNK.has(head)) return '';
+        return /^\d+$/.test(slug) ? '' : slug;
+    }
+    function backupCodeFrom(href, name) {
+        const nameMatch = String(name || '').match(/(?:^|[\s【\[(（])((?:fc2(?:-ppv)?|[a-z]{2,10})-\d{2,})/i);
+        if (nameMatch) {
+            const fromName = normalizeVideoCode(nameMatch[1]);
+            if (fromName && /\d/.test(fromName)) return fromName;
+        }
+        const parts = String(href || '').split('?')[0].split('#')[0].split('/').filter(Boolean);
+        let slug = parts.length ? parts[parts.length - 1] : '';
+        try {
+            slug = decodeURIComponent(slug);
+        } catch (_) {
+        }
+        const slugMatch = slug.match(/((?:fc2(?:-ppv)?|[a-z]{2,10})-\d{2,})/i);
+        const fromSlug = normalizeVideoCode(slugMatch?.[1] || slug);
+        return /\d/.test(fromSlug) ? fromSlug : '';
+    }
+    function parseFavoriteCards(html) {
+        if (!html) return [];
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(html, 'text/html');
+        } catch (_) {
+            return [];
+        }
+        if (!doc) return [];
+        const nodes = doc.querySelectorAll(BACKUP_CARD_SELECTOR);
+        const out = [];
+        const seen = new Set();
+        for (const node of nodes) {
+            const link = node.querySelector('a[href][alt]') || node.querySelector('a[href*="/videos/"], a[href*="/video/"]') || node.querySelector('a[href]');
+            const img = node.querySelector('img[data-src], img[data-original], img[data-lazy], img[data-lazy-src], img[data-webp], img[src]');
+            const href = backupAbsUrl(link?.getAttribute('href') || '');
+            if (!href || !/\/[^/]*$/.test(href)) continue;
+            if (/\/(?:actresses?|actors?|genres?|tags?|makers?|labels?|studios?|users?|search|login|signup|register)(?:\/|$)/i.test(href)) continue;
+            let path = '';
+            try {
+                path = new URL(href).pathname;
+            } catch (_) {
+                path = href;
+            }
+            if (BACKUP_JUNK_PATH_RE.test(path)) continue;
+            const rawName = (img?.getAttribute('alt') || link?.getAttribute('alt') || link?.getAttribute('title') || link?.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!rawName || BACKUP_JUNK_NAME_RE.test(rawName)) continue;
+            const code = backupCodeFrom(href, rawName);
+            const name = backupCleanTitle(rawName, code) || backupCleanTitle(rawName, '');
+            if (!name) continue;
+            const thumb = backupImageUrl(img);
+            if (!code && !thumb) continue;
+            if (seen.has(href)) continue;
+            seen.add(href);
+            out.push({ name, href, code, thumb });
+        }
+        return out;
+    }
+    function isJableFavorites(source) {
+        if (!IS_JABLE) return false;
+        const raw = String(source || '').trim();
+        if (!raw) return false;
+        try {
+            if (/favourites?/i.test(new URL(raw, location.origin).pathname)) return true;
+        } catch (_) {
+        }
+        return /favourites?/i.test(raw);
+    }
+    function parseJableFavoriteCards(html) {
+        if (!html) return [];
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(html, 'text/html');
+        } catch (_) {
+            return [];
+        }
+        if (!doc) return [];
+        const out = [];
+        const seen = new Set();
+        const push = node => {
+            if (!node) return;
+            const link = node.querySelector?.('a[href*="/videos/"]') || node.querySelector?.('a[href*="/video/"]') || (node.matches?.('a[href]') ? node : null);
+            const href = backupAbsUrl(link?.getAttribute?.('href') || '');
+            if (!href || !/\/videos?\//i.test(href) || seen.has(href)) return;
+            const img = node.querySelector?.('img[data-src], img[data-original], img[data-lazy], img[data-lazy-src], img[data-webp], img[src]') || link?.querySelector?.('img');
+            const heading = node.querySelector?.('h6, h5, h4, h3, .title, .video-title, p.title, .detail h6');
+            const code = backupCodeFrom(href, link?.getAttribute?.('title') || img?.getAttribute?.('alt') || '');
+            const candidates = [heading?.textContent, link?.getAttribute?.('title'), img?.getAttribute?.('alt'), link?.textContent];
+            let name = '';
+            for (const candidate of candidates) {
+                const cleaned = backupCleanTitle(candidate, code);
+                if (cleaned && !BACKUP_JUNK_NAME_RE.test(cleaned)) {
+                    if (cleaned.length >= 2) {
+                        name = cleaned;
+                        break;
+                    }
+                    if (!name) name = cleaned;
+                }
+            }
+            if (!name) {
+                for (const candidate of candidates) {
+                    const cleaned = backupCleanTitle(candidate, '');
+                    if (cleaned && !BACKUP_JUNK_NAME_RE.test(cleaned)) {
+                        name = cleaned;
+                        break;
+                    }
+                }
+            }
+            const thumb = backupImageUrl(img);
+            if (!code && !thumb) return;
+            seen.add(href);
+            out.push({ name: name || code, href, code, thumb });
+        };
+        for (const card of doc.querySelectorAll(BACKUP_CARD_SELECTOR)) push(card);
+        if (!out.length) {
+            for (const link of doc.querySelectorAll('a[href*="/videos/"], a[href*="/video/"]')) push(link.closest?.(BACKUP_CARD_SELECTOR) || link.parentElement || link);
+        }
+        return out;
+    }
+    function backupSplitNames(text) {
+        const out = [];
+        for (const part of String(text ?? '').split(/[,、/|]+/)) {
+            const name = part.replace(/\s+/g, ' ').trim();
+            if (name && name.length <= 40 && !out.includes(name)) out.push(name);
+        }
+        return out;
+    }
+    function parseBackupDetail(html) {
+        const out = { title: '', code: '', actress: [], genre: [], maker: '', cover: '' };
+        if (!html) return out;
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(html, 'text/html');
+        } catch (_) {
+            return out;
+        }
+        if (!doc) return out;
+        const rows = doc.querySelectorAll('.text-secondary, .video-info-row, .info-row, li, div.space-y-2 > div');
+        for (const row of rows) {
+            const labelSelf = row.matches?.('.text-secondary, .label, dt') ? row : null;
+            const labelEl = labelSelf || row.querySelector('span:first-child, dt, .label, .text-secondary');
+            const label = (labelEl?.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!label) continue;
+            const links = Array.from(row.querySelectorAll('a'));
+            const valueEl = labelSelf ? labelSelf.nextElementSibling : (row.querySelector('.font-medium, dd, .value') || links[0] || row.querySelector('span:last-child'));
+            const value = (valueEl?.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!value) continue;
+            const linkText = () => {
+                const texts = links.map(anchor => (anchor.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+                return texts.length ? texts : [value];
+            };
+            if (!out.title && /^(?:Title|標題|标题|タイトル|作品名)\s*[:：]?$/i.test(label)) out.title = value;
+            else if (/^(?:Code|品番|番号|番號)\s*[:：]?$/i.test(label)) out.code = normalizeVideoCode(value);
+            else if (/^(?:Actress|Actors?|Cast|主演|演員|演员|女優|女优|モデル)\s*[:：]?$/i.test(label)) {
+                for (const name of linkText()) {
+                    for (const part of backupSplitNames(name)) {
+                        const valid = backupValidEntity(part);
+                        if (valid && !out.actress.includes(valid)) out.actress.push(valid);
+                    }
+                }
+            } else if (/^(?:Genre|Tag|Tags|類別|类别|類型|类型|主題|主题|標籤|标签|ジャンル)\s*[:：]?$/i.test(label)) {
+                for (const name of linkText()) {
+                    for (const part of backupSplitNames(name)) {
+                        const valid = backupValidEntity(part);
+                        if (valid && !out.genre.includes(valid)) out.genre.push(valid);
+                    }
+                }
+            } else if (/^(?:Maker|Studio|Label|Company|メーカー|メーカ|スタジオ|片商|廠商|厂商|制作|製作|發行商|发行商)\s*[:：]?$/i.test(label)) out.maker = backupValidEntity(value);
+        }
+        if (!out.actress.length) {
+            for (const anchor of doc.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"], a[href*="/actors/"], a[href*="/actor/"], a[href*="/models/"], a[href*="/model/"], a[href*="/stars/"], a[href*="/star/"]')) {
+                const href = anchor.getAttribute('href') || '';
+                const slug = backupEntitySlug(href);
+                if (!slug) continue;
+                const text = backupValidEntity(anchor.textContent);
+                const name = text && !/(?:…|\.\.\.)$/.test(text) ? text : slug;
+                const valid = backupValidEntity(name);
+                if (valid && !out.actress.includes(valid)) out.actress.push(valid);
+            }
+        }
+        if (!out.genre.length) {
+            for (const anchor of doc.querySelectorAll('a[href*="/genres/"], a[href*="/genre/"], a[href*="/categories/"], a[href*="/category/"], a[href*="/themes/"], a[href*="/theme/"], a[href*="/tags/"], a[href*="/tag/"]')) {
+                const href = anchor.getAttribute('href') || '';
+                if (!backupEntitySlug(href)) continue;
+                const valid = backupValidEntity(anchor.textContent);
+                if (valid && !out.genre.includes(valid)) out.genre.push(valid);
+            }
+        }
+        if (!out.maker) {
+            const anchor = Array.from(doc.querySelectorAll('a[href*="/makers/"], a[href*="/maker/"], a[href*="/companies/"], a[href*="/company/"], a[href*="/studios/"], a[href*="/studio/"], a[href*="/labels/"], a[href*="/label/"]')).find(node => backupEntitySlug(node.getAttribute('href')));
+            out.maker = backupValidEntity(anchor?.textContent);
+        }
+        if (!out.title) out.title = (doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || '').replace(/\s+/g, ' ').trim();
+        out.cover = backupAbsUrl(doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || '');
+        return out;
+    }
+    function favoritePageUrl(base, page) {
+        const clean = String(base || '').split('#')[0].replace(/([?&])page=\d+&?/i, '$1').replace(/[?&]$/, '');
+        return `${clean}${clean.includes('?') ? '&' : '?'}page=${page}`;
+    }
+    function backupLinksFromJson(text) {
+        const found = [];
+        let payload = null;
+        try {
+            payload = JSON.parse(text);
+        } catch (_) {
+            return found;
+        }
+        const html = typeof payload === 'string' ? '' : (payload?.data?.html || payload?.html || payload?.content || payload?.data?.content || '');
+        if (typeof html === 'string' && /<(?:div|a|article|li)\b/i.test(html)) found.push({ html });
+        const seen = new Set();
+        const walk = (node, depth) => {
+            if (!node || depth > 6) return;
+            if (Array.isArray(node)) {
+                for (const child of node) walk(child, depth + 1);
+                return;
+            }
+            if (typeof node !== 'object') return;
+            const raw = node.url || node.href || node.link || node.permalink || node.video_url || '';
+            const href = typeof raw === 'string' ? raw : '';
+            if (/\/videos?\//i.test(href) && !seen.has(href)) {
+                seen.add(href);
+                found.push({
+                    href,
+                    name: String(node.title || node.name || node.video_title || node.post_title || ''),
+                    thumb: String(node.thumb || node.thumbnail || node.image || node.cover || node.poster || node.screenshot || '')
+                });
+            }
+            for (const key of Object.keys(node)) {
+                const value = node[key];
+                if (value && typeof value === 'object') walk(value, depth + 1);
+            }
+        };
+        walk(payload, 0);
+        if (!found.length) {
+            for (const match of String(text).matchAll(/["'](\/videos?\/[^"'\\\s]+)["']/g)) {
+                if (seen.has(match[1])) continue;
+                seen.add(match[1]);
+                found.push({ href: match[1], name: '', thumb: '' });
+            }
+        }
+        return found;
+    }
+    function favoriteCardsFromPayload(text, jableList) {
+        const raw = typeof text === 'string' ? text.trim() : '';
+        if (!raw) return [];
+        if (raw.startsWith('{') || raw.startsWith('[')) {
+            const out = [];
+            const seen = new Set();
+            for (const part of backupLinksFromJson(raw)) {
+                const cards = part.html ? (jableList ? parseJableFavoriteCards(part.html) : parseFavoriteCards(part.html)) : [part];
+                for (const card of cards) {
+                    const href = backupAbsUrl(card.href || '');
+                    if (!href || seen.has(href)) continue;
+                    seen.add(href);
+                    out.push({ name: card.name || '', href, code: backupCodeFrom(href, card.name || ''), thumb: card.thumb || '' });
+                }
+            }
+            return out;
+        }
+        return jableList ? parseJableFavoriteCards(raw) : parseFavoriteCards(raw);
+    }
+    function favoriteMaxPage(html) {
+        if (!html) return 0;
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(html, 'text/html');
+        } catch (_) {
+            return 0;
+        }
+        if (!doc) return 0;
+        let max = 0;
+        for (const anchor of doc.querySelectorAll('a[href*="page="], a[href*="/page/"]')) {
+            const href = anchor.getAttribute('href') || '';
+            const match = /[?&]page=(\d+)/i.exec(href) || /\/page\/(\d+)\/?/i.exec(href);
+            if (match) max = Math.max(max, Number.parseInt(match[1], 10) || 0);
+        }
+        if (!max) {
+            for (const anchor of doc.querySelectorAll('.pagination .page-link, .pagination a[href*="#"], .page-item a, .pager a')) {
+                const text = (anchor.textContent || '').replace(/\s+/g, '');
+                const match = /^(\d{1,3})$/.exec(text);
+                if (!match) continue;
+                max = Math.max(max, Number.parseInt(match[1], 10) || 0);
+            }
+        }
+        return max;
+    }
+    function favoritePagerLink(doc, page) {
+        if (!doc?.querySelectorAll) return null;
+        const links = Array.from(doc.querySelectorAll('ul.pagination a[href], .pagination a[href], .page-item a[href], nav.pagination a[href], a.page-link[href]'));
+        if (!links.length) return null;
+        const label = link => `${link.getAttribute('aria-label') || ''} ${link.getAttribute('title') || ''} ${(link.textContent || '').replace(/\s+/g, '')}`.trim();
+        const rel = link => String(link.getAttribute('rel') || '');
+        const number = Number(page);
+        const byText = links.find(link => (link.textContent || '').replace(/\s+/g, '').replace(/^0+(?=\d)/, '') === String(number));
+        if (byText) return byText;
+        const byHref = links.find(link => {
+            const href = link.getAttribute('href') || '';
+            const match = /[?&](?:page|paged|page_num|p)=(\d+)/i.exec(href) || /\/page\/(\d+)\/?/i.exec(href);
+            return Boolean(match) && Number.parseInt(match[1], 10) === number;
+        });
+        if (byHref) return byHref;
+        if (number === 1) return links.find(link => /(?:^|\s)first(?:\s|$)/i.test(rel(link)) || /(?:首頁|首页|第一頁|第一页|first)/i.test(label(link))) || null;
+        return links.find(link => /(?:^|\s)next(?:\s|$)/i.test(rel(link)) || /(?:next|下一頁|下一页|次頁|次页|次へ)/i.test(label(link))) || null;
+    }
+    function favoriteLiveScope() {
+        const marked = document.querySelector('#list_videos_my_favourite_videos, .list_videos_my_favourite_videos');
+        if (marked) return marked;
+        const pager = document.querySelector('ul.pagination, .pagination');
+        const link = document.querySelector('a[href*="/videos/"]');
+        if (pager && link) {
+            let node = link.parentElement;
+            while (node && node !== document.body) {
+                if (node.contains?.(pager)) return node;
+                node = node.parentElement;
+            }
+        }
+        return document.querySelector('div.row.gutter-20') || null;
+    }
+    async function favoriteLivePagerCards(limit, ui, seen) {
+        if (!document?.body || !/favourites?/i.test(location.pathname)) return [];
+        if (!favoriteLiveScope()) return [];
+        const out = [];
+        const known = new Set(seen || []);
+        const scopeCards = scope => {
+            try {
+                return Array.from(scope.querySelectorAll('a[href*="/videos/"]'));
+            } catch (_) {
+                return [];
+            }
+        };
+        const read = () => {
+            const scope = favoriteLiveScope();
+            if (!scope) return [];
+            try {
+                return parseJableFavoriteCards(scope.outerHTML);
+            } catch (_) {
+                return [];
+            }
+        };
+        const signature = () => {
+            const scope = favoriteLiveScope();
+            if (!scope) return '';
+            const links = scopeCards(scope).slice(0, 12).map(link => link.getAttribute('href') || '');
+            if (links.length) return links.join('|');
+            return (scope.textContent || '').replace(/\s+/g, '').slice(0, 60);
+        };
+        const collect = cards => {
+            let added = 0;
+            for (const card of cards) {
+                if (out.length >= limit) break;
+                if (known.has(card.href)) continue;
+                known.add(card.href);
+                out.push(card);
+                added++;
+            }
+            return added;
+        };
+        const waitChange = async (before, tries) => {
+            for (let index = 0; index < tries; index++) {
+                await backupSleep(250);
+                if (ui.cancelled) return false;
+                const now = signature();
+                if (now && now !== before) return true;
+            }
+            return false;
+        };
+        collect(read());
+        const baseCount = known.size - out.length;
+        const startScope = favoriteLiveScope();
+        backupLog(`🪟 页内翻页起点：容器链接 ${scopeCards(startScope).length} 条，已知 ${known.size} 条，本次新增 ${out.length} 条`);
+        let page = 1;
+        while (!ui.cancelled && out.length < limit) {
+            const target = favoritePagerLink(document, page + 1);
+            if (!target) {
+                backupLog('🪟 页内已没有可点的下一页，停止抓取');
+                break;
+            }
+            const href = target.getAttribute('href') || '';
+            if (href && !/^#/.test(href) && !/^javascript:/i.test(href)) {
+                backupLog('🪟 页内翻页需要真实跳转，改走隐藏框架');
+                break;
+            }
+            const before = signature();
+            try {
+                target.click();
+            } catch (_) {
+                break;
+            }
+            if (!(await waitChange(before, 48))) {
+                const scope = favoriteLiveScope();
+                backupLog(`🪟 页内翻页第 ${page + 1} 页没有读到新条目（当前容器链接 ${scopeCards(scope).length} 条）`);
+                break;
+            }
+            page++;
+            const added = collect(read());
+            backupLog(`🪟 页内翻页第 ${page} 页：新增 ${added} 条，累计新增 ${out.length} 条`);
+            setBackupProgress(ui, Math.min(0.4, ((baseCount + out.length) / limit) * 0.4));
+            if (!added) {
+                backupLog('🪟 页内翻页没有再新增条目，停止抓取');
+                break;
+            }
+            await backupSleep(240);
+        }
+        if (page > 1 && !ui.cancelled) {
+            const home = favoritePagerLink(document, 1);
+            if (home) {
+                const before = signature();
+                try {
+                    home.click();
+                    await waitChange(before, 24);
+                } catch (_) {
+                    backupLog('🪟 页内抓取完成，但切回第 1 页失败');
+                }
+                backupLog('🪟 已切回收藏第 1 页');
+            }
+        }
+        return out;
+    }
+    function favoriteSourceGuess() {
+        const here = location.href.split('#')[0];
+        if (IS_JABLE && /favourites?/i.test(here)) return here.split('?')[0];
+        if (/favorite|favourite|collection|playlist|bookmark|mark|收藏|片单|片單/i.test(here)) return here.split('?')[0];
+        if (IS_JABLE) return `${location.origin}${JABLE_FAVORITES_PATH}`;
+        const seg = location.pathname.split('/').filter(Boolean)[0] || '';
+        const lang = /^(?:en|zh|cn|ja|ko|tw)$/i.test(seg) ? `/${seg}` : '';
+        return `${location.origin}${lang}/favorites`;
+    }
+    async function resolveFavoriteSource(explicit, ui) {
+        const typed = String(explicit || '').trim();
+        if (typed) return typed;
+        if (/favorite|favourite|collection|playlist|bookmark|mark|收藏|片单|片單/i.test(location.href)) return location.href.split('#')[0];
+        if (IS_JABLE) {
+            const candidates = [`${location.origin}${JABLE_FAVORITES_PATH}`, `${location.origin}/my/favourites/`, `${location.origin}/favorites`];
+            for (const url of candidates) {
+                if (ui?.cancelled) return '';
+                backupLog(`🔍 探测收藏页：${url}`);
+                try {
+                    const html = await gmRequest(url, { timeout: 15000 });
+                    if (parseJableFavoriteCards(html).length) return url;
+                } catch (_) {
+                }
+                await backupSleep(160);
+            }
+            backupLog('⚠️ 未自动识别收藏页，请在“收藏页”输入框粘贴地址');
+            return `${location.origin}${JABLE_FAVORITES_PATH}`;
+        }
+        const seg = location.pathname.split('/').filter(Boolean)[0] || '';
+        const lang = /^(?:en|zh|cn|ja|ko|tw)$/i.test(seg) ? `/${seg}` : '';
+        const candidates = [
+            `${location.origin}${lang}/favorites`,
+            `${location.origin}/favorites`,
+            `${location.origin}${lang}/my/favorites`,
+            `${location.origin}/my/collections`,
+            `${location.origin}${lang}/collections`
+        ];
+        for (const url of candidates) {
+            if (ui?.cancelled) return '';
+            backupLog(`🔍 探测收藏页：${url}`);
+            try {
+                const html = await gmRequest(url, { timeout: 15000 });
+                if (parseFavoriteCards(html).length) return url;
+            } catch (_) {
+            }
+            await backupSleep(160);
+        }
+        backupLog('⚠️ 未自动识别收藏页，请在“收藏页”输入框粘贴地址');
+        return candidates[1];
+    }
+    async function collectFavoriteItems({ base, limit, ui }) {
+        const out = [];
+        const seen = new Set();
+        const jableList = isJableFavorites(base);
+        const perPage = 24;
+        const maxPages = Math.min(120, Math.max(2, Math.ceil(limit / perPage) + 2));
+        const adopt = cards => {
+            let added = 0;
+            for (const card of cards) {
+                if (out.length >= limit) break;
+                if (seen.has(card.href)) continue;
+                seen.add(card.href);
+                out.push(card);
+                added++;
+            }
+            return added;
+        };
+        const finish = () => {
+            if (out.length >= limit) backupLog(`⚠️ 已到数量上限 ${limit}，要备份全部请把上限调大`);
+            return out;
+        };
+        if (jableList) {
+            backupLog('🪟 Jable 使用页面内翻页：请保持在收藏第 1 页');
+            const added = adopt(await favoriteLivePagerCards(limit, ui, seen));
+            if (added) backupLog(`🪟 Jable 页内翻页完成，共 ${out.length} 条`);
+            else backupLog('⚠️ 当前页面没有找到收藏列表，请先回到收藏第 1 页再开始备份');
+            return finish();
+        }
+        let declaredPages = 0;
+        let lastSnippet = '';
+        for (let page = 1; page <= maxPages; page++) {
+            if (ui.cancelled) break;
+            const url = favoritePageUrl(base, page);
+            backupLog(`📥 第 ${page} 页：${url}`);
+            let payload = '';
+            try {
+                payload = await gmRequest(url, { timeout: 20000 });
+            } catch (error) {
+                backupLog(`⚠️ 第 ${page} 页读取失败：${error?.message || error}`);
+                break;
+            }
+            const text = typeof payload === 'string' ? payload : '';
+            lastSnippet = text.replace(/\s+/g, ' ').slice(0, 120);
+            if (!declaredPages) {
+                declaredPages = favoriteMaxPage(text);
+                if (declaredPages > 1) backupLog(`🧭 收藏页共 ${declaredPages} 页（每页约 ${perPage} 条）`);
+            }
+            const added = adopt(favoriteCardsFromPayload(text, jableList));
+            if (!added) {
+                if (page === 1) backupLog('⚠️ 该地址没有解析到收藏卡片，请确认已登录并在收藏页地址栏粘贴正确地址');
+                else {
+                    backupLog(`🏁 第 ${page} 页没有新条目，分页结束，共 ${out.length} 条`);
+                    if (lastSnippet) backupLog(`🧪 末次响应片段：${lastSnippet}`);
+                }
+                break;
+            }
+            backupLog(`📄 第 ${page} 页新增 ${added} 条，累计 ${out.length} 条`);
+            setBackupProgress(ui, Math.min(0.4, (out.length / limit) * 0.4));
+            if (out.length >= limit) break;
+            await backupSleep(240);
+        }
+        if (declaredPages && out.length < limit && out.length < declaredPages * perPage) backupLog(`⚠️ 站点声明 ${declaredPages} 页，本次只收到 ${out.length} 条，后续页可能被登录态或反爬拦截`);
+        return finish();
+    }
+    async function fillFavoriteDetails(items, fields, ui) {
+        const wantName = fields.has('name');
+        const wantThumb = fields.has('thumb');
+        const wantActress = fields.has('actress');
+        const wantGenre = fields.has('genre');
+        const wantMaker = fields.has('maker');
+        const wantMeta = wantActress || wantGenre || wantMaker;
+        if (!wantName && !wantThumb && !wantMeta) return;
+        let done = 0;
+        for (const item of items) {
+            if (ui.cancelled) break;
+            const nameMissing = () => !item.name || item.name === item.code || BACKUP_DATE_TEXT_RE.test(item.name);
+            const clearMeta = () => {
+                if (wantActress) item.actress = [];
+                if (wantGenre) item.genre = [];
+                if (wantMaker) item.maker = '';
+            };
+            let siteDone = false;
+            const readSite = async () => {
+                if (siteDone) return;
+                siteDone = true;
+                try {
+                    const html = await gmRequest(item.href, { timeout: 20000 });
+                    const detail = parseBackupDetail(html);
+                    if (detail) {
+                        if (detail.code) item.code = detail.code;
+                        if (wantName && nameMissing()) {
+                            const detailName = backupCleanTitle(detail.title, item.code);
+                            if (detailName) item.name = detailName;
+                        }
+                        if (wantThumb && !item.thumb && detail.cover) item.thumb = detail.cover;
+                    }
+                } catch (_) {
+                    backupLog(`⚠️ 站点详情读取失败：${item.code || item.name}`);
+                }
+            };
+            const readJavDb = async () => {
+                if (!item.code) return false;
+                const info = await fetchJavDbBackupInfo(item.code);
+                if (!info) {
+                    clearMeta();
+                    backupLog(`⚠️ JavDB 未找到：${item.code}`);
+                    return false;
+                }
+                if (wantName && nameMissing()) {
+                    const infoName = backupCleanTitle(info.title, item.code);
+                    if (infoName) item.name = infoName;
+                }
+                if (wantThumb && !item.thumb && info.cover) item.thumb = info.cover;
+                if (wantActress) item.actress = info.actress;
+                if (wantGenre) item.genre = info.genre;
+                if (wantMaker) item.maker = info.maker;
+                return true;
+            };
+            if (item.code) {
+                await readJavDb();
+            } else if (wantMeta) {
+                await readSite();
+                if (!item.code) item.code = backupCodeFrom(item.href, item.name);
+                if (item.code) await readJavDb();
+                else {
+                    clearMeta();
+                    backupLog(`⚠️ 缺少番号，无法到 JavDB 查询：${item.name || item.href}`);
+                }
+            }
+            if (!siteDone && ((wantName && nameMissing()) || (wantThumb && !item.thumb))) await readSite();
+            done++;
+            setBackupProgress(ui, 0.4 + 0.3 * (done / items.length));
+            if (done % 5 === 0 || done === items.length) backupLog(`🧾 详情 ${done}/${items.length}`);
+            await backupSleep(200);
+        }
+    }
+    function backupCsvCell(value) {
+        const text = String(value ?? '');
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+    function backupRows(items, fields, thumbNames) {
+        return items.map(item => {
+            const row = { 链接: item.href };
+            if (fields.has('name')) row.名称 = item.name || '';
+            if (fields.has('code')) row.番号 = item.code || '';
+            if (fields.has('actress')) row.女优 = (item.actress || []).join('、');
+            if (fields.has('genre')) row.类型 = (item.genre || []).join('、');
+            if (fields.has('maker')) row.发行商 = item.maker || '';
+            if (fields.has('thumb')) row.缩略图 = thumbNames.get(item) || '';
+            return row;
+        });
+    }
+    function backupFileStem(item, index) {
+        const base = sanitizeBackupName(item.code || item.name, `video-${index}`);
+        return `${String(index).padStart(3, '0')}_${base}`;
+    }
+    async function buildBackupEntries(items, fields, ui) {
+        const imageEntries = [];
+        const thumbNames = new Map();
+        if (fields.has('thumb')) {
+            let done = 0;
+            for (const item of items) {
+                if (ui.cancelled) break;
+                let image = item.thumb ? await fetchBackupImage(item.thumb, item.href) : null;
+                if (!image && item.code) {
+                    const info = await fetchJavDbBackupInfo(item.code);
+                    if (info?.cover) {
+                        if (!item.thumb) item.thumb = info.cover;
+                        image = await fetchBackupImage(info.cover, 'https://javdb.com/');
+                    }
+                }
+                if (image) {
+                    const path = `img/${backupFileStem(item, items.indexOf(item) + 1)}.${image.ext}`;
+                    imageEntries.push({ name: path, data: image.bytes });
+                    thumbNames.set(item, path);
+                } else {
+                    backupLog(`⚠️ 缩略图下载失败：${item.code || item.name}`);
+                }
+                done++;
+                setBackupProgress(ui, 0.7 + 0.3 * (done / items.length));
+                if (done % 5 === 0 || done === items.length) backupLog(`🖼 缩略图 ${done}/${items.length}`);
+                await backupSleep(120);
+            }
+        }
+        const rows = backupRows(items, fields, thumbNames);
+        const entries = [];
+        if (rows.length) {
+            const headers = Object.keys(rows[0]);
+            const csv = [headers.join(','), ...rows.map(row => headers.map(key => backupCsvCell(row[key])).join(','))].join('\r\n');
+            entries.push({ name: 'info.csv', data: `\uFEFF${csv}\r\n` });
+            entries.push({
+                name: 'info.json',
+                data: JSON.stringify({ exportedAt: new Date().toISOString(), count: rows.length, items: rows }, null, 2)
+            });
+        }
+        for (const entry of imageEntries) entries.push(entry);
+        return entries;
+    }
+    let zipCrcTable = null;
+    function backupCrc32(bytes) {
+        if (!zipCrcTable) {
+            zipCrcTable = new Uint32Array(256);
+            for (let i = 0; i < 256; i++) {
+                let value = i;
+                for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+                zipCrcTable[i] = value >>> 0;
+            }
+        }
+        let crc = -1;
+        for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ zipCrcTable[(crc ^ bytes[i]) & 0xff];
+        return (crc ^ -1) >>> 0;
+    }
+    function buildBackupZip(entries) {
+        const encoder = new TextEncoder();
+        const locals = [];
+        const central = [];
+        let offset = 0;
+        for (const entry of entries) {
+            const nameBytes = encoder.encode(entry.name);
+            const data = entry.data instanceof Uint8Array ? entry.data : encoder.encode(String(entry.data ?? ''));
+            const crc = backupCrc32(data);
+            const local = new Uint8Array(30 + nameBytes.length);
+            const lv = new DataView(local.buffer);
+            lv.setUint32(0, 0x04034b50, true);
+            lv.setUint16(4, 20, true);
+            lv.setUint16(6, 0x0800, true);
+            lv.setUint16(8, 0, true);
+            lv.setUint32(14, crc, true);
+            lv.setUint32(18, data.length, true);
+            lv.setUint32(22, data.length, true);
+            lv.setUint16(26, nameBytes.length, true);
+            local.set(nameBytes, 30);
+            locals.push(local, data);
+            const cd = new Uint8Array(46 + nameBytes.length);
+            const cv = new DataView(cd.buffer);
+            cv.setUint32(0, 0x02014b50, true);
+            cv.setUint16(4, 20, true);
+            cv.setUint16(6, 20, true);
+            cv.setUint16(8, 0x0800, true);
+            cv.setUint32(16, crc, true);
+            cv.setUint32(20, data.length, true);
+            cv.setUint32(24, data.length, true);
+            cv.setUint16(28, nameBytes.length, true);
+            cv.setUint32(42, offset, true);
+            cd.set(nameBytes, 46);
+            central.push(cd);
+            offset += local.length + data.length;
+        }
+        let centralSize = 0;
+        for (const record of central) centralSize += record.length;
+        const end = new Uint8Array(22);
+        const ev = new DataView(end.buffer);
+        ev.setUint32(0, 0x06054b50, true);
+        ev.setUint16(8, central.length, true);
+        ev.setUint16(10, central.length, true);
+        ev.setUint32(12, centralSize, true);
+        ev.setUint32(16, offset, true);
+        const parts = [...locals, ...central, end];
+        let total = 0;
+        for (const part of parts) total += part.length;
+        const out = new Uint8Array(total);
+        let pos = 0;
+        for (const part of parts) {
+            out.set(part, pos);
+            pos += part.length;
+        }
+        return out;
+    }
+    function triggerBlobDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+    function backupStamp() {
+        const now = new Date();
+        const pad = value => String(value).padStart(2, '0');
+        return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+    }
+    function formatBytes(size) {
+        const bytes = Number(size) || 0;
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+    }
+    function backupSelectedFields() {
+        const ui = state.favoriteBackup;
+        const out = new Set();
+        if (!ui?.inputs) return out;
+        for (const field of BACKUP_FIELDS) if (ui.inputs[field.key]?.checked) out.add(field.key);
+        return out;
+    }
+    function syncBackupFields() {
+        const ui = state.favoriteBackup;
+        if (!ui?.inputs) return;
+        for (const field of BACKUP_FIELDS) {
+            const input = ui.inputs[field.key];
+            input?.closest('.av-backup-field')?.classList.toggle('is-on', !!input.checked);
+        }
+    }
+    function clampBackupPosition(win) {
+        if (!win) return;
+        const rect = win.getBoundingClientRect?.() || { width: 0, height: 0 };
+        const maxX = Math.max(0, window.innerWidth - rect.width - 8);
+        const maxY = Math.max(0, window.innerHeight - Math.min(rect.height, window.innerHeight) - 8);
+        const x = clamp(Number.parseFloat(win.style.left) || 0, 0, maxX);
+        const y = clamp(Number.parseFloat(win.style.top) || 0, 0, maxY);
+        win.style.left = `${x}px`;
+        win.style.top = `${y}px`;
+        settings.backupX = x;
+        settings.backupY = y;
+        store.set('backupX', x);
+        store.set('backupY', y);
+    }
+    function stopFavoriteBackup() {
+        const ui = state.favoriteBackup;
+        if (!ui?.running) return;
+        ui.cancelled = true;
+        backupLog('⏹ 已请求停止，将在当前步骤后中断');
+    }
+    async function startFavoriteBackup() {
+        const ui = state.favoriteBackup;
+        if (!ui || ui.running) return;
+        const fields = backupSelectedFields();
+        if (!fields.size) {
+            backupLog('⚠️ 请至少勾选一项要备份的内容');
+            return;
+        }
+        const limit = Math.round(clamp(Number.parseInt(ui.limitInput.value, 10) || 50, 1, 2000));
+        ui.limitInput.value = String(limit);
+        settings.backupFields = [...fields].join(',');
+        settings.backupLimit = limit;
+        settings.backupSource = ui.sourceInput.value.trim();
+        persistSettings();
+        ui.running = true;
+        ui.cancelled = false;
+        setBackupBusy(ui, true);
+        setBackupProgress(ui, 0);
+        backupLog(`🚀 开始备份（${[...fields].join('、')}，上限 ${limit} 条）`);
+        try {
+            const source = await resolveFavoriteSource(settings.backupSource, ui);
+            if (!source) {
+                backupLog('⏹ 已停止');
+                return;
+            }
+            ui.sourceInput.value = source;
+            const items = await collectFavoriteItems({ base: source, limit, ui });
+            if (ui.cancelled) {
+                backupLog('⏹ 已停止');
+                return;
+            }
+            if (!items.length) {
+                backupLog('⚠️ 没有可备份的收藏，请确认已登录并在收藏页地址栏粘贴正确地址');
+                return;
+            }
+            backupLog(`✅ 收藏列表完成：${items.length} 条`);
+            await fillFavoriteDetails(items, fields, ui);
+            if (ui.cancelled) {
+                backupLog('⏹ 已停止');
+                return;
+            }
+            const entries = await buildBackupEntries(items, fields, ui);
+            if (ui.cancelled) {
+                backupLog('⏹ 已停止');
+                return;
+            }
+            const zip = buildBackupZip(entries);
+            const filename = `收藏备份_${backupStamp()}.zip`;
+            triggerBlobDownload(new Blob([zip], { type: 'application/zip' }), filename);
+            setBackupProgress(ui, 1);
+            backupLog(`💾 已导出 ${filename}（${entries.length} 个文件，${formatBytes(zip.length)}）`);
+            log(`💾 收藏备份完成：${items.length} 条`);
+        } catch (error) {
+            backupLog(`❌ 备份失败：${error?.message || error}`);
+        } finally {
+            ui.running = false;
+            setBackupBusy(ui, false);
+        }
+    }
+    function closeFavoriteBackup() {
+        const ui = state.favoriteBackup;
+        if (!ui) return;
+        ui.cancelled = true;
+        ui.win?.remove();
+        state.favoriteBackup = null;
+    }
+    function openFavoriteBackup() {
+        const existing = state.favoriteBackup?.win;
+        if (existing?.isConnected) {
+            const hidden = existing.style.display === 'none';
+            existing.style.display = hidden ? 'block' : 'none';
+            if (hidden) clampBackupPosition(existing);
+            return;
+        }
+        const win = document.createElement('div');
+        win.className = 'av-backup-window';
+        const header = document.createElement('div');
+        header.className = 'av-backup-header';
+        const title = document.createElement('span');
+        title.className = 'av-backup-title';
+        title.textContent = '收藏批量备份';
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'av-backup-close';
+        closeBtn.textContent = '[关闭]';
+        closeBtn.addEventListener('click', closeFavoriteBackup);
+        header.append(title, closeBtn);
+        const fieldsWrap = document.createElement('div');
+        fieldsWrap.className = 'av-backup-fields';
+        const saved = new Set(String(settings.backupFields || '').split(',').map(item => item.trim()).filter(Boolean));
+        const inputs = {};
+        for (const field of BACKUP_FIELDS) {
+            const label = document.createElement('label');
+            label.className = 'av-backup-field';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = saved.has(field.key);
+            input.addEventListener('change', () => {
+                syncBackupFields();
+                settings.backupFields = [...backupSelectedFields()].join(',');
+                store.set('backupFields', settings.backupFields);
+            });
+            const text = document.createElement('span');
+            text.textContent = field.label;
+            label.append(input, text);
+            label.addEventListener('mousedown', event => event.stopPropagation());
+            fieldsWrap.appendChild(label);
+            inputs[field.key] = input;
+        }
+        const sourceLine = document.createElement('div');
+        sourceLine.className = 'av-backup-line';
+        const sourceLabel = document.createElement('span');
+        sourceLabel.textContent = '收藏页';
+        const sourceInput = document.createElement('input');
+        sourceInput.type = 'text';
+        sourceInput.placeholder = '留空自动识别，或粘贴收藏/片单地址';
+        sourceInput.value = settings.backupSource || (IS_JABLE ? `${location.origin}${JABLE_FAVORITES_PATH}` : '');
+        sourceLine.append(sourceLabel, sourceInput);
+        const limitLine = document.createElement('div');
+        limitLine.className = 'av-backup-line';
+        const limitLabel = document.createElement('span');
+        limitLabel.textContent = '数量上限';
+        const limitInput = document.createElement('input');
+        limitInput.type = 'number';
+        limitInput.min = '1';
+        limitInput.max = '2000';
+        limitInput.step = '1';
+        limitInput.value = String(settings.backupLimit || 50);
+        limitLine.append(limitLabel, limitInput);
+        const actions = document.createElement('div');
+        actions.className = 'av-backup-actions';
+        const startBtn = document.createElement('button');
+        startBtn.type = 'button';
+        startBtn.className = 'av-backup-btn primary';
+        startBtn.textContent = '开始备份';
+        startBtn.addEventListener('click', startFavoriteBackup);
+        const stopBtn = document.createElement('button');
+        stopBtn.type = 'button';
+        stopBtn.className = 'av-backup-btn';
+        stopBtn.textContent = '停止';
+        stopBtn.disabled = true;
+        stopBtn.addEventListener('click', stopFavoriteBackup);
+        actions.append(startBtn, stopBtn);
+        const progress = document.createElement('div');
+        progress.className = 'av-backup-progress';
+        const bar = document.createElement('i');
+        progress.appendChild(bar);
+        const logEl = document.createElement('div');
+        logEl.className = 'av-backup-log';
+        const hint = document.createElement('div');
+        hint.className = 'av-backup-hint';
+        hint.textContent = '番号、名称、缩略图取自收藏列表，女优、类型、发行商一律到 JavDB 搜索下载；列表缺名称或缩略图时才到 JavDB 找。Jable 请停留在收藏第 1 页再开始抓取，输出 info.csv、info.json 与缩略图。';
+        win.append(header, fieldsWrap, sourceLine, limitLine, actions, progress, logEl, hint);
+        for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
+            win.addEventListener(type, event => event.stopPropagation());
+        }
+        getUiLayer(2147483646).appendChild(win);
+        state.favoriteBackup = { win, inputs, sourceInput, limitInput, startBtn, stopBtn, bar, logEl, running: false, cancelled: false };
+        syncBackupFields();
+        if (Number.isFinite(settings.backupX) && Number.isFinite(settings.backupY)) {
+            win.style.left = `${settings.backupX}px`;
+            win.style.top = `${settings.backupY}px`;
+        } else {
+            win.style.left = '15px';
+            win.style.top = Math.round(Math.max(16, window.innerHeight * 0.12)) + 'px';
+        }
+        applyUiStyles();
+        makeDraggable(win, header, { x: 'backupX', y: 'backupY' }, () => clampBackupPosition(win));
+        clampBackupPosition(win);
+        backupLog(`📌 当前收藏页猜测：${favoriteSourceGuess()}`);
     }
     function parseJavBusHtml(html) {
         const stills = [];
@@ -3674,9 +5041,12 @@
         .av-filter-slot { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
         .av-filter-injected-header {
             display: flex;
+            flex: 1 1 100%;
             flex-wrap: wrap;
             align-items: center;
             justify-content: space-between;
+            width: 100%;
+            box-sizing: border-box;
             gap: 8px;
             margin-bottom: 16px;
             padding: 10px 0;
@@ -3759,7 +5129,25 @@
             padding: 10px 0 4px;
             border-top: 1px solid rgba(255, 255, 255, .15);
         }
-        .av-filter-panel[hidden] { display: none; }
+        .av-login-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 10px 0 4px;
+            border-top: 1px solid rgba(255, 255, 255, .15);
+        }
+        .av-login-field { display: flex; flex-direction: column; gap: 4px; }
+        .av-login-field > span { color: #94a3b8; font-size: 11px; font-weight: 600; }
+        .custom-control-panel .av-login-panel input[type="text"],
+        .custom-control-panel .av-login-panel input[type="password"] { width: 100%; height: 28px; padding: 0 8px; border: 1px solid rgba(255,255,255,.3); border-radius: 6px; outline: none; background: rgba(255,255,255,.15); color: #fff; font-family: inherit; font-size: 12px; font-weight: 600; text-align: left; text-transform: none; letter-spacing: 0; text-shadow: none; }
+        .custom-control-panel .av-login-panel input[type="text"]:focus,
+        .custom-control-panel .av-login-panel input[type="password"]:focus { border-color: #60a5fa; background: rgba(255,255,255,.2); }
+        .av-login-status { font-size: 11px; font-weight: 600; color: #94a3b8; }
+        .av-login-status.is-ok { color: #4ade80; }
+        .av-login-status.is-fail { color: #f87171; }
+        .av-login-status.is-warn { color: #fbbf24; }
+        .av-login-status.is-busy { color: #38bdf8; }
         .av-filter-scroll {
             display: flex;
             flex-direction: column;
@@ -4120,7 +5508,7 @@
         const cached = cardParseCache.get(card);
         if (cached && cached.signature === signature) {
             if (!cached.code) return null;
-            return { el: card, code: cached.code, title: cached.title, duration: cached.duration, isWatched: isWatched(cached.code) };
+            return { el: card, code: cached.code, title: cached.title, duration: cached.duration, isWatched: watchedSet().has(cached.code) };
         }
         if (card.querySelectorAll(CARD_INNER_SELECTOR).length > 2) {
             cardParseCache.set(card, { signature, code: '', title: '', duration: 0 });
@@ -4160,7 +5548,7 @@
             }
         }
         cardParseCache.set(card, { signature, code, title, duration });
-        return { el: card, code, title, duration, isWatched: isWatched(code) };
+        return { el: card, code, title, duration, isWatched: watchedSet().has(code) };
     }
     const shellCache = new WeakMap();
     function cardShell(card) {
@@ -4269,7 +5657,7 @@
         const bar = state.filterBar;
         if (!bar) return null;
         const cached = state.filterBarParts;
-        if (cached && cached.bar === bar) return cached;
+        if (cached && cached.bar === bar && bar.isConnected) return cached;
         const parts = {
             bar,
             count: bar.querySelector('.av-fb-count'),
@@ -4395,6 +5783,94 @@
         firstCardCache.card = found;
         return found;
     }
+    const FILTER_GRID_SELECTORS = ['.grid', '.video-list', '[id^="list_videos_"]', '.row.gutter-20', '.row'];
+    function filterGridScope(card) {
+        if (!card) return null;
+        if (card.closest) {
+            for (const selector of FILTER_GRID_SELECTORS) {
+                const found = card.closest(selector);
+                if (found) return found;
+            }
+        }
+        return card.parentElement || null;
+    }
+    function nearestSectionHeader(sections, card) {
+        if (!sections.length) return null;
+        if (!card || !card.getBoundingClientRect) return sections[0];
+        const cardTop = card.getBoundingClientRect().top;
+        let best = null;
+        let bestGap = Infinity;
+        for (const header of sections) {
+            const rect = header.getBoundingClientRect ? header.getBoundingClientRect() : null;
+            if (!rect || rect.height < 1) continue;
+            const gap = Math.abs(cardTop - rect.bottom);
+            if (gap < bestGap) {
+                bestGap = gap;
+                best = header;
+            }
+        }
+        return best || sections[0];
+    }
+    function sectionHeaderSlot(target) {
+        if (!target) return null;
+        let slot = target.tagName === 'SECTION' ? null : target;
+        if (!slot) {
+            for (const child of target.children) {
+                if (child.tagName === 'DIV' && !child.classList.contains('av-filter-host')) {
+                    slot = child;
+                    break;
+                }
+            }
+        }
+        if (!slot) slot = target;
+        return hostSlotUsable(slot) ? slot : null;
+    }
+    function topSectionHeader(sections, card) {
+        if (!IS_JABLE) return null;
+        const pool = sections.slice();
+        for (const title of document.querySelectorAll(SECTION_TITLE_SELECTOR)) {
+            if (title.closest && title.closest(FILTER_ROW_SKIP)) continue;
+            if (pool.indexOf(title) < 0) pool.push(title);
+        }
+        const cardTop = card && card.getBoundingClientRect ? card.getBoundingClientRect().top : 0;
+        pool.sort((a, b) => {
+            const ra = a.getBoundingClientRect ? a.getBoundingClientRect() : null;
+            const rb = b.getBoundingClientRect ? b.getBoundingClientRect() : null;
+            if (!ra || !rb) return 0;
+            return ra.top - rb.top;
+        });
+        for (const header of pool) {
+            const rect = header.getBoundingClientRect ? header.getBoundingClientRect() : null;
+            if (!rect || rect.height < 1 || rect.width < 280) continue;
+            if (cardTop > 0 && rect.top >= cardTop) continue;
+            if (sectionHeaderSlot(header)) return header;
+        }
+        return null;
+    }
+    function hostSlotUsable(node) {
+        const rect = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+        if (!rect || rect.height < 1 || rect.width < 280) return false;
+        return true;
+    }
+    function relocateFilterHost(host, card) {
+        if (!host || !card || !card.closest) return host;
+        if (host.closest('.av-filter-injected-header, .av-filter-inline-row, .profile-nav')) return host;
+        if (!host.closest('header, .site-header, .app-nav, nav')) return host;
+        const grid = filterGridScope(card);
+        if (!grid) return host;
+        const holder = grid.parentElement || document.body;
+        let fallback = holder.querySelector ? holder.querySelector('.av-filter-injected-header') : null;
+        if (!fallback) {
+            fallback = document.createElement('div');
+            fallback.className = 'av-filter-injected-header';
+            if (holder === document.body) holder.insertBefore(fallback, holder.firstChild);
+            else holder.insertBefore(fallback, grid);
+        }
+        host.classList.remove('av-filter-inline');
+        clearInlineRow();
+        if (host.parentElement !== fallback) fallback.appendChild(host);
+        return host;
+    }
     function prepareFilterHost() {
         if (state.video && state.video.isConnected) return null;
         if (findMainVideo()) return null;
@@ -4413,27 +5889,20 @@
         }
         const sections = sectionHeaders();
         if (sections.length > 1) {
-            const target = sections[0];
-            let slot = target.tagName === 'SECTION' ? null : target;
-            if (!slot) {
-                for (const child of target.children) {
-                    if (child.tagName === 'DIV' && !child.classList.contains('av-filter-host')) {
-                        slot = child;
-                        break;
-                    }
+            const target = topSectionHeader(sections, firstCard) || nearestSectionHeader(sections, firstCard);
+            const slot = sectionHeaderSlot(target);
+            if (slot) {
+                const host = takeFilterHost();
+                host.classList.remove('av-filter-inline');
+                clearInlineRow();
+                if (host.parentElement !== slot) {
+                    const moreAnchor = slot === target && slot.matches && slot.matches(SECTION_TITLE_SELECTOR) ? slot.querySelector('.more, .title-more, .view-more') : null;
+                    if (moreAnchor && moreAnchor.parentElement === slot) slot.insertBefore(host, moreAnchor);
+                    else slot.appendChild(host);
                 }
+                state.filterHost = host;
+                return relocateFilterHost(host, firstCard);
             }
-            if (!slot) slot = target;
-            const host = takeFilterHost();
-            host.classList.remove('av-filter-inline');
-            clearInlineRow();
-            if (host.parentElement !== slot) {
-                const moreAnchor = slot === target && slot.matches && slot.matches(SECTION_TITLE_SELECTOR) ? slot.querySelector('.more, .title-more, .view-more') : null;
-                if (moreAnchor && moreAnchor.parentElement === slot) slot.insertBefore(host, moreAnchor);
-                else slot.appendChild(host);
-            }
-            state.filterHost = host;
-            return host;
         }
         let grid = null;
         for (const selector of ['.grid', '.video-list', '[id^="list_videos_"]', '.row.gutter-20', '.row']) {
@@ -4468,9 +5937,8 @@
             }
             if (!sectionHeader && parent && parent.querySelector) sectionHeader = parent.querySelector(FILTER_HEADER_SELECTOR);
         }
-        const host = takeFilterHost();
+        let slot = null;
         if (sectionHeader) {
-            let slot = null;
             for (const child of sectionHeader.children) {
                 if (child.classList && child.classList.contains('av-filter-host')) continue;
                 if (child.classList && (child.classList.contains('flex-1') || child.classList.contains('av-filter-injected-header'))) continue;
@@ -4479,11 +5947,16 @@
                     break;
                 }
             }
-            if (!slot) {
+            if (!slot && hostSlotUsable(sectionHeader)) {
                 slot = document.createElement('div');
                 slot.className = 'av-filter-slot';
                 sectionHeader.appendChild(slot);
+            } else if (slot && !hostSlotUsable(slot)) {
+                slot = null;
             }
+        }
+        const host = takeFilterHost();
+        if (slot) {
             host.classList.remove('av-filter-inline');
             clearInlineRow();
             if (host.parentElement !== slot) slot.appendChild(host);
@@ -4501,7 +5974,7 @@
             if (host.parentElement !== fallback) fallback.appendChild(host);
         }
         state.filterHost = host;
-        return host;
+        return relocateFilterHost(host, firstCard);
     }
     function fbFab() {
         const wrap = document.createElement('span');
@@ -4594,7 +6067,7 @@
             store.set('filterBarVisible', false);
             syncFilterBar();
             syncFilterPanel();
-            log('🛡 过滤条已隐藏，可在面板「内容过滤与屏蔽」中重新显示');
+            log('过滤条已隐藏，可在面板「内容过滤与屏蔽」中重新显示');
         });
         bar.append(toggle, selectWrap, watched, blacklist, stats, cockpit, hide);
         host.appendChild(bar);
@@ -4700,10 +6173,228 @@
         }
         return row;
     }
+    const LOGIN_RETRY_GUARD_MS = 120000;
+    const loginSiteName = () => (IS_JABLE ? 'Jable' : 'MissAV');
+    const loginStorageKey = key => `${key}@${SITE_TAG}`;
+    const loginUrl = () => `https://${location.hostname}${IS_JABLE ? '/email/' : '/cn/api/login'}`;
+    const loginReady = () => Boolean(String(settings.loginUser || '').trim() && settings.loginPass);
+    function setLoginStatus(text, tone = '') {
+        const node = state.loginStatusEl;
+        if (!node) return;
+        node.textContent = text;
+        node.classList.remove('is-ok', 'is-fail', 'is-warn', 'is-busy');
+        if (tone) node.classList.add(`is-${tone}`);
+    }
+    async function detectLogin() {
+        if (IS_JABLE) {
+            for (const node of document.getElementsByTagName('script')) {
+                if (/userId:\s*'\d+'/.test(node.textContent || '')) return true;
+            }
+            return Boolean(document.querySelector('a[href*="logout"], .user-info, .user-avatar, [data-user-id]'));
+        }
+        try {
+            const response = await fetch(`https://${location.hostname}/api/actresses/1016525/view`, { credentials: 'same-origin', cache: 'no-store' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, 'user')) return Boolean(data.user);
+            return Boolean(data && data.user);
+        } catch (_) {
+            return Boolean(document.querySelector('a[href*="logout"], .user-avatar, [data-user-id]'));
+        }
+    }
+    function loginErrorText(data) {
+        if (!data || typeof data !== 'object') return '';
+        const raw = data.message || data.msg || data.error || data.errors;
+        if (!raw) return '';
+        if (typeof raw === 'string') return raw;
+        if (Array.isArray(raw)) return String(raw.find(item => typeof item === 'string' && item) || '');
+        for (const key of Object.keys(raw)) {
+            const value = raw[key];
+            if (typeof value === 'string' && value) return value;
+            if (Array.isArray(value)) {
+                const first = value.find(item => typeof item === 'string' && item);
+                if (first) return first;
+            }
+        }
+        return '';
+    }
+    function loginFailReason(data) {
+        if (!data || typeof data !== 'object') return '';
+        const message = loginErrorText(data);
+        const flagValue = data.status === undefined ? data.result : data.status;
+        const flag = flagValue === undefined || flagValue === null ? '' : String(flagValue).toLowerCase();
+        if (data.error === true || data.success === false) return message || '登录失败';
+        if (['error', 'fail', 'failed', 'false', '0', 'n'].includes(flag)) return message || flag;
+        return /error|fail|invalid|incorrect|required|wrong|denied|unauthorized|not match|mismatch|错误|失败|不正确|无效|不存在|拒绝/.test(message.toLowerCase()) ? message : '';
+    }
+    async function submitLogin(manual) {
+        if (state.loginBusy) return;
+        const user = String(settings.loginUser || '').trim();
+        const pass = String(settings.loginPass || '');
+        if (!user || !pass) {
+            setLoginStatus('账号或密码为空', 'warn');
+            log('⚠️ 自动登录：账号或密码为空');
+            return;
+        }
+        state.loginBusy = true;
+        setLoginStatus('正在登录…', 'busy');
+        try {
+            const body = IS_JABLE
+                ? new URLSearchParams({ username: user, pass, remember_me: 1, action: 'login', email_link: `https://${location.hostname}/email/`, format: 'json', mode: 'async' }).toString()
+                : JSON.stringify({ email: user, password: pass, remember: true });
+            const response = await fetch(loginUrl(), {
+                method: 'POST',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: IS_JABLE
+                    ? { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }
+                    : { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                body
+            });
+            const text = await response.text();
+            let data = null;
+            try {
+                data = text ? JSON.parse(text) : null;
+            } catch (_) {
+                data = null;
+            }
+            if (!response.ok) throw new Error(loginErrorText(data) || `HTTP ${response.status}`);
+            if (!data || typeof data !== 'object') throw new Error(`登录接口返回异常：${String(text).trim().slice(0, 80) || '空响应'}`);
+            const reason = loginFailReason(data);
+            if (reason) throw new Error(reason);
+            store.set(loginStorageKey('loginTryAt'), Date.now());
+            setLoginStatus('登录成功，正在刷新页面', 'ok');
+            log(`✅ ${loginSiteName()} 登录成功，正在刷新页面`);
+            setTimeout(() => location.reload(), manual ? 500 : 800);
+        } catch (error) {
+            store.set(loginStorageKey('loginTryAt'), Date.now());
+            if (await detectLogin()) {
+                setLoginStatus('已登录', 'ok');
+                log(`🔐 ${loginSiteName()} 已处于登录状态`);
+                return;
+            }
+            const message = error && error.message ? error.message : String(error);
+            setLoginStatus(`登录失败：${message}`, 'fail');
+            log(`❌ ${loginSiteName()} 登录失败：${message}`);
+        } finally {
+            state.loginBusy = false;
+        }
+    }
+    async function autoLogin() {
+        if (isAnalyticsRoute()) return;
+        if (!settings.autoLogin) {
+            setLoginStatus('自动登录已关闭');
+            return;
+        }
+        if (!loginReady()) {
+            setLoginStatus('未配置账号，展开后可填写');
+            return;
+        }
+        const last = Number(store.get(loginStorageKey('loginTryAt'))) || 0;
+        if (Date.now() - last < LOGIN_RETRY_GUARD_MS) {
+            setLoginStatus('刚刚尝试过登录，暂不重试', 'warn');
+            return;
+        }
+        setLoginStatus('正在检测登录状态…', 'busy');
+        const logged = await detectLogin();
+        if (logged) {
+            setLoginStatus('已登录', 'ok');
+            log(`🔐 ${loginSiteName()} 已处于登录状态`);
+            return;
+        }
+        log(`🔐 ${loginSiteName()} 未登录，正在自动登录`);
+        await submitLogin(false);
+    }
+    function buildLoginPanel() {
+        const wrap = document.createElement('div');
+        wrap.className = 'av-login-panel av-collapse';
+        setCollapsed(wrap, !settings.loginPanelOpen);
+        state.loginPanel = wrap;
+        const userField = document.createElement('label');
+        userField.className = 'av-login-field';
+        const userCaption = document.createElement('span');
+        userCaption.textContent = IS_JABLE ? 'Jable 用户名 / 邮箱' : 'MissAV 登录邮箱';
+        const userInput = document.createElement('input');
+        userInput.type = 'text';
+        userInput.autocomplete = 'username';
+        userInput.spellcheck = false;
+        userInput.placeholder = IS_JABLE ? '用户名或邮箱' : '登录邮箱';
+        userInput.value = settings.loginUser || '';
+        userField.append(userCaption, userInput);
+        const passField = document.createElement('label');
+        passField.className = 'av-login-field';
+        const passCaption = document.createElement('span');
+        passCaption.textContent = '密码';
+        const passInput = document.createElement('input');
+        passInput.type = 'password';
+        passInput.autocomplete = 'current-password';
+        passInput.placeholder = settings.loginPass ? '已保存密码，留空则不修改' : '登录密码';
+        passInput.value = '';
+        passField.append(passCaption, passInput);
+        const remember = () => {
+            settings.loginUser = userInput.value;
+            const typed = passInput.value;
+            if (typed) settings.loginPass = typed;
+            loginVault.write('loginUser', settings.loginUser || '');
+            loginVault.write('loginPass', settings.loginPass || '');
+            passInput.value = '';
+            passInput.placeholder = settings.loginPass ? '已保存密码，留空则不修改' : '登录密码';
+        };
+        userInput.addEventListener('change', remember);
+        passInput.addEventListener('change', remember);
+        const autoRow = document.createElement('label');
+        autoRow.className = 'av-check-row';
+        const autoText = document.createElement('span');
+        const autoLabel = document.createElement('span');
+        autoLabel.textContent = '自动登录';
+        const autoHelp = document.createElement('small');
+        autoHelp.className = 'av-help';
+        autoHelp.textContent = '未登录时自动用上面的账号登录';
+        autoText.append(autoLabel, autoHelp);
+        const autoInput = document.createElement('input');
+        autoInput.type = 'checkbox';
+        autoInput.role = 'switch';
+        autoInput.checked = !!settings.autoLogin;
+        autoRow.classList.toggle('is-on', autoInput.checked);
+        autoInput.addEventListener('change', () => {
+            settings.autoLogin = autoInput.checked;
+            store.set('autoLogin', settings.autoLogin);
+            autoRow.classList.toggle('is-on', autoInput.checked);
+            if (autoInput.checked) autoLogin();
+            else setLoginStatus('自动登录已关闭');
+        });
+        autoRow.append(autoText, autoInput);
+        const status = document.createElement('div');
+        status.className = 'av-login-status';
+        status.textContent = '登录状态：未检测';
+        state.loginStatusEl = status;
+        const actions = document.createElement('div');
+        actions.className = 'av-filter-actions';
+        const loginBtn = createButton('立即登录', 'btn-primary');
+        const clearBtn = createButton('清除账号', 'btn-danger');
+        loginBtn.addEventListener('click', () => {
+            remember();
+            submitLogin(true);
+        });
+        clearBtn.addEventListener('click', () => {
+            settings.loginUser = '';
+            settings.loginPass = '';
+            userInput.value = '';
+            passInput.value = '';
+            loginVault.remove('loginUser');
+            loginVault.remove('loginPass');
+            store.remove(loginStorageKey('loginTryAt'));
+            setLoginStatus('账号已清除');
+            log(`🧹 已清除 ${loginSiteName()} 保存的登录账号`);
+        });
+        actions.append(loginBtn, clearBtn);
+        wrap.append(userField, passField, autoRow, status, actions);
+        return wrap;
+    }
     function buildFilterPanel() {
         const wrap = document.createElement('div');
-        wrap.className = 'av-filter-panel';
-        wrap.hidden = !settings.filterPanelOpen;
+        wrap.className = 'av-filter-panel av-collapse';
+        setCollapsed(wrap, !settings.filterPanelOpen);
         state.filterPanel = wrap;
         const strip = document.createElement('div');
         strip.className = 'av-filter-strip';
@@ -4753,28 +6444,12 @@
         durationRow.append(durationLabel, durationInput);
         const actions = document.createElement('div');
         actions.className = 'av-filter-actions';
-        const openCockpit = document.createElement('a');
-        openCockpit.className = 'av-open-cockpit';
-        openCockpit.href = analyticsUrl();
-        openCockpit.target = '_blank';
-        openCockpit.rel = 'noopener noreferrer';
-        openCockpit.textContent = '📊 数据大屏';
-        openCockpit.title = '在新标签页打开观影行为数据大屏';
-        openCockpit.addEventListener('click', () => {
-            openCockpit.href = analyticsUrl();
-        });
-        const clearLib = createButton('🗑 清空已看库', 'btn-danger');
-        clearLib.addEventListener('click', () => {
-            clearWatched();
-            log('🗑 已看库已清空');
-            refreshFilters();
-        });
         const rescan = createButton('🔄 立即重新过滤', 'btn-ghost');
         rescan.addEventListener('click', () => {
             applyFilters();
             log(`🛡 过滤完成：共 ${state.filterStats.total} 个条目，屏蔽 ${state.filterStats.filtered} 个`);
         });
-        actions.append(openCockpit, clearLib, rescan);
+        actions.append(rescan);
         state.filterDepends = [rowDim, rowHideWatched, rowTrack, rowBlacklist, textKeywords, textPrefixes, durationRow];
         const scroll = document.createElement('div');
         scroll.className = 'av-filter-scroll';
