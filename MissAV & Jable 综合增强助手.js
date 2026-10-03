@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.1
-// @description  PC端专用、广告清理、SRT字幕加载/偏移/字号高度、偏移按站点记忆、长按画面倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      12.3
+// @description  PC端专用、广告清理、字幕加载/偏移/字号高度、站点记忆、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -60,11 +60,12 @@
     const POLL_TIMEOUT = 15000;
     const MUTATION_THROTTLE = 400;
     const SUBTITLE_IDLE_DELAY = 500;
-    const QUICK_HIDE_DELAY = 2200;
-    const QUICK_LEAVE_DELAY = 800;
+    const QUICK_HIDE_DELAY = 2000;
+    const QUICK_LEAVE_DELAY = 0;
     const MIN_PLAYER_WIDTH = 480;
     const MIN_PLAYER_HEIGHT = 260;
-    const QUICK_BOTTOM_OFFSET = 48;
+    const QUICK_BOTTOM_OFFSET = 90;
+    const QUICK_PORTAL_ID = 'av-helper-quick-portal';
     const PLAYER_HOST_SELECTOR = '.plyr__video-wrapper, .plyr, .video-js, .vjs-tech, #player, .player-wrapper, .player-container, .artplayer, .dplayer, .jwplayer';
     const PREVIEW_HOST_SELECTOR = '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .jable-carousel, .owl-carousel, .owl-stage, .owl-stage-outer, .owl-item, .horizontal-img-box, .av-info-section, .av-analytics-page, .custom-ui-layer, .custom-control-panel, .custom-quick-controls, .av-stills-grid, .av-review-list, .av-list-grid';
     const REPEAT_SEEK_INTERVAL = 120;
@@ -117,10 +118,23 @@
         '/actors/western',
         '/actors/ranking'
     ]);
+
+
     const AD_SELECTORS = [
-        'div[class^="root"]',
         'div[class*="fixed"][class*="right-"][class*="bottom-"]',
-        'iframe'
+        'iframe[id^="aswift_"]',
+        'iframe[name^="aswift_"]',
+        'iframe[src*="doubleclick"]',
+        'iframe[src*="googlesyndication"]',
+        'iframe[src*="adservice"]',
+        'div[id^="google_ads"]',
+        'ins.adsbygoogle',
+        'div[id^="ad-"]',
+        'div[id^="ads-"]',
+        'div[class*="ad-container"]',
+        'div[class*="ad-wrapper"]',
+        'div[class*="ad_banner"]',
+        'div[class*="ad-placement"]'
     ].join(',');
     const PLAY_ENTRY_SELECTORS = [
         'a.text-nord13.font-medium.flex.items-center',
@@ -154,6 +168,35 @@
             timer = setTimeout(() => fn.apply(this, args), delay);
         };
     }
+
+
+    async function mapPool(list, size, worker) {
+        const items = Array.from(list || []);
+        const out = new Array(items.length);
+        const limit = Math.max(1, Math.min(Number(size) || 1, items.length || 1));
+        let cursor = 0;
+        const runner = async () => {
+            for (;;) {
+                const index = cursor;
+                cursor += 1;
+                if (index >= items.length) return;
+                try {
+                    out[index] = await worker(items[index], index);
+                } catch (_) {
+                    out[index] = null;
+                }
+            }
+        };
+        await Promise.all(Array.from({ length: limit }, runner));
+        return out;
+    }
+
+
+    const META_LABEL_TITLE = /^(?:Title|標題|标题|タイトル|作品名)\s*[:：]?$/i;
+    const META_LABEL_CODE = /^(?:Code|品番|番号|番號)\s*[:：]?$/i;
+    const META_LABEL_ACTRESS = /^(?:Actress|Actors?|Cast|主演|演員|演员|女優|女优|モデル)\s*[:：]?$/i;
+    const META_LABEL_GENRE = /^(?:Genre|Tag|Tags|類別|类别|類型|类型|主題|主题|標籤|标签|ジャンル)\s*[:：]?$/i;
+    const META_LABEL_MAKER = /^(?:Maker|Studio|Label|Company|メーカー|メーカ|スタジオ|片商|廠商|厂商|制作|製作|發行商|发行商)\s*[:：]?$/i;
     function toHex(value) {
         let out = '';
         for (let i = 0; i < 4; i++) {
@@ -199,13 +242,15 @@
         const gg = (a, b, c, d, x, s, t) => cmn((b & d) | (c & ~d), a, b, x, s, t);
         const hh = (a, b, c, d, x, s, t) => cmn(b ^ c ^ d, a, b, x, s, t);
         const ii = (a, b, c, d, x, s, t) => cmn(c ^ (b | ~d), a, b, x, s, t);
+
+
+        const blockBuf = new Array(16);
         const str2blk = (bytes, offset) => {
-            const blk = [];
             for (let i = 0; i < 64; i += 4) {
-                blk[i >> 2] = bytes[offset + i] + (bytes[offset + i + 1] << 8) +
+                blockBuf[i >> 2] = bytes[offset + i] + (bytes[offset + i + 1] << 8) +
                     (bytes[offset + i + 2] << 16) + (bytes[offset + i + 3] << 24);
             }
-            return blk;
+            return blockBuf;
         };
         const cycle = (state, blk) => {
             let [a, b, c, d] = state;
@@ -322,14 +367,6 @@
     function stripTags(html) {
         return String(html ?? '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
     }
-    function decodeEntities(text) {
-        return String(text ?? '')
-            .replace(/&quot;/g, '"')
-            .replace(/&#0?39;|&apos;/g, "'")
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&amp;/g, '&');
-    }
     const store = {
         get(key) {
             try {
@@ -371,16 +408,23 @@
         for (let index = 0; index < text.length; index += 1) out += String.fromCharCode(text.charCodeAt(index) ^ salt.charCodeAt(index % salt.length));
         return out;
     }
+
     function credentialEncode(value) {
         try {
-            return btoa(credentialXor(unescape(encodeURIComponent(String(value)))));
+            const bytes = new TextEncoder().encode(String(value));
+            let binary = '';
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(credentialXor(binary));
         } catch (_) {
             return '';
         }
     }
     function credentialDecode(raw) {
         try {
-            return decodeURIComponent(escape(credentialXor(atob(String(raw)))));
+            const binary = credentialXor(atob(String(raw)));
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+            return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         } catch (_) {
             return '';
         }
@@ -568,9 +612,6 @@
         adObserver: null,
         uiLayer: null,
         pickerLayer: null,
-        subtitleBanner: null,
-        subtitleFileName: '',
-        subtitleCueCount: 0,
         hudHost: null,
         hudEl: null,
         holdTimer: 0,
@@ -582,7 +623,6 @@
         infoSection: null,
         lightbox: null,
         infoSession: 0,
-        pinnedOverlay: null,
         gallery: [],
         galleryIndex: 0,
         infoData: null,
@@ -669,29 +709,223 @@
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
         return;
     }
-    function patchWindowOpen(target) {
-        if (!target) return;
-        try {
-            target.open = function blockedWindowOpen() {
-                return null;
-            };
-        } catch (_) {
-        }
-    }
-    patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
-    function patchAllIframeWindows() {
-        for (const frame of document.querySelectorAll('iframe')) {
-            if (isProtectedFrame(frame)) continue;
-            try {
-                patchWindowOpen(frame.contentWindow);
-            } catch (_) {
-            }
-        }
-    }
     const PROTECTED_FRAME = /recaptcha|hcaptcha|turnstile|challenges\.cloudflare|accounts\.google|appleid|facebook\.com|stripe|paypal|oauth/i;
     function isProtectedFrame(element) {
         if (!element || element.tagName !== 'IFRAME') return false;
         return PROTECTED_FRAME.test(element.getAttribute('src') || element.src || '');
+    }
+    const VISIBILITY_PATCHED = Symbol.for('av-helper.visibilityPatched');
+    const ORIG_DOC_DESCRIPTORS = {};
+    const protectInstance = {};
+    let guardSweepAt = 0;
+    const readDescriptors = win => {
+        for (const key of ['hidden', 'webkitHidden', 'visibilityState', 'webkitVisibilityState']) {
+            if (ORIG_DOC_DESCRIPTORS[key]) continue;
+            let holder = win.document;
+            while (holder) {
+                const desc = Object.getOwnPropertyDescriptor(holder, key);
+                if (desc && (typeof desc.get === 'function' || 'value' in desc)) {
+                    ORIG_DOC_DESCRIPTORS[key] = desc;
+                    break;
+                }
+                holder = Object.getPrototypeOf(holder);
+            }
+        }
+    };
+    const originalHidden = () => {
+        const desc = ORIG_DOC_DESCRIPTORS.hidden;
+        try {
+            if (desc) return typeof desc.get === 'function' ? Boolean(desc.get.call(document)) : Boolean(desc.value);
+        } catch (_) {
+        }
+        try {
+            const fallback = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+            if (fallback && typeof fallback.get === 'function') return Boolean(fallback.get.call(document));
+        } catch (_) {
+        }
+        return false;
+    };
+    const visibilityState = () => (originalHidden() ? 'hidden' : 'visible');
+    const isPageHidden = () => originalHidden();
+    const applyVisibilitySpoof = (win, on) => {
+        const target = win?.document;
+        if (!target || target[VISIBILITY_PATCHED] === on) return false;
+        try {
+            if (on) readDescriptors(win);
+            protectInstance.hidden = on ? Object.getOwnPropertyDescriptor(target, 'hidden') : null;
+            protectInstance.visibilityState = on ? Object.getOwnPropertyDescriptor(target, 'visibilityState') : null;
+            Object.defineProperty(target, 'hidden', {
+                configurable: true,
+                enumerable: true,
+                get() {
+                    return on ? false : originalHidden();
+                }
+            });
+            Object.defineProperty(target, 'visibilityState', {
+                configurable: true,
+                enumerable: true,
+                get() {
+                    return on ? 'visible' : visibilityState();
+                }
+            });
+            Object.defineProperty(target, VISIBILITY_PATCHED, { value: on, configurable: true });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    };
+    const patchFocusApi = (win, on) => {
+        const target = win?.document;
+        if (!target || typeof target.hasFocus !== 'function') return false;
+        if (on) {
+            if (!protectInstance.hasFocus) protectInstance.hasFocus = target.hasFocus;
+            if (target.hasFocus[VISIBILITY_PATCHED] === true) return false;
+            const stub = function hasFocus() {
+                return true;
+            };
+            Object.defineProperty(stub, VISIBILITY_PATCHED, { value: true, configurable: true });
+            try {
+                target.hasFocus = stub;
+            } catch (_) {
+                Object.defineProperty(target, 'hasFocus', { value: stub, configurable: true, writable: true });
+            }
+            return true;
+        }
+        if (protectInstance.hasFocus) {
+            try {
+                target.hasFocus = protectInstance.hasFocus;
+            } catch (_) {
+            }
+            protectInstance.hasFocus = null;
+            return true;
+        }
+        return false;
+    };
+    const patchEventHandlers = (win, on) => {
+        const target = win?.document;
+        if (!target) return false;
+        let changed = false;
+        for (const key of ['onvisibilitychange']) {
+            const current = target[key];
+            if (on) {
+                if (current && current[VISIBILITY_PATCHED] !== true) {
+                    protectInstance[key] = current;
+                    const stub = function visibilityHandler() {
+                        return undefined;
+                    };
+                    Object.defineProperty(stub, VISIBILITY_PATCHED, { value: true, configurable: true });
+                    try {
+                        target[key] = stub;
+                        changed = true;
+                    } catch (_) {
+                    }
+                }
+            } else if (current && current[VISIBILITY_PATCHED] === true) {
+                try {
+                    target[key] = protectInstance[key] || null;
+                    changed = true;
+                } catch (_) {
+                    try {
+                        target[key] = null;
+                        changed = true;
+                    } catch (_) {
+                    }
+                }
+                protectInstance[key] = null;
+            }
+        }
+        return changed;
+    };
+    const blockVisibilityEvents = event => {
+        const type = event.type;
+        if (!event.isTrusted) return;
+        if (type === 'blur' || type === 'focusout') {
+            const target = event.target;
+            const tag = target === document ? '' : String(target?.tagName || '');
+            if (tag && tag !== 'BODY' && tag !== 'HTML') return;
+        }
+        if (event.cancelable) event.preventDefault();
+        event.stopImmediatePropagation();
+    };
+    const ensureVisibilityGuard = force => {
+        const now = Date.now();
+        if (!force && now - guardSweepAt < 1500) return false;
+        guardSweepAt = now;
+        const win = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+        applyVisibilitySpoof(win, true);
+        patchFocusApi(win, true);
+        patchEventHandlers(win, true);
+        return true;
+    };
+    for (const type of ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'freeze', 'resume', 'blur', 'focusout']) {
+        window.addEventListener(type, blockVisibilityEvents, { capture: true, passive: false });
+        document.addEventListener(type, blockVisibilityEvents, { capture: true, passive: false });
+    }
+    ensureVisibilityGuard(true);
+    window.addEventListener('load', () => {
+        ensureVisibilityGuard(true);
+        document.dispatchEvent(new Event('visibilitychange'));
+    }, { once: true });
+    window.setInterval(() => {
+        try {
+            ensureVisibilityGuard(false);
+        } catch (_) {
+        }
+    }, 3000);
+    const WINDOW_OPEN_PATCHED = Symbol.for('av-helper.windowOpenPatched');
+    function isCrossSiteWindow(target) {
+
+        try {
+            return String(target.location?.href || '') !== location.href;
+        } catch (_) {
+            return true;
+        }
+    }
+    function patchWindowOpen(target, allowSameSite = false) {
+        if (!target || target[WINDOW_OPEN_PATCHED]) return;
+        const original = target.open;
+        try {
+            target.open = function guardedWindowOpen(url, name, features) {
+                const href = String(url ?? '');
+                if (!href || /^(?:javascript:|about:blank)/i.test(href)) return null;
+                let resolved = null;
+                try {
+                    resolved = new URL(href, location.href);
+                } catch (_) {
+                    return null;
+                }
+
+                const sameHost = resolved.hostname === location.hostname && resolved.protocol === location.protocol;
+                const looksPopup = /\bpopup\b|width=|\bwidth\s*[:=]|height=/i.test(String(features || ''));
+                if (sameHost && !looksPopup) {
+                    return typeof original === 'function' ? original.call(this, url, name, features) : null;
+                }
+                if (allowSameSite && !isCrossSiteWindow(target)) {
+                    return typeof original === 'function' ? original.call(this, url, name, features) : null;
+                }
+                return null;
+            };
+            Object.defineProperty(target, WINDOW_OPEN_PATCHED, { value: true, configurable: true });
+        } catch (_) {
+        }
+    }
+    patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+    const patchedFrames = new WeakSet();
+    let iframePatchAt = 0;
+    function patchAllIframeWindows(force = false) {
+        const now = Date.now();
+        if (!force && now - iframePatchAt < 2000) return;
+        iframePatchAt = now;
+
+        for (const frame of document.querySelectorAll('iframe')) {
+            if (patchedFrames.has(frame)) continue;
+            patchedFrames.add(frame);
+            if (isProtectedFrame(frame)) continue;
+            try {
+                patchWindowOpen(frame.contentWindow, true);
+            } catch (_) {
+            }
+        }
     }
     function isProtectedNode(element) {
         if (element.classList?.contains('av-info-section')) return true;
@@ -753,7 +987,7 @@
             const patchFrames = frames;
             frames = false;
             patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
-            if (patchFrames) patchAllIframeWindows();
+            if (patchFrames) patchAllIframeWindows(true);
             for (const node of nodes) sweepAdNodes(node);
             if (!state.bound) initPlayer();
         }, MUTATION_THROTTLE);
@@ -767,9 +1001,38 @@
             }
             if (pending.length) sweep();
         });
-        state.adObserver.observe(document.body, { childList: true, subtree: true });
+        trackObserver(state.adObserver, document.body, { childList: true, subtree: true });
     }
     const LOG_LIMIT = 80;
+    const pageLifecycle = [];
+    const trackInterval = (id, dispose = () => clearInterval(id)) => {
+        pageLifecycle.push(dispose);
+        return id;
+    };
+    const trackFrame = (id, dispose = () => cancelAnimationFrame(id)) => {
+        pageLifecycle.push(dispose);
+        return id;
+    };
+    const trackObserver = (observer, target, options) => {
+        if (!observer || !target) return observer;
+        observer.observe(target, options);
+        pageLifecycle.push(() => {
+            try {
+                observer.disconnect();
+            } catch (_) {
+            }
+        });
+        return observer;
+    };
+    const disposePageLifecycle = () => {
+        while (pageLifecycle.length) {
+            const dispose = pageLifecycle.pop();
+            try {
+                dispose();
+            } catch (_) {
+            }
+        }
+    };
     function log(message) {
         const logEl = state.logEl;
         if (!logEl) return;
@@ -885,11 +1148,13 @@
         .panel-status-log { margin-top: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; background: rgba(0,0,0,.3); color: #bae6fd; font-size: 11px; font-weight: 500; text-align: left; letter-spacing: .5px; height: 90px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.4) transparent; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 4px; text-shadow: none; }
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
-        .custom-quick-controls { position: absolute !important; left: 50% !important; right: auto !important; top: auto !important; bottom: ${QUICK_BOTTOM_OFFSET}px !important; transform: translateX(-50%) scale(var(--quick-scale, 1)) !important; transform-origin: center bottom; z-index: 9990; display: flex; flex-wrap: nowrap; align-items: center; justify-content: center; gap: 4px; width: max-content !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px) !important; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease; box-sizing: border-box !important; }
-        .custom-quick-controls.quick-visible,
-        .custom-quick-controls:hover { opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; }
+        .custom-quick-controls { position: fixed !important; left: 50% !important; right: auto !important; top: auto !important; bottom: ${QUICK_BOTTOM_OFFSET}px !important; transform: translateX(-50%) scale(var(--quick-scale, 1)) !important; transform-origin: center center; z-index: 2147483647 !important; isolation: isolate; display: flex; flex-wrap: nowrap; align-items: center; justify-content: center; gap: 4px; width: max-content !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px) !important; opacity: 0; visibility: hidden; pointer-events: none; transition: none !important; box-sizing: border-box !important; user-select: none; }
+        #av-helper-quick-portal { position: fixed !important; inset: 0 !important; width: 0 !important; height: 0 !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; overflow: visible !important; pointer-events: none !important; z-index: 2147483647 !important; }
+        .custom-quick-controls.quick-visible { opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; }
+        .custom-quick-controls .quick-btn { position: relative; z-index: 1; pointer-events: auto !important; }
+        .custom-quick-controls .quick-btn * { pointer-events: auto !important; }
         .quick-jump-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; }
-        .quick-btn { min-width: 48px; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: rgba(255,255,255,.92); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; line-height: 1; white-space: nowrap; flex: 0 0 auto; overflow: visible; text-overflow: clip; }
+        .quick-btn { min-width: 48px; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: rgba(255,255,255,.92); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; line-height: 1; white-space: nowrap; flex: 0 0 auto; overflow: visible; text-overflow: clip; pointer-events: auto !important; }
         .quick-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
         .quick-play-btn { min-width: 78px; margin: 0 4px; background: #476a9f; border-radius: 16px; padding: 0 12px; }
         .quick-play-btn:hover { background: #5779ad; }
@@ -920,19 +1185,13 @@
         .quick-loop-btn { min-width: 46px; height: 32px; padding: 0 8px; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; line-height: 1; font-size: 13px; }
         .quick-loop-btn span { display: inline; }
         .quick-loop-btn.active { background: rgba(59,130,246,.45); color: #93c5fd; }
-        .loop-menu { position: absolute; bottom: 44px; left: 50%; transform: translateX(-50%); background: rgba(20,22,30,.95); border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 6px; display: none; flex-direction: column; gap: 4px; z-index: 9991; white-space: nowrap; backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+        .loop-menu { position: absolute; bottom: 44px; left: 50%; transform: translateX(-50%); background: rgba(20,22,30,.95); border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 6px; display: none; flex-direction: column; gap: 4px; z-index: 2147480000; white-space: nowrap; backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,.5); pointer-events: auto; }
         .loop-menu.show { display: flex; }
         .loop-menu-btn { background: transparent; border: 0; color: #fff; padding: 6px 12px; text-align: left; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; }
         .loop-menu-btn:hover { background: rgba(255,255,255,.15); color: #60a5fa; }
         .subtitle-picker { position: fixed; left: 15px; top: 40%; z-index: 1; min-width: 320px; max-width: min(560px, 92vw); max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border-radius: 12px; --ui-bg-opacity: .3; --ui-blur: 1px; --ui-hover-opacity: .9; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45); color: #f8fafc; font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); transition: background .2s ease, box-shadow .2s ease; pointer-events: auto; contain: layout style; }
         .subtitle-picker:hover, .subtitle-picker:focus-within { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55); }
         .subtitle-picker.panel-dragging { transition: none; }
-        .subtitle-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; display: flex; align-items: center; gap: 8px; max-width: min(680px, 88vw); padding: 7px 14px; border-radius: 9999px; --ui-bg-opacity: .35; --ui-blur: 1px; --ui-hover-opacity: .9; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 8px 24px rgba(0,0,0,.45); color: #f8fafc; font: 12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); cursor: pointer; user-select: none; pointer-events: auto; transition: background .2s ease; }
-        .subtitle-banner:hover { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); }
-        .subtitle-banner-icon { flex: 0 0 auto; }
-        .subtitle-banner-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #93c5fd; }
-        .subtitle-banner-meta { flex: 0 0 auto; color: #94a3b8; font-variant-numeric: tabular-nums; }
-        .subtitle-banner.expanded .subtitle-banner-name { white-space: normal; word-break: break-all; }
         .subtitle-picker-header { position: sticky; top: -12px; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: -12px -12px 0; padding: 12px 12px 8px; background: rgba(0,0,0,.4); border-bottom: 1px solid rgba(255,255,255,.15); border-radius: 12px 12px 0 0; cursor: move; user-select: none; }
         .subtitle-picker-title { color: #60a5fa; font-weight: 700; }
         .subtitle-picker-close { cursor: pointer; color: #94a3b8; }
@@ -1219,7 +1478,7 @@
         container.addEventListener('pointermove', event => {
             if (event.pointerId !== state.holdPointerId) return;
             if (Math.hypot(event.clientX - state.holdStartX, event.clientY - state.holdStartY) > HOLD_CANCEL_DISTANCE) cancelHold();
-        });
+        }, { passive: true });
         container.addEventListener('pointerup', event => {
             if (event.pointerId === state.holdPointerId) cancelHold();
         });
@@ -1324,6 +1583,21 @@
         let startX = 0;
         let startY = 0;
         let moved = false;
+        let saveTimer = 0;
+
+
+        const flushPosition = () => {
+            clearTimeout(saveTimer);
+            saveTimer = 0;
+            settings[keys.x] = element.offsetLeft;
+            settings[keys.y] = element.offsetTop;
+            store.set(keys.x, element.offsetLeft);
+            store.set(keys.y, element.offsetTop);
+        };
+        const scheduleSave = () => {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(flushPosition, 180);
+        };
         const onMove = event => {
             if (event.buttons === 0) {
                 onUp();
@@ -1334,17 +1608,18 @@
             const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
             element.style.left = `${clamp(originX + event.clientX - startX, 0, maxX)}px`;
             element.style.top = `${clamp(originY + event.clientY - startY, 0, maxY)}px`;
+            scheduleSave();
         };
         const onUp = () => {
             document.removeEventListener('mousemove', onMove, true);
             document.removeEventListener('mouseup', onUp, true);
             if (moved) {
-                settings[keys.x] = element.offsetLeft;
-                settings[keys.y] = element.offsetTop;
-                store.set(keys.x, element.offsetLeft);
-                store.set(keys.y, element.offsetTop);
+                flushPosition();
                 if (onEnd) onEnd();
                 element.classList.remove('panel-dragging');
+            } else {
+                clearTimeout(saveTimer);
+                saveTimer = 0;
             }
             moved = false;
         };
@@ -1378,14 +1653,12 @@
                 const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
                 element.style.left = `${clamp(originX + point.clientX - startX, 0, maxX)}px`;
                 element.style.top = `${clamp(originY + point.clientY - startY, 0, maxY)}px`;
+                scheduleSave();
             };
             const onTouchEnd = () => {
                 document.removeEventListener('touchmove', onTouchMove);
                 document.removeEventListener('touchend', onTouchEnd);
-                settings[keys.x] = element.offsetLeft;
-                settings[keys.y] = element.offsetTop;
-                store.set(keys.x, element.offsetLeft);
-                store.set(keys.y, element.offsetTop);
+                flushPosition();
                 if (onEnd) onEnd();
                 element.classList.remove('panel-dragging');
             };
@@ -1406,7 +1679,7 @@
         for (const input of root.querySelectorAll('input[type="range"]')) syncRangeFill(input);
     }
     function applyUiStyles() {
-        for (const target of [state.panel, state.subtitlePicker, state.subtitleBanner, state.filterBar]) {
+        for (const target of [state.panel, state.subtitlePicker, state.filterBar]) {
             if (!target) continue;
             target.style.setProperty('--ui-bg-opacity', settings.opacity);
             target.style.setProperty('--ui-blur', `${settings.blur}px`);
@@ -1420,19 +1693,13 @@
         node.classList.toggle('av-collapsed', Boolean(collapsed));
         node.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
     }
-    function createPanel() {
-        if (state.panel || document.querySelector('.custom-control-panel')) return;
-        const panel = document.createElement('div');
-        panel.className = 'custom-control-panel';
-        panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
-        panel.style.top = `${clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60))}px`;
-        state.panel = panel;
+    function buildPanelHeader(panelTitleText) {
         const header = document.createElement('div');
         header.className = 'panel-header';
         header.title = '按住可拖动面板';
         const panelTitle = document.createElement('span');
         panelTitle.className = 'panel-title';
-        panelTitle.textContent = '综合增强助手';
+        panelTitle.textContent = panelTitleText;
         const gearBtn = document.createElement('button');
         gearBtn.type = 'button';
         gearBtn.className = 'panel-gear';
@@ -1441,37 +1708,9 @@
         gearBtn.title = settings.isMinimized ? '展开设置面板' : '折叠设置面板';
         gearBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
         header.append(gearBtn, panelTitle);
-        const body = document.createElement('div');
-        body.className = 'panel-body';
-        state.panelBody = body;
-        const footer = document.createElement('div');
-        footer.className = 'panel-footer';
-        state.panelFooter = footer;
-        const collapsible = document.createElement('div');
-        collapsible.className = 'panel-collapse';
-        const collapsibleInner = document.createElement('div');
-        collapsibleInner.className = 'panel-collapse-inner';
-        collapsible.appendChild(collapsibleInner);
-        state.panelCollapse = collapsible;
-        if (settings.isMinimized) panel.classList.add('panel-collapsed');
-        const layoutPanel = () => {
-            const anchor = clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60));
-            const headerHeight = header.offsetHeight || 34;
-            const contentHeight = settings.isMinimized ? 0 : collapsibleInner.scrollHeight;
-            const maxTop = Math.max(0, window.innerHeight - (headerHeight + contentHeight) - 4);
-            panel.style.bottom = 'auto';
-            panel.style.top = `${clamp(anchor, 0, maxTop)}px`;
-        };
-        state.layoutPanel = layoutPanel;
-        const togglePanel = collapsed => {
-            settings.isMinimized = collapsed;
-            panel.classList.toggle('panel-collapsed', collapsed);
-            gearBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-            gearBtn.title = collapsed ? '展开设置面板' : '折叠设置面板';
-            store.set('isMinimized', collapsed);
-            layoutPanel();
-        };
-        gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
+        return { header, gearBtn };
+    }
+    function buildPanelKeysRow() {
         const keysRow = document.createElement('div');
         keysRow.className = 'panel-row';
         const offsetGroup = createInputGroup('字幕偏移:', 'number', settings.subtitleOffset, input => {
@@ -1480,7 +1719,6 @@
             min: OFFSET_MIN, max: OFFSET_MAX, step: 0.1,
             onBlur: input => { input.value = settings.subtitleOffset; }
         });
-        const offsetInput = offsetGroup.children[1];
         keysRow.append(
             createInputGroup('加速键:', 'text', settings.keys.accelerate, input => {
                 settings.keys.accelerate = normalizeKey(input.value, 'z');
@@ -1505,6 +1743,9 @@
             }),
             offsetGroup
         );
+        return { keysRow, offsetInput: offsetGroup.children[1] };
+    }
+    function buildPanelActionRow(panel, offsetInput, layoutPanel) {
         const actionRow = document.createElement('div');
         actionRow.className = 'btn-group';
         const fileInput = document.createElement('input');
@@ -1577,6 +1818,9 @@
         btnBackup.title = '把收藏的名称、缩略图、番号、女优、类型、发行商批量打包下载到本地';
         btnBackup.addEventListener('click', openFavoriteBackup);
         actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, openCockpit, btnClearLib, btnSave, btnBackup);
+        return actionRow;
+    }
+    function buildPanelSliderRow() {
         const sliderRow = document.createElement('div');
         sliderRow.className = 'slider-row-container av-collapse';
         setCollapsed(sliderRow, true);
@@ -1610,6 +1854,9 @@
             createSlider('字幕字号', 'subtitleFontSize', FONT_SIZE_MIN, FONT_SIZE_MAX, 1, applySubtitleStyle, value => `${value}px`),
             createSlider('字幕高度', 'subtitleBottom', SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX, 1, applySubtitleStyle, value => `${value}%`)
         );
+        return sliderRow;
+    }
+    function buildPanelCollapseToggles(sliderRow) {
         const loginToggleBtn = createButton('👤 隐藏/显示自动登录', 'btn-primary panel-full-btn');
         const loginPanel = buildLoginPanel();
         loginToggleBtn.addEventListener('click', () => {
@@ -1630,6 +1877,50 @@
             settings.filterPanelOpen = !collapsed;
             store.set('filterPanelOpen', settings.filterPanelOpen);
         });
+        return { loginToggleBtn, loginPanel, toggleSliderBtn, filterToggleBtn, filterPanel };
+    }
+    function createPanel() {
+        if (state.panel || document.querySelector('.custom-control-panel')) return;
+        const panel = document.createElement('div');
+        panel.className = 'custom-control-panel';
+        panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
+        panel.style.top = `${clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60))}px`;
+        state.panel = panel;
+        const { header, gearBtn } = buildPanelHeader('综合增强助手');
+        const body = document.createElement('div');
+        body.className = 'panel-body';
+        const footer = document.createElement('div');
+        footer.className = 'panel-footer';
+        state.panelFooter = footer;
+        const collapsible = document.createElement('div');
+        collapsible.className = 'panel-collapse';
+        const collapsibleInner = document.createElement('div');
+        collapsibleInner.className = 'panel-collapse-inner';
+        collapsible.appendChild(collapsibleInner);
+        state.panelCollapse = collapsible;
+        if (settings.isMinimized) panel.classList.add('panel-collapsed');
+        const layoutPanel = () => {
+            const anchor = clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60));
+            const headerHeight = header.offsetHeight || 34;
+            const contentHeight = settings.isMinimized ? 0 : collapsibleInner.scrollHeight;
+            const maxTop = Math.max(0, window.innerHeight - (headerHeight + contentHeight) - 4);
+            panel.style.bottom = 'auto';
+            panel.style.top = `${clamp(anchor, 0, maxTop)}px`;
+        };
+        state.layoutPanel = layoutPanel;
+        const togglePanel = collapsed => {
+            settings.isMinimized = collapsed;
+            panel.classList.toggle('panel-collapsed', collapsed);
+            gearBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            gearBtn.title = collapsed ? '展开设置面板' : '折叠设置面板';
+            store.set('isMinimized', collapsed);
+            layoutPanel();
+        };
+        gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
+        const { keysRow, offsetInput } = buildPanelKeysRow();
+        const actionRow = buildPanelActionRow(panel, offsetInput, layoutPanel);
+        const sliderRow = buildPanelSliderRow();
+        const { loginToggleBtn, loginPanel, toggleSliderBtn, filterToggleBtn, filterPanel } = buildPanelCollapseToggles(sliderRow);
         state.logEl = document.createElement('div');
         state.logEl.className = 'panel-status-log';
         footer.appendChild(state.logEl);
@@ -1647,8 +1938,16 @@
         clampPanelPosition(panel);
         layoutPanel();
         if (typeof ResizeObserver === 'function') {
-            state.panelLayoutObserver = new ResizeObserver(() => layoutPanel());
+            let layoutFrame = 0;
+            state.panelLayoutObserver = new ResizeObserver(() => {
+                if (layoutFrame) return;
+                layoutFrame = trackFrame(requestAnimationFrame(() => {
+                    layoutFrame = 0;
+                    layoutPanel();
+                }));
+            });
             state.panelLayoutObserver.observe(collapsibleInner);
+            pageLifecycle.push(() => state.panelLayoutObserver?.disconnect());
         }
         window.addEventListener('resize', () => {
             panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
@@ -1666,7 +1965,10 @@
     let quickMetricsVideo = null;
     let quickMetricsAt = 0;
     let quickMetricsValue = false;
-    let quickArmAt = 0;
+    let quickPointerX = Number.NaN;
+    let quickPointerY = Number.NaN;
+    let quickBarHover = false;
+    const QUICK_HOVER_MARGIN = 4;
     function quickMetricsReady(video) {
         const now = Date.now();
         if (video !== quickMetricsVideo || now - quickMetricsAt > 400) {
@@ -1676,84 +1978,367 @@
         }
         return quickMetricsValue;
     }
+    function quickShouldStayOpen() {
+        const quick = state.quick;
+        if (!quick || !quick.isConnected) return false;
+        return Boolean(quick.contains(document.activeElement) || isLoopMenuOpen());
+    }
+    function applyQuickControlsHide() {
+        const quick = state.quick;
+        if (!quick || !quick.isConnected) return;
+        if (quickShouldStayOpen()) return;
+        quick.classList.remove('quick-visible');
+        paintQuickVisibility(false);
+    }
+    function armQuickControlsHide(delay = QUICK_LEAVE_DELAY) {
+        clearTimeout(state.quickHideTimer);
+        state.quickHideTimer = null;
+        if (delay <= 0) {
+            applyQuickControlsHide();
+            return;
+        }
+        state.quickHideTimer = setTimeout(() => {
+            state.quickHideTimer = null;
+            applyQuickControlsHide();
+        }, delay);
+    }
+    function cancelQuickControlsHide() {
+        clearTimeout(state.quickHideTimer);
+        state.quickHideTimer = null;
+    }
+    function quickBoxAtPoint(node, x, y, margin = 0) {
+        if (!node?.isConnected || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+        const box = node.getBoundingClientRect?.();
+        if (!box || box.width <= 0 || box.height <= 0) return false;
+        return x >= box.left - margin && x <= box.right + margin && y >= box.top - margin && y <= box.bottom + margin;
+    }
+    function quickPointerOnBar() {
+        const quick = state.quick;
+        if (!quick?.isConnected) return false;
+        const menu = state.loopMenu;
+        if (menu?.isConnected && menu.classList.contains('show') && quickBoxAtPoint(menu, quickPointerX, quickPointerY, QUICK_HOVER_MARGIN)) return true;
+        return quickBoxAtPoint(quick, quickPointerX, quickPointerY, QUICK_HOVER_MARGIN);
+    }
+    function quickPointerOnBarEvent(event) {
+        const quick = state.quick;
+        if (!quick?.isConnected) return false;
+        const target = event?.target;
+        if (target && (quick.contains?.(target) || menuContains(target))) return true;
+        if (Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) {
+            quickPointerX = event.clientX;
+            quickPointerY = event.clientY;
+        }
+        return quickPointerOnBar();
+    }
+    function quickPlayerPaused() {
+        const video = state.video;
+        if (!video || !video.isConnected) return false;
+        return video.paused === true && video.ended !== true;
+    }
+    function quickHideDecision() {
+        const quick = state.quick;
+        if (!quick?.isConnected) return 'none';
+        if (quick.contains(document.activeElement)) return 'none';
+        if (isLoopMenuOpen()) return 'none';
+        if (quickBarHover) return 'cancel';
+        if (quickPlayerPaused()) return 'cancel';
+        if (!quick.classList.contains('quick-visible')) return 'none';
+        if (!quickPointerInsidePlayer()) return 'now';
+        return QUICK_HIDE_DELAY;
+    }
+    function reconcileQuickControls() {
+        const decision = quickHideDecision();
+        if (decision === 'none') return decision;
+        if (decision === 'cancel') {
+            cancelQuickControlsHide();
+            return decision;
+        }
+        armQuickControlsHide(decision === 'now' ? QUICK_LEAVE_DELAY : decision);
+        return decision;
+    }
+    function paintQuickVisibility(visible) {
+        const quick = state.quick;
+        if (!quick?.style?.setProperty) return;
+        quick.style.setProperty('opacity', visible ? '1' : '0', 'important');
+        quick.style.setProperty('visibility', visible ? 'visible' : 'hidden', 'important');
+        quick.style.setProperty('pointer-events', visible ? 'auto' : 'none', 'important');
+        quick.style.setProperty('transition', 'none', 'important');
+    }
+    function trackQuickPointer(event) {
+        quickPointerX = event.clientX;
+        quickPointerY = event.clientY;
+        if (quickPointerOnBarEvent(event)) {
+            quickBarHover = true;
+            cancelQuickControlsHide();
+            return;
+        }
+        quickBarHover = false;
+        reconcileQuickControls();
+    }
+    function menuContains(target) {
+        const menu = state.loopMenu;
+        return Boolean(menu?.isConnected && menu.classList.contains('show') && target && menu.contains(target));
+    }
+    function quickBarButtonAtPoint(x, y) {
+        const quick = state.quick;
+        if (!quick?.isConnected || !quick.classList.contains('quick-visible')) return null;
+        const menu = state.loopMenu;
+        if (menu?.classList.contains('show')) {
+            const menuHit = quickButtonIn(menu, x, y);
+            if (menuHit) return menuHit;
+        }
+        return quickButtonIn(quick, x, y);
+    }
+    function quickButtonIn(root, x, y) {
+        if (!root?.isConnected) return null;
+        for (const button of root.querySelectorAll('.quick-btn, .loop-menu-btn')) {
+            const rect = button.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return button;
+        }
+        return null;
+    }
+    function forwardQuickBarHit(event) {
+        const quick = state.quick;
+        if (!quick?.isConnected) return;
+        if (event.target === quick || quick.contains(event.target) || menuContains(event.target)) return;
+        const button = quickBarButtonAtPoint(event.clientX, event.clientY);
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.type !== 'click') return;
+        log(`🔧 快捷条命中修正：控件层遮挡，已转发给「${button.title || button.textContent.trim()}」`);
+        button.click();
+    }
+    function quickPointerInsidePlayer() {
+        const host = state.container?.isConnected ? state.container : state.video;
+        const box = host?.getBoundingClientRect?.();
+        if (!box) return false;
+        return (
+            quickPointerX >= box.left &&
+            quickPointerX <= box.right &&
+            quickPointerY >= box.top &&
+            quickPointerY <= box.bottom
+        );
+    }
     function showQuickControls() {
         const video = state.video;
-        if (!video || !quickMetricsReady(video)) return;
-        if (state.quick && state.quick.isConnected && !quickControlsAlive()) {
+        if (!video || !quickMetricsReady(video)) return;        if (state.quick && state.quick.isConnected && !quickControlsAlive()) {
             const container = playerContainer(video);
             if (container) bindPlayer(video, container, true);
         }
         const quick = state.quick;
         if (!quick || !quick.isConnected) return;
-        const now = Date.now();
-        const wasVisible = quick.classList.contains('quick-visible');
         quick.classList.add('quick-visible');
-        if (wasVisible && now - quickArmAt < 400) return;
-        quickArmAt = now;
-        clearTimeout(state.quickHideTimer);
-        state.quickHideTimer = setTimeout(() => {
-            if (quick.matches(':hover') || quick.contains(document.activeElement) || isLoopMenuOpen()) return;
-            quick.classList.remove('quick-visible');
-        }, QUICK_HIDE_DELAY);
+        paintQuickVisibility(true);
+        reconcileQuickControls();
     }
     function hideQuickControls() {
         const quick = state.quick;
         if (!quick || isLoopMenuOpen()) return;
-        if (quick.matches(':hover')) return;
         clearTimeout(state.quickHideTimer);
         quick.classList.remove('quick-visible');
+        paintQuickVisibility(false);
+    }
+    function quickFullscreenRoot() {
+        const root = document.fullscreenElement || document.webkitFullscreenElement;
+        return root && root !== document.documentElement ? root : null;
+    }
+    function quickAnchorPlayer() {
+        const root = quickFullscreenRoot();
+        if (root) return root;
+        const video = state.video;
+        if (video && video.isConnected) {
+            const box = video.getBoundingClientRect?.();
+            if (box && box.width > 0 && box.height > 0) return video;
+        }
+        const container = state.container;
+        return container?.isConnected ? container : null;
+    }
+    let quickPortalNode = null;
+    let quickPortalBase = null;
+    const quickPortalScrollBound = new WeakSet();
+    function quickPortal() {
+        const base = quickFullscreenRoot() || document.documentElement || document.body;
+        if (!base) return null;
+        if (quickPortalNode?.isConnected && quickPortalBase === base) return quickPortalNode;
+        if (!quickPortalNode?.isConnected) {
+            const node = document.createElement('div');
+            node.id = QUICK_PORTAL_ID;
+            node.classList.add('quick-portal');
+            quickPortalNode = node;
+        }
+        quickPortalBase = base;
+        base.appendChild(quickPortalNode);
+        if (!quickPortalScrollBound.has(base)) {
+            quickPortalScrollBound.add(base);
+            base.addEventListener('scroll', quickPortalSync, { passive: true, capture: true });
+        }
+        return quickPortalNode;
+    }
+    function quickPortalSync() {
+        try {
+            fitQuickControls();
+        } catch (_) {}
+    }
+    function attachQuickElement(node, host) {
+        if (!node || !host) return false;
+        if (node.parentNode !== host) host.appendChild(node);
+        return true;
+    }
+    function pinQuickElement(node, host, x, y, transform) {
+        if (!attachQuickElement(node, host)) return;
+        node.style.setProperty('position', 'fixed', 'important');
+        node.style.setProperty('left', `${Math.round(x)}px`, 'important');
+        node.style.setProperty('top', `${Math.round(y)}px`, 'important');
+        node.style.setProperty('bottom', 'auto', 'important');
+        node.style.setProperty('right', 'auto', 'important');
+        node.style.setProperty('margin', '0', 'important');
+        node.style.setProperty('transform', transform, 'important');
+    }
+    function freeQuickControls() {
+        const quick = state.quick;
+        const portal = quickPortal();
+        if (!quick?.isConnected || !portal) return;
+        attachQuickElement(quick, portal);
+        if (state.loopMenu?.isConnected) attachQuickElement(state.loopMenu, portal);
+        quickPortalSync();
+    }
+    function quickBarCenterY(box) {
+        return box.bottom - QUICK_BOTTOM_OFFSET;
     }
     function fitQuickControls() {
         const quick = state.quick;
-        if (!quick?.isConnected) return;
-        quick.style.setProperty('position', 'absolute', 'important');
-        quick.style.setProperty('left', '50%', 'important');
-        quick.style.setProperty('right', 'auto', 'important');
-        quick.style.setProperty('top', 'auto', 'important');
-        quick.style.setProperty('bottom', `${QUICK_BOTTOM_OFFSET}px`, 'important');
+        const portal = quickPortal();
+        if (!quick?.isConnected || !portal) return;
+        attachQuickElement(quick, portal);
+        if (state.loopMenu?.isConnected) attachQuickElement(state.loopMenu, portal);
+        const player = quickAnchorPlayer();
+        if (!player) return;
+        const box = player.getBoundingClientRect?.();
+        if (!box || box.width <= 0 || box.height <= 0) return;
+        pinQuickElement(
+            quick,
+            portal,
+            box.left + box.width / 2,
+            quickBarCenterY(box),
+            'translate(-50%, -50%) scale(var(--quick-scale, 1))'
+        );
         quick.style.setProperty('width', 'max-content', 'important');
         quick.style.setProperty('height', 'auto', 'important');
         quick.style.setProperty('min-height', '0', 'important');
-        quick.style.setProperty('max-width', 'calc(100% - 16px)', 'important');
-        quick.style.setProperty('margin', '0', 'important');
+        quick.style.setProperty('max-width', `${Math.max(120, Math.round(box.width) - 16)}px`, 'important');
         quick.style.setProperty('box-sizing', 'border-box', 'important');
-        quick.style.setProperty('transform', 'translateX(-50%) scale(var(--quick-scale, 1))', 'important');
+        quick.style.setProperty('z-index', '2147483647', 'important');
+        const quickVisible = quick.classList.contains('quick-visible');
+        quick.style.setProperty('transition', 'none', 'important');
+        quick.style.setProperty('opacity', quickVisible ? '1' : '0', 'important');
+        quick.style.setProperty('pointer-events', quickVisible ? 'auto' : 'none', 'important');
+        quick.style.setProperty('visibility', quickVisible ? 'visible' : 'hidden', 'important');
         quick.classList.remove('quick-compact');
-        const host = state.container && state.container.isConnected ? state.container : state.video;
-        const base = host && host.isConnected ? host.getBoundingClientRect().width : window.innerWidth;
-        const available = base - 16;
+        const available = Math.max(120, box.width - 16);
         const needed = quick.scrollWidth;
-        if (needed <= available) {
-            quick.style.setProperty('--quick-scale', '1');
-            return;
+        let scale = '1';
+        if (needed > available) {
+            quick.classList.add('quick-compact');
+            const stillTooWide = quick.scrollWidth;
+            scale = stillTooWide > available && available > 120 ? (available / stillTooWide).toFixed(3) : '1';
         }
-        quick.classList.add('quick-compact');
-        const stillTooWide = quick.scrollWidth;
-        const scale = stillTooWide > available && available > 120 ? (available / stillTooWide).toFixed(3) : '1';
+        state.quickScale = scale;
         quick.style.setProperty('--quick-scale', scale);
+        fitLoopMenu();
+    }
+    function fitLoopMenu() {
+        const menu = state.loopMenu;
+        const quick = state.quick;
+        const portal = quickPortal();
+        if (!menu?.isConnected || !quick?.isConnected || !portal) return;
+        attachQuickElement(menu, portal);
+        const quickBox = quick.getBoundingClientRect();
+        if (quickBox.width <= 0 || quickBox.height <= 0) return;
+        const button = state.loopBtn;
+        const buttonBox = button?.isConnected ? button.getBoundingClientRect() : null;
+        const center = buttonBox && buttonBox.width > 0
+            ? buttonBox.left + buttonBox.width / 2
+            : quickBox.left + quickBox.width / 2;
+        const scale = Number.parseFloat(state.quickScale) || 1;
+        pinQuickElement(
+            menu,
+            portal,
+            center,
+            quickBox.top - 10 * scale,
+            'translate(-50%, -100%)'
+        );
+        menu.style.setProperty('z-index', '2147483647', 'important');
+        menu.style.setProperty('pointer-events', 'auto', 'important');
+    }
+    function quickControlsAlive() {
+        const quick = state.quick;
+        if (!quick || !quick.isConnected) return false;
+        const video = state.video;
+        if (!video || !video.isConnected) return true;
+        return document.contains(video);
     }
     let quickGlobalBound = false;
     let quickResizeHandler = null;
     let quickFullscreenHandler = null;
     function bindQuickHost(container) {
+        bindQuickPointer();
+        bindQuickPlayback(state.video);
         if (!container || !container.dataset || container.dataset.quickAutohide === '1') return;
         container.dataset.quickAutohide = '1';
         container.addEventListener('mousemove', showQuickControls, { passive: true });
-        container.addEventListener('mouseleave', hideQuickControls);
+        container.addEventListener('mouseleave', () => {
+            quickBarHover = false;
+            reconcileQuickControls();
+        });
         container.addEventListener('click', showQuickControls);
     }
+    const quickPlaybackBound = new WeakSet();
+    function bindQuickPlayback(video) {
+        if (!video?.addEventListener || quickPlaybackBound.has(video)) return;
+        quickPlaybackBound.add(video);
+        const sync = () => {
+            if (quickPlayerPaused()) showQuickControls();
+            else reconcileQuickControls();
+        };
+        video.addEventListener('play', sync);
+        video.addEventListener('playing', sync);
+        video.addEventListener('pause', sync);
+        video.addEventListener('ended', sync);
+    }
+    let quickPointerBound = false;
+    function bindQuickPointer() {
+        if (quickPointerBound) return;
+        quickPointerBound = true;
+        document.addEventListener('mousemove', trackQuickPointer, { passive: true });
+        document.addEventListener('mousedown', forwardQuickBarHit, true);
+        document.addEventListener('pointerdown', forwardQuickBarHit, true);
+        document.addEventListener('click', forwardQuickBarHit, true);
+    }
     function setupQuickAutoHide() {
-        const { container, quick } = state;
+        const { container, quick, video } = state;
         bindQuickHost(container);
+        bindQuickPlayback(video);
         if (!quick) return;
+        if (quick.dataset.quickHitProbe !== '1') {
+            quick.dataset.quickHitProbe = '1';
+            quick.addEventListener('click', event => {
+                if (event.target.closest?.('.quick-btn')) return;
+                const hit = document.elementFromPoint?.(event.clientX, event.clientY);
+                log(`快捷条点击未命中按钮：目标=${event.target.tagName} 命中=${hit?.tagName || 'null'}${hit?.className ? '.' + String(hit.className).trim().split(/\s+/).join('.') : ''} 坐标=(${Math.round(event.clientX)},${Math.round(event.clientY)})`);
+            }, true);
+        }
         quick.addEventListener('mouseenter', () => {
-            clearTimeout(state.quickHideTimer);
+            quickBarHover = true;
+            cancelQuickControlsHide();
             quick.classList.add('quick-visible');
+            paintQuickVisibility(true);
             fitQuickControls();
         });
         quick.addEventListener('mouseleave', () => {
-            if (isLoopMenuOpen()) return;
-            state.quickHideTimer = setTimeout(hideQuickControls, QUICK_LEAVE_DELAY);
+            quickBarHover = false;
+            reconcileQuickControls();
         });
         if (!quickGlobalBound) {
             quickGlobalBound = true;
@@ -1761,6 +2346,7 @@
             quickFullscreenHandler = () => setTimeout(fitQuickControls, 120);
             window.addEventListener('resize', quickResizeHandler, { passive: true });
             document.addEventListener('fullscreenchange', quickFullscreenHandler);
+            document.addEventListener('webkitfullscreenchange', quickFullscreenHandler);
         }
         setTimeout(fitQuickControls, 0);
     }
@@ -1794,21 +2380,14 @@
     function toggleLoopMenu() {
         if (!state.loopMenu) return;
         state.loopMenu.classList.toggle('show');
-    }
-    function quickControlsAlive() {
-        const quick = state.quick;
-        if (!quick || !quick.isConnected) return false;
-        const host = quick.parentElement;
-        if (!host || !host.isConnected) return false;
-        if (state.container && host !== state.container) return false;
-        const video = state.video;
-        if (!video || !video.isConnected) return true;
-        if (!host.contains(video)) return false;
-        return host === playerContainer(video);
+        if (state.loopMenu.classList.contains('show')) fitLoopMenu();
     }
     function watchQuickControls() {
         if (state.quickWatchTimer) return;
-        state.quickWatchTimer = setInterval(() => {
+        state.quickWatchTimer = trackInterval(setInterval(() => {
+
+
+            if (isPageHidden()) return;
             if (!state.bound || isAnalyticsRoute()) return;
             if (state.video?.isConnected && quickControlsAlive()) return;
             const video = findMainVideo();
@@ -1818,7 +2397,7 @@
                 if (!container) return;
                 bindPlayer(video, container, true);
             }
-        }, 1200);
+        }, 1200));
     }
     function createQuickControls() {
         const container = state.container;
@@ -1830,11 +2409,11 @@
             return;
         }
         for (const stale of document.querySelectorAll('.custom-quick-controls')) stale.remove();
+        for (const stale of document.querySelectorAll('.loop-menu')) stale.remove();
         ensurePositioned(container);
         const quick = document.createElement('div');
         quick.className = 'custom-quick-controls';
         state.quick = quick;
-        state.quickHost = container;
         const group = document.createElement('div');
         group.className = 'quick-jump-group';
         group.addEventListener('click', event => event.stopPropagation());
@@ -1898,10 +2477,12 @@
             else log('⚠️ 输入无效');
         });
         addMenuOption('关闭循环', stopLoop);
-        loopWrapper.append(state.loopBtn, state.loopMenu);
+        loopWrapper.append(state.loopBtn);
         group.appendChild(loopWrapper);
         quick.appendChild(group);
         container.appendChild(quick);
+        container.appendChild(state.loopMenu);
+        freeQuickControls();
         document.addEventListener('click', event => {
             if (!loopWrapper.contains(event.target)) state.loopMenu.classList.remove('show');
         });
@@ -2055,60 +2636,72 @@
         state.cueIndex = { items, starts };
         state.cueCursor = -1;
         state.activeCueText = '';
-        state.subtitleFileName = fileName || label;
-        state.subtitleCueCount = items.length;
         if (settings.subtitleOffset !== 0) log(`ℹ️ 已应用字幕偏移 ${settings.subtitleOffset}s`);
         closeSubtitlePicker();
         renderSubtitle(true);
-        renderSubtitleBanner();
+
+        const snapshotName = fileName || label;
+        if (saveSubtitleSnapshot(text, snapshotName)) state.subtitleSnapshotRestored = subtitleSnapshotKey();
         log(`✅ ${label}加载成功：${items.length} 条${fileName && fileName !== label ? `（${fileName}）` : ''}`);
         return true;
     }
-    function renderSubtitleBanner() {
-        const host = getUiLayer(2147483600);
-        let banner = state.subtitleBanner;
-        if (!state.subtitleFileName) {
-            banner?.remove();
-            state.subtitleBanner = null;
-            return;
+
+
+    const SUBTITLE_SNAPSHOT_MAX = 400000;
+    function subtitleSnapshotKey() {
+        const id = getCurrentVideoID();
+        return id ? `subtitle:${String(id).toLowerCase()}` : null;
+    }
+    function saveSubtitleSnapshot(text, name) {
+        const key = subtitleSnapshotKey();
+        if (!key || !text || text.length > SUBTITLE_SNAPSHOT_MAX) return false;
+        try {
+            store.set(key, JSON.stringify({ name: String(name || ''), text, at: Date.now() }));
+            return true;
+        } catch (_) {
+            return false;
         }
-        if (!banner?.isConnected) {
-            banner = document.createElement('div');
-            banner.className = 'subtitle-banner';
-            banner.addEventListener('click', () => {
-                state.subtitleBanner?.classList.toggle('expanded');
-            });
-            host.appendChild(banner);
-            state.subtitleBanner = banner;
+    }
+    function restoreSubtitleSnapshot() {
+        const key = subtitleSnapshotKey();
+        if (!key) return false;
+
+        if (state.subtitleSnapshotRestored === key) return false;
+        state.subtitleSnapshotRestored = key;
+        let snapshot = null;
+        try {
+            const raw = store.get(key);
+            if (!raw) return false;
+            snapshot = JSON.parse(raw);
+        } catch (_) {
+            return false;
         }
-        const nameEl = document.createElement('span');
-        nameEl.className = 'subtitle-banner-name';
-        nameEl.textContent = state.subtitleFileName;
-        nameEl.title = state.subtitleFileName;
-        const meta = document.createElement('span');
-        meta.className = 'subtitle-banner-meta';
-        meta.textContent = `${state.subtitleCueCount} 条 · 偏移 ${settings.subtitleOffset >= 0 ? '+' : ''}${settings.subtitleOffset}s`;
-        banner.replaceChildren(
-            Object.assign(document.createElement('span'), { className: 'subtitle-banner-icon', textContent: '📄' }),
-            nameEl,
-            meta
-        );
-        applyUiStyles();
+        if (!snapshot || typeof snapshot.text !== 'string' || !snapshot.text) return false;
+        if (snapshot.text.length > SUBTITLE_SNAPSHOT_MAX) return false;
+        const ok = applySubtitleText(snapshot.text, '恢复的字幕', snapshot.name || '已缓存的字幕');
+        if (ok) log('📍 已自动恢复上次加载的字幕（可在面板中清除）');
+        return ok;
+    }
+    function clearSubtitleSnapshot() {
+        const key = subtitleSnapshotKey();
+        if (!key) return;
+        try {
+            store.remove(key);
+        } catch (_) {
+        }
     }
     function clearSubtitles() {
         state.cueIndex = null;
         state.subtitleSource = '';
         state.activeCueText = '';
         state.cueCursor = -1;
-        state.subtitleFileName = '';
-        state.subtitleCueCount = 0;
         if (state.subtitleEl) {
             state.subtitleEl.textContent = '';
             state.subtitleEl.style.display = 'none';
         }
-        renderSubtitleBanner();
         closeSubtitlePicker();
-        log('字幕已清除');
+        clearSubtitleSnapshot();
+        log('字幕已清除（同时移除本地缓存快照）');
     }
     function startSubtitleLoop() {
         cancelAnimationFrame(state.subtitleRAF);
@@ -2122,8 +2715,8 @@
                 state.subtitleIdleTimer = setTimeout(tick, SUBTITLE_IDLE_DELAY);
                 return;
             }
-            state.subtitleRAF = requestAnimationFrame(tick);
-            if (document.hidden) return;
+            state.subtitleRAF = trackFrame(requestAnimationFrame(tick));
+            if (isPageHidden()) return;
             if (state.loopActive) {
                 const time = video.currentTime;
                 if (time >= state.loopStart + state.loopDuration || time < state.loopStart - 0.5) {
@@ -2133,7 +2726,7 @@
             if (video.paused) return;
             renderSubtitle(false);
         };
-        state.subtitleRAF = requestAnimationFrame(tick);
+        state.subtitleRAF = trackFrame(requestAnimationFrame(tick));
     }
     function getCurrentVideoID() {
         if (IS_JABLE) return location.pathname.match(/\/videos\/([^/]+)/)?.[1] || null;
@@ -2224,6 +2817,47 @@
             skipProxy: true
         });
     }
+    const JDFORREPAM_MOVIE_SEARCH = {
+        page: '1',
+        type: 'movie',
+        limit: '5',
+        movie_type: 'all',
+        from_recent: 'false',
+        movie_filter_by: 'all',
+        movie_sort_by: 'relevance'
+    };
+    function javDbCodeKey(code) {
+        return String(code || '').replace(/[-_]/g, '').toLowerCase();
+    }
+    function javDbSearchUrl(code) {
+        return `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams(Object.assign({ q: String(code || '') }, JDFORREPAM_MOVIE_SEARCH));
+    }
+    function javDbMovieDetailUrl(id) {
+        return `${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(String(id))}`;
+    }
+    async function searchJavDbMovie(code) {
+        const key = javDbCodeKey(code);
+        if (!key) return null;
+        const body = JSON.parse(await jdApiFetch(javDbSearchUrl(code)));
+        const movies = Array.isArray(body?.data?.movies) ? body.data.movies : [];
+        return movies.find(item => javDbCodeKey(item?.number) === key) || null;
+    }
+    async function fetchJavDbDetail(id) {
+        if (!id) return null;
+        try {
+            return JSON.parse(await jdApiFetch(javDbMovieDetailUrl(id)))?.data?.movie ?? null;
+        } catch (_) {
+            return null;
+        }
+    }
+    function parseHtmlDocument(html) {
+        if (!html) return null;
+        try {
+            return new DOMParser().parseFromString(html, 'text/html') || null;
+        } catch (_) {
+            return null;
+        }
+    }
     const codeNormCache = new Map();
     function normalizeVideoCode(videoId) {
         const raw = String(videoId ?? '');
@@ -2254,7 +2888,7 @@
             const rows = document.querySelectorAll('.text-secondary, .video-info-row, .info-row, li');
             for (const row of rows) {
                 const label = row.querySelector('span:first-child, dt, .label')?.textContent?.trim() || '';
-                if (/^(?:Code|番号|番號|品番)\s*[:：]?$/i.test(label)) {
+                if (META_LABEL_CODE.test(label)) {
                     const value = row.querySelector('.font-medium, dd, .value, span:last-child')?.textContent?.trim();
                     if (value && /^[a-z0-9]/i.test(value)) return normalizeVideoCode(value);
                 }
@@ -2405,7 +3039,7 @@
             const text = await decodeSubtitleBuffer(payload);
             if (applySubtitleText(text, '字幕', name || url.split('/').pop())) {
                 closeSubtitlePicker();
-                log(`📍 字幕已缓存到浏览器本地，临时标记 avSub:subtitle；刷新页面后需重新选择「${name || '该字幕'}」`);
+                log('📍 已写入本地快照，刷新本页或重进该视频会自动恢复；点「清除字幕」可移除');
             } else {
                 log('❌ 字幕内容无法解析，可能不是有效的字幕文件');
             }
@@ -2486,7 +3120,6 @@
         { key: 'genre', label: '类型' },
         { key: 'maker', label: '发行商' }
     ];
-    const BACKUP_DETAIL_FIELDS = new Set(['actress', 'genre', 'maker']);
     const BACKUP_CARD_SELECTOR = 'div[class*="aspect-w-16"], .video-img-box, .thumbnail, article.video-card, .grid > div, .video-list > div, .col-6, .col-sm-4, .col-lg-3';
     const BACKUP_JUNK_PATH_RE = /\/(?:recent|latest|new|new-release|contact|contact-us|about|about-us|help|faq|dmca|terms|privacy|policy|login|signin|signup|register|search|my|account|profile|premium|vip|favorit|collection|playlist|bookmark)(?:\/|$)/i;
     const BACKUP_JUNK_NAME_RE = /^(?:最近更新|最新更新|聯絡我們|联系我们|關於我們|关于我们|首頁|首页|主頁|主页|登入|登录|註冊|注册|收藏|我的收藏|我的最愛|帳號|账号|服務條款|服务条款|隱私政策|隐私政策|DMCA|説明|帮助|幫助|回報|回报|意見|意见)$/i;
@@ -2613,25 +3246,14 @@
         if (!clean || !/\d/.test(clean)) return null;
         if (JAVDB_BACKUP_CACHE.has(clean)) return JAVDB_BACKUP_CACHE.get(clean);
         const task = (async () => {
-            const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
-                q: clean, page: '1', type: 'movie', limit: '5',
-                movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
-            });
-            let movies = [];
+            let movie = null;
             try {
-                movies = JSON.parse(await jdApiFetch(searchUrl))?.data?.movies ?? [];
+                movie = await searchJavDbMovie(clean);
             } catch (_) {
-                movies = [];
+                movie = null;
             }
-            const key = clean.replace(/[-_]/g, '').toLowerCase();
-            const movie = (Array.isArray(movies) ? movies : []).find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === key);
             if (!movie?.id) return null;
-            let detail = null;
-            try {
-                detail = JSON.parse(await jdApiFetch(`${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(movie.id)}`))?.data?.movie ?? null;
-            } catch (_) {
-                detail = null;
-            }
+            const detail = await fetchJavDbDetail(movie.id);
             return backupJavDbInfo(movie, detail);
         })().catch(() => null);
         JAVDB_BACKUP_CACHE.set(clean, task);
@@ -2691,13 +3313,7 @@
         return /\d/.test(fromSlug) ? fromSlug : '';
     }
     function parseFavoriteCards(html) {
-        if (!html) return [];
-        let doc = null;
-        try {
-            doc = new DOMParser().parseFromString(html, 'text/html');
-        } catch (_) {
-            return [];
-        }
+        const doc = parseHtmlDocument(html);
         if (!doc) return [];
         const nodes = doc.querySelectorAll(BACKUP_CARD_SELECTOR);
         const out = [];
@@ -2739,13 +3355,7 @@
         return /favourites?/i.test(raw);
     }
     function parseJableFavoriteCards(html) {
-        if (!html) return [];
-        let doc = null;
-        try {
-            doc = new DOMParser().parseFromString(html, 'text/html');
-        } catch (_) {
-            return [];
-        }
+        const doc = parseHtmlDocument(html);
         if (!doc) return [];
         const out = [];
         const seen = new Set();
@@ -2799,13 +3409,7 @@
     }
     function parseBackupDetail(html) {
         const out = { title: '', code: '', actress: [], genre: [], maker: '', cover: '' };
-        if (!html) return out;
-        let doc = null;
-        try {
-            doc = new DOMParser().parseFromString(html, 'text/html');
-        } catch (_) {
-            return out;
-        }
+        const doc = parseHtmlDocument(html);
         if (!doc) return out;
         const rows = doc.querySelectorAll('.text-secondary, .video-info-row, .info-row, li, div.space-y-2 > div');
         for (const row of rows) {
@@ -2821,23 +3425,23 @@
                 const texts = links.map(anchor => (anchor.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
                 return texts.length ? texts : [value];
             };
-            if (!out.title && /^(?:Title|標題|标题|タイトル|作品名)\s*[:：]?$/i.test(label)) out.title = value;
-            else if (/^(?:Code|品番|番号|番號)\s*[:：]?$/i.test(label)) out.code = normalizeVideoCode(value);
-            else if (/^(?:Actress|Actors?|Cast|主演|演員|演员|女優|女优|モデル)\s*[:：]?$/i.test(label)) {
+            if (!out.title && META_LABEL_TITLE.test(label)) out.title = value;
+            else if (META_LABEL_CODE.test(label)) out.code = normalizeVideoCode(value);
+            else if (META_LABEL_ACTRESS.test(label)) {
                 for (const name of linkText()) {
                     for (const part of backupSplitNames(name)) {
                         const valid = backupValidEntity(part);
                         if (valid && !out.actress.includes(valid)) out.actress.push(valid);
                     }
                 }
-            } else if (/^(?:Genre|Tag|Tags|類別|类别|類型|类型|主題|主题|標籤|标签|ジャンル)\s*[:：]?$/i.test(label)) {
+            } else if (META_LABEL_GENRE.test(label)) {
                 for (const name of linkText()) {
                     for (const part of backupSplitNames(name)) {
                         const valid = backupValidEntity(part);
                         if (valid && !out.genre.includes(valid)) out.genre.push(valid);
                     }
                 }
-            } else if (/^(?:Maker|Studio|Label|Company|メーカー|メーカ|スタジオ|片商|廠商|厂商|制作|製作|發行商|发行商)\s*[:：]?$/i.test(label)) out.maker = backupValidEntity(value);
+            } else if (META_LABEL_MAKER.test(label)) out.maker = backupValidEntity(value);
         }
         if (!out.actress.length) {
             for (const anchor of doc.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"], a[href*="/actors/"], a[href*="/actor/"], a[href*="/models/"], a[href*="/model/"], a[href*="/stars/"], a[href*="/star/"]')) {
@@ -2933,13 +3537,7 @@
         return jableList ? parseJableFavoriteCards(raw) : parseFavoriteCards(raw);
     }
     function favoriteMaxPage(html) {
-        if (!html) return 0;
-        let doc = null;
-        try {
-            doc = new DOMParser().parseFromString(html, 'text/html');
-        } catch (_) {
-            return 0;
-        }
+        const doc = parseHtmlDocument(html);
         if (!doc) return 0;
         let max = 0;
         for (const anchor of doc.querySelectorAll('a[href*="page="], a[href*="/page/"]')) {
@@ -3212,8 +3810,9 @@
         const wantMeta = wantActress || wantGenre || wantMaker;
         if (!wantName && !wantThumb && !wantMeta) return;
         let done = 0;
-        for (const item of items) {
-            if (ui.cancelled) break;
+
+        await mapPool(items, 3, async item => {
+            if (ui.cancelled) return null;
             const nameMissing = () => !item.name || item.name === item.code || BACKUP_DATE_TEXT_RE.test(item.name);
             const clearMeta = () => {
                 if (wantActress) item.actress = [];
@@ -3272,8 +3871,8 @@
             done++;
             setBackupProgress(ui, 0.4 + 0.3 * (done / items.length));
             if (done % 5 === 0 || done === items.length) backupLog(`🧾 详情 ${done}/${items.length}`);
-            await backupSleep(200);
-        }
+            return item;
+        });
     }
     function backupCsvCell(value) {
         const text = String(value ?? '');
@@ -3300,8 +3899,9 @@
         const thumbNames = new Map();
         if (fields.has('thumb')) {
             let done = 0;
-            for (const item of items) {
-                if (ui.cancelled) break;
+
+            const results = await mapPool(items, 4, async (item, index) => {
+                if (ui.cancelled) return null;
                 let image = item.thumb ? await fetchBackupImage(item.thumb, item.href) : null;
                 if (!image && item.code) {
                     const info = await fetchJavDbBackupInfo(item.code);
@@ -3310,17 +3910,20 @@
                         image = await fetchBackupImage(info.cover, 'https://javdb.com/');
                     }
                 }
-                if (image) {
-                    const path = `img/${backupFileStem(item, items.indexOf(item) + 1)}.${image.ext}`;
-                    imageEntries.push({ name: path, data: image.bytes });
-                    thumbNames.set(item, path);
-                } else {
-                    backupLog(`⚠️ 缩略图下载失败：${item.code || item.name}`);
-                }
                 done++;
                 setBackupProgress(ui, 0.7 + 0.3 * (done / items.length));
                 if (done % 5 === 0 || done === items.length) backupLog(`🖼 缩略图 ${done}/${items.length}`);
-                await backupSleep(120);
+                if (!image) {
+                    backupLog(`⚠️ 缩略图下载失败：${item.code || item.name}`);
+                    return null;
+                }
+
+                return { item, path: `img/${backupFileStem(item, index + 1)}.${image.ext}`, data: image.bytes };
+            });
+            for (const entry of results) {
+                if (!entry) continue;
+                imageEntries.push({ name: entry.path, data: entry.data });
+                thumbNames.set(entry.item, entry.path);
             }
         }
         const rows = backupRows(items, fields, thumbNames);
@@ -3716,22 +4319,15 @@
     }
     async function fetchJavDbInfo(code, onPartial) {
         const empty = { rating: undefined, stills: [], reviews: [], lists: [], credits: null, javDbMovieId: '' };
-        const cleanId = code.replace(/[-_]/g, '').toLowerCase();
-        const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
-            q: code, page: '1', type: 'movie', limit: '5',
-            movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
-        });
-        let searchBody;
+        let movie = null;
         try {
-            searchBody = JSON.parse(await jdApiFetch(searchUrl));
+            movie = await searchJavDbMovie(code);
         } catch (_) {
             return empty;
         }
-        const movies = Array.isArray(searchBody?.data?.movies) ? searchBody.data.movies : [];
-        const movie = movies.find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === cleanId);
         if (!movie?.id) return empty;
         const movieId = encodeURIComponent(movie.id);
-        const detailUrl = `${JDFORREPAM_API}/api/v2/movies/${movieId}`;
+        const detailUrl = javDbMovieDetailUrl(movie.id);
         const reviewsUrl = `${JDFORREPAM_API}/api/v1/movies/${movieId}/reviews?` +
             new URLSearchParams({ page: '1', sort_by: 'hotly', limit: '20' });
         const listsUrl = `${JDFORREPAM_API}/api/v1/lists/related?` +
@@ -4591,25 +5187,9 @@
         JAVDB_CREDITS_DONE.set(target, credits);
     }
     async function fetchJavDbCredits(code) {
-        const cleanId = code.replace(/[-_]/g, '').toLowerCase();
-        const searchUrl = `${JDFORREPAM_API}/api/v2/search?` + new URLSearchParams({
-            q: code, page: '1', type: 'movie', limit: '5',
-            movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
-        });
-        let movies = [];
-        try {
-            movies = JSON.parse(await jdApiFetch(searchUrl))?.data?.movies ?? [];
-        } catch (_) {
-            movies = [];
-        }
-        const movie = (Array.isArray(movies) ? movies : []).find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === cleanId);
+        const movie = await searchJavDbMovie(code);
         if (!movie?.id) return null;
-        let detail = null;
-        try {
-            detail = JSON.parse(await jdApiFetch(`${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(movie.id)}`))?.data?.movie ?? null;
-        } catch (_) {
-            detail = null;
-        }
+        const detail = await fetchJavDbDetail(movie.id);
         return javDbCreditsFrom(movie, detail);
     }
     function javDbCreditsFor(code) {
@@ -4929,14 +5509,14 @@
     function initPlayer() {
         if (state.bound || state.pollTimer) return;
         if (!findMainVideo()) createPanel();
-        state.pollTimer = setInterval(() => {
+        state.pollTimer = trackInterval(setInterval(() => {
             const video = findMainVideo();
             if (!video) return;
             const container = playerContainer(video);
             if (!container) return;
             stopPlayerPoll();
             bindPlayer(video, container);
-        }, POLL_INTERVAL);
+        }, POLL_INTERVAL));
         state.pollTimeout = setTimeout(stopPlayerPoll, POLL_TIMEOUT);
     }
     function sweepUiOrphans(container) {
@@ -4978,6 +5558,11 @@
         watchQuickControls();
         setupShortcuts();
         buildSpeedHud(container);
+
+        try {
+            restoreSubtitleSnapshot();
+        } catch (_) {
+        }
         setupHoldAccelerate(container);
         syncFilterBar();
         if (video.dataset && video.dataset.avHelperBound !== '1') {
@@ -5422,28 +6007,208 @@
     const MAX_RECORDS = 3000;
     const MAX_RECORDS_SLACK = 200;
     const ANALYTICS_SAVE_INTERVAL = 25000;
+    const HISTORY_MIGRATION_KEY = 'historyMigration_v2';
+    const HISTORY_SCHEMA_VERSION = 2;
     const CARD_SELECTOR = '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .grid > div, .row > div[class*="col-"], .video-list > div';
     const CARD_INNER_SELECTOR = '.thumbnail, .video-img-box, .video-item, .list-item, .video-list-item, article.video-card';
     const CARD_CHROME_SELECTOR = 'header, nav, footer, .site-header, .app-nav, .site-footer, .pagination, .breadcrumb, .custom-ui-layer, .av-analytics-page';
     const DURATION_OPTIONS = [[0, '全部时长'], [300, '≥ 5 分钟'], [600, '≥ 10 分钟'], [1200, '≥ 20 分钟'], [1800, '≥ 30 分钟'], [3600, '≥ 60 分钟']];
     let watchedCache = null;
+    let historyStorageReady = false;
+    function historyHasGmStorage() {
+        try {
+            return typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+        } catch (_) {
+            return false;
+        }
+    }
+    function historyGmGet(key) {
+        if (!historyHasGmStorage()) return null;
+        try {
+            const value = GM_getValue(STORAGE_PREFIX + key, null);
+            return value === void 0 || value === null ? null : (typeof value === 'string' ? value : String(value));
+        } catch (_) {
+            return null;
+        }
+    }
+    function historyGmSet(key, value) {
+        if (!historyHasGmStorage()) return;
+        try {
+            GM_setValue(STORAGE_PREFIX + key, String(value));
+        } catch (_) {
+        }
+    }
+    function historyLocalGet(key) {
+        try {
+            return localStorage.getItem(STORAGE_PREFIX + key);
+        } catch (_) {
+            return null;
+        }
+    }
+    function historyLocalSet(key, value) {
+        try {
+            localStorage.setItem(STORAGE_PREFIX + key, String(value));
+        } catch (_) {
+        }
+    }
+    function historyParseJson(raw, fallback) {
+        if (raw === null || raw === void 0 || raw === '') return fallback;
+        if (typeof raw === 'object') return raw;
+        try {
+            return JSON.parse(String(raw));
+        } catch (_) {
+            return fallback;
+        }
+    }
+    function historyNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.max(0, number) : 0;
+    }
+    function historyText(value) {
+        return typeof value === 'string' ? value.trim() : '';
+    }
+    function historyStringList(value) {
+        if (!Array.isArray(value)) return [];
+        const seen = new Set();
+        const result = [];
+        for (const item of value) {
+            const text = historyText(item);
+            if (!text || seen.has(text)) continue;
+            seen.add(text);
+            result.push(text);
+        }
+        return result;
+    }
+    function historyWatchedList(raw) {
+        const list = historyParseJson(raw, []);
+        if (!Array.isArray(list)) return [];
+        const result = [];
+        const seen = new Set();
+        for (const item of list) {
+            const code = normalizeVideoCode(item);
+            if (!code || seen.has(code)) continue;
+            seen.add(code);
+            result.push(code);
+        }
+        return result.slice(-MAX_WATCHED);
+    }
+    function historyNormalizeRecord(item) {
+        if (!item || typeof item !== 'object') return null;
+        const code = normalizeVideoCode(item.code);
+        if (!code) return null;
+        const watchedAt = historyNumber(item.watchedAt);
+        const firstWatchedAt = historyNumber(item.firstWatchedAt) || watchedAt;
+        return {
+            code,
+            title: historyText(item.title) || code,
+            url: historyText(item.url),
+            duration: historyNumber(item.duration),
+            watchedSeconds: historyNumber(item.watchedSeconds),
+            watchedAt,
+            firstWatchedAt,
+            actresses: historyStringList(item.actresses),
+            genres: historyStringList(item.genres),
+            maker: historyText(item.maker),
+            maxProgress: Math.min(1, historyNumber(item.maxProgress)),
+            watchCount: historyNumber(item.watchCount)
+        };
+    }
+    function historyMergeRecord(target, incoming) {
+        target.watchedSeconds += incoming.watchedSeconds;
+        target.watchCount += incoming.watchCount;
+        target.watchedAt = Math.max(target.watchedAt, incoming.watchedAt);
+        target.firstWatchedAt = target.firstWatchedAt
+            ? (incoming.firstWatchedAt ? Math.min(target.firstWatchedAt, incoming.firstWatchedAt) : target.firstWatchedAt)
+            : incoming.firstWatchedAt;
+        target.maxProgress = Math.max(target.maxProgress, incoming.maxProgress);
+        if (!target.title || target.title === target.code) target.title = incoming.title || target.title;
+        if (!target.url) target.url = incoming.url;
+        if (!target.duration && incoming.duration) target.duration = incoming.duration;
+        if (!target.maker && incoming.maker) target.maker = incoming.maker;
+        if (!target.actresses.length && incoming.actresses.length) target.actresses = incoming.actresses;
+        if (!target.genres.length && incoming.genres.length) target.genres = incoming.genres;
+        return target;
+    }
+    function historyNormalizeRecordList(value, mergeDuplicates) {
+        const list = Array.isArray(value) ? value : [];
+        const records = [];
+        const byCode = new Map();
+        for (const item of list) {
+            const record = historyNormalizeRecord(item);
+            if (!record) continue;
+            if (!mergeDuplicates) {
+                records.push(record);
+                continue;
+            }
+            const existing = byCode.get(record.code);
+            if (existing) historyMergeRecord(existing, record);
+            else {
+                byCode.set(record.code, record);
+                records.push(record);
+            }
+        }
+        records.sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
+        return records.slice(0, MAX_RECORDS);
+    }
+    function historyMergeRecordLists(...lists) {
+        return historyNormalizeRecordList(lists.flat(), true);
+    }
+    function initializeHistoryStorage() {
+        if (historyStorageReady) return;
+        historyStorageReady = true;
+        const markerKey = `${HISTORY_MIGRATION_KEY}:${SITE_TAG}:${location.hostname}`;
+        try {
+            if (localStorage.getItem(STORAGE_PREFIX + markerKey) === '1') return;
+        } catch (_) {
+        }
+        const gmWatched = historyWatchedList(historyGmGet(WATCHED_KEY));
+        const localWatched = historyWatchedList(historyLocalGet(WATCHED_KEY));
+        const mergedWatched = [...new Set([...gmWatched, ...localWatched])].slice(-MAX_WATCHED);
+        const gmRecords = historyNormalizeRecordList(historyParseJson(historyGmGet(ANALYTICS_KEY), []), true);
+        const localRecords = historyNormalizeRecordList(historyParseJson(historyLocalGet(ANALYTICS_KEY), []), true);
+        const mergedRecords = historyMergeRecordLists(gmRecords, localRecords);
+        historyGmSet(WATCHED_KEY, JSON.stringify(mergedWatched));
+        historyGmSet(ANALYTICS_KEY, JSON.stringify(mergedRecords));
+        historyGmSet(HISTORY_MIGRATION_KEY, '1');
+        historyLocalSet(WATCHED_KEY, JSON.stringify(mergedWatched));
+        historyLocalSet(ANALYTICS_KEY, JSON.stringify(mergedRecords));
+        try {
+            localStorage.setItem(STORAGE_PREFIX + markerKey, '1');
+        } catch (_) {
+        }
+    }
+    function historyStorageGet(key) {
+        initializeHistoryStorage();
+        const gmValue = historyGmGet(key);
+        const localValue = historyLocalGet(key);
+        if (gmValue !== null) {
+            if (localValue !== gmValue) historyLocalSet(key, gmValue);
+            return gmValue;
+        }
+        if (localValue !== null) historyGmSet(key, localValue);
+        return localValue;
+    }
+    function historyStorageSet(key, value) {
+        initializeHistoryStorage();
+        historyGmSet(key, value);
+        historyLocalSet(key, value);
+    }
+    function resetHistoryCaches() {
+        watchedCache = null;
+        state.analyticsRecords = null;
+        bumpAnalyticsVersion();
+    }
     function watchedSet() {
         if (watchedCache) return watchedCache;
-        let list = [];
-        try {
-            list = JSON.parse(store.get(WATCHED_KEY) || '[]');
-        } catch (error) {
-            list = [];
-        }
-        watchedCache = new Set(Array.isArray(list) ? list.map(item => String(item).toUpperCase()) : []);
+        watchedCache = new Set(historyWatchedList(historyStorageGet(WATCHED_KEY)));
         return watchedCache;
     }
     function isWatched(code) {
         if (!code) return false;
-        return watchedSet().has(normalizeVideoCode(code).toUpperCase());
+        return watchedSet().has(normalizeVideoCode(code));
     }
     function markWatched(code) {
-        const key = normalizeVideoCode(code).toUpperCase();
+        const key = normalizeVideoCode(code);
         if (!key) return;
         const set = watchedSet();
         if (set.has(key)) return;
@@ -5451,12 +6216,12 @@
         const values = [...set];
         while (values.length > MAX_WATCHED) values.shift();
         watchedCache = new Set(values);
-        store.set(WATCHED_KEY, JSON.stringify(values));
+        historyStorageSet(WATCHED_KEY, JSON.stringify(values));
         state.watchGen += 1;
     }
     function clearWatched() {
         watchedCache = new Set();
-        store.set(WATCHED_KEY, '[]');
+        historyStorageSet(WATCHED_KEY, '[]');
         state.watchGen += 1;
     }
     function parseDurationSeconds(text) {
@@ -6309,7 +7074,6 @@
         const wrap = document.createElement('div');
         wrap.className = 'av-login-panel av-collapse';
         setCollapsed(wrap, !settings.loginPanelOpen);
-        state.loginPanel = wrap;
         const userField = document.createElement('label');
         userField.className = 'av-login-field';
         const userCaption = document.createElement('span');
@@ -6487,7 +7251,7 @@
             for (const mutation of mutations) {
                 const node = mutation.target;
                 if (mutationIsNoise(mutation)) continue;
-                if (node && node.closest && node.closest('.custom-ui-layer, .av-filter-bar, .av-filter-host, .custom-control-panel, .custom-quick-controls')) continue;
+                if (node && node.closest && node.closest('.custom-ui-layer, .av-filter-bar, .av-filter-host, .custom-control-panel, .custom-quick-controls, .loop-menu')) continue;
                 state.domGen += 1;
                 refreshFilters();
                 return;
@@ -6495,18 +7259,21 @@
         });
         observer.observe(document.body, { childList: true, subtree: true });
         state.filterObserver = observer;
+        pageLifecycle.push(() => observer.disconnect());
     }
     function analyticsRecords() {
         if (state.analyticsRecords) return state.analyticsRecords;
-        let list = [];
-        try {
-            list = JSON.parse(store.get(ANALYTICS_KEY) || '[]');
-        } catch (error) {
-            list = [];
-        }
-        state.analyticsRecords = Array.isArray(list) ? list : [];
-        if (repairAnalyticsTitles(state.analyticsRecords)) persistAnalyticsRecords(true);
+        const raw = historyStorageGet(ANALYTICS_KEY) || '[]';
+        const parsed = historyParseJson(raw, []);
+        const normalized = historyNormalizeRecordList(parsed, true);
+        state.analyticsRecords = normalized;
+        const repaired = repairAnalyticsTitles(normalized);
+        if (repaired || JSON.stringify(normalized) !== raw) persistAnalyticsRecords(true);
         return state.analyticsRecords;
+    }
+    function bumpAnalyticsVersion() {
+        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
+        state.analyticsDataVersion = (state.analyticsDataVersion || 0) + 1;
     }
     function saveAnalyticsRecords() {
         const list = analyticsRecords();
@@ -6516,14 +7283,14 @@
         }
         state.analyticsSavedAt = Date.now();
         state.analyticsSavePending = false;
-        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
-        store.set(ANALYTICS_KEY, JSON.stringify(list));
+        bumpAnalyticsVersion();
+        historyStorageSet(ANALYTICS_KEY, JSON.stringify(list));
     }
     function persistAnalyticsRecords(force) {
         if (!state.analyticsRecords && !state.analyticsSavePending) return;
         if (!force && state.analyticsSavedAt && Date.now() - state.analyticsSavedAt < ANALYTICS_SAVE_INTERVAL) {
             state.analyticsSavePending = true;
-            state.analyticsVersion = (state.analyticsVersion || 0) + 1;
+            bumpAnalyticsVersion();
             return;
         }
         saveAnalyticsRecords();
@@ -6679,11 +7446,11 @@
             if (metaSkipped(row)) continue;
             const first = row.querySelector('span:first-child');
             const label = first ? (first.textContent || '').trim() : '';
-            if (!meta.title && /^(?:Title|標題|标题|タイトル|作品名)\s*[:：]?$/i.test(label)) {
+            if (!meta.title && META_LABEL_TITLE.test(label)) {
                 const value = row.querySelector('.font-medium');
                 if (value) meta.title = (value.textContent || '').replace(/\s+/g, ' ').trim();
             }
-            if (!meta.maker && /^(?:Maker|メーカー|メーカ|片商|廠商|厂商|制作|製作|スタジオ|Studio|Label|Company)\s*[:：]?$/i.test(label)) {
+            if (!meta.maker && META_LABEL_MAKER.test(label)) {
                 const value = row.querySelector('.font-medium, a');
                 if (value) meta.maker = (value.textContent || '').replace(/\s+/g, ' ').trim();
             }
@@ -6743,7 +7510,7 @@
         if (!video) return;
         const code = getPageVideoCode();
         if (!code) return;
-        if (state.analyticsSession && state.analyticsSession.code === code) return;
+        if (state.analyticsSession && state.analyticsSession.code === code && state.analyticsVideo === video) return;
         commitAnalyticsSession(true);
         const meta = extractPageMetadata();
         backfillAnalyticsMetadata(meta);
@@ -6765,7 +7532,7 @@
             metaTries: 0
         };
         clearInterval(state.analyticsTimer);
-        state.analyticsTimer = setInterval(() => {
+        state.analyticsTimer = trackInterval(setInterval(() => {
             const session = state.analyticsSession;
             if (!session || !state.video) return;
             const now = Date.now();
@@ -6774,7 +7541,7 @@
             const mediaTime = Number(state.video.currentTime) || 0;
             const mediaDelta = mediaTime - session.lastMediaTime;
             session.lastMediaTime = mediaTime;
-            if (document.hidden || wallDelta > 120) return;
+            if (isPageHidden() || wallDelta > 120) return;
             if (!state.video.paused && !state.video.seeking && mediaDelta > 0) {
                 const jumped = mediaDelta > wallDelta * 8 + 2;
                 session.watchedSeconds += jumped ? wallDelta : mediaDelta;
@@ -6803,12 +7570,25 @@
                 backfillAnalyticsMetadata(fresh);
             }
             if (session.dirty && session.watchedSeconds >= 30) commitAnalyticsSession();
-        }, 2000);
-        video.addEventListener('pause', () => commitAnalyticsSession(true), { passive: true });
-        video.addEventListener('ended', () => commitAnalyticsSession(true), { passive: true });
+        }, 2000));
+
+        const onAnalyticsPause = () => commitAnalyticsSession(true);
+        const onAnalyticsEnded = () => commitAnalyticsSession(true);
+        if (state.analyticsVideo && state.analyticsVideo !== video && state.analyticsPauseHandler) {
+            try {
+                state.analyticsVideo.removeEventListener('pause', state.analyticsPauseHandler);
+                state.analyticsVideo.removeEventListener('ended', state.analyticsEndedHandler);
+            } catch (_) {
+            }
+        }
+        video.addEventListener('pause', onAnalyticsPause, { passive: true });
+        video.addEventListener('ended', onAnalyticsEnded, { passive: true });
+        state.analyticsVideo = video;
+        state.analyticsPauseHandler = onAnalyticsPause;
+        state.analyticsEndedHandler = onAnalyticsEnded;
     }
     function resyncAnalyticsClock() {
-        if (document.hidden) {
+        if (isPageHidden()) {
             flushAnalyticsRecords();
             return;
         }
@@ -6867,10 +7647,22 @@
         state.analyticsTimer = 0;
         commitAnalyticsSession(true);
         state.analyticsSession = null;
+        if (state.analyticsVideo && state.analyticsPauseHandler) {
+            try {
+                state.analyticsVideo.removeEventListener('pause', state.analyticsPauseHandler);
+                state.analyticsVideo.removeEventListener('ended', state.analyticsEndedHandler);
+            } catch (_) {
+            }
+        }
+        state.analyticsVideo = null;
+        state.analyticsPauseHandler = null;
+        state.analyticsEndedHandler = null;
     }
     function aggregateAnalytics(range) {
         const records = analyticsRecords();
-        const aggKey = `${range}|${Math.floor(Date.now() / 1000)}|${state.analyticsVersion || 0}|${records.length}`;
+
+
+        const aggKey = `${range}|${state.analyticsDataVersion || 0}`;
         const aggCached = state.analyticsAggCache;
         if (aggCached && aggCached.key === aggKey) return aggCached.data;
         const now = Date.now();
@@ -6929,7 +7721,14 @@
         const count = Math.max(1, result.totalCount);
         const avgWatchedMinutes = Math.round((result.totalWatchedSeconds / 60 / count) * 10) / 10;
         const completionRate = Math.round((result.completedCount / count) * 1000) / 10;
-        const maxHourly = Math.max(1, ...result.hourlyCount);
+
+
+        const maxOf = (values, floor = 1) => {
+            let best = floor;
+            for (const value of values) if (value > best) best = value;
+            return best;
+        };
+        const maxHourly = maxOf(result.hourlyCount);
         const hourlyDistribution = result.hourlyCount.map((value, hour) => ({
             hour,
             count: value,
@@ -6937,7 +7736,8 @@
             percentage: Math.round((value / maxHourly) * 100)
         }));
         const dayMs = 86400000;
-        const pastDays = 364 + new Date(now).getDay();
+        const nowDate = new Date(now);
+        const pastDays = 364 + nowDate.getDay();
         const dailyHeatmap = [];
         for (let offset = pastDays; offset >= 0; offset--) {
             const date = new Date(now - offset * dayMs);
@@ -6953,7 +7753,7 @@
             }
             dailyHeatmap.push({ date: dayKey, count: dayCount, seconds: daySeconds, level });
         }
-        for (let offset = 1; offset <= 6 - new Date(now).getDay(); offset++) {
+        for (let offset = 1; offset <= 6 - nowDate.getDay(); offset++) {
             const date = new Date(now + offset * dayMs);
             dailyHeatmap.push({
                 date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
@@ -6963,17 +7763,17 @@
                 isFuture: true
             });
         }
-        const maxActressCount = Math.max(1, ...[...result.actressMap.values()].map(item => item.count));
+        const maxActressCount = maxOf([...result.actressMap.values()].map(item => item.count));
         const topActresses = [...result.actressMap.entries()]
             .map(([name, entry]) => ({ name, count: entry.count, seconds: entry.seconds, percentage: Math.round((entry.count / maxActressCount) * 100) }))
             .sort((a, b) => b.count - a.count || b.seconds - a.seconds)
             .slice(0, 10);
-        const maxGenreCount = Math.max(1, ...[...result.genreMap.values()]);
+        const maxGenreCount = maxOf(result.genreMap.values());
         const topGenres = [...result.genreMap.entries()]
             .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / maxGenreCount) * 100) }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 15);
-        const maxMakerCount = Math.max(1, ...[...result.makerMap.values()]);
+        const maxMakerCount = maxOf(result.makerMap.values());
         const topMakers = [...result.makerMap.entries()]
             .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / maxMakerCount) * 100) }))
             .sort((a, b) => b.count - a.count)
@@ -7029,6 +7829,10 @@
     const TITLE_SYNC_FAIL_RETRY = 1800000;
     let titleSyncBusy = false;
     let titleRefillQueued = false;
+    const CREDITS_SYNC_LIMIT = 8;
+    const CREDITS_SYNC_FAIL_RETRY = 1800000;
+    let creditsSyncBusy = false;
+    let creditsRefillQueued = false;
     function analyticsFetchUrl(record) {
         if (record && record.url) return record.url;
         const raw = record && record.code ? String(record.code).trim().toLowerCase() : '';
@@ -7068,118 +7872,120 @@
         const failedAt = Number(record.titleSyncFailedAt) || 0;
         return !failedAt || Date.now() - failedAt > TITLE_SYNC_FAIL_RETRY;
     }
-    async function javDbTitle(code) {
-        const raw = String(code || '').trim();
-        const cleanId = raw.replace(/[-_]/g, '').toLowerCase();
-        if (!cleanId) return '';
-        const query = new URLSearchParams({
-            q: raw, page: '1', type: 'movie', limit: '5',
-            movie_type: 'all', from_recent: 'false', movie_filter_by: 'all', movie_sort_by: 'relevance'
-        });
-        let body;
-        try {
-            body = JSON.parse(await jdApiFetch(`${JDFORREPAM_API}/api/v2/search?${query}`));
-        } catch (_) {
-            return '';
-        }
-        const movies = Array.isArray(body?.data?.movies) ? body.data.movies : [];
-        const movie = movies.find(item => String(item?.number || '').replace(/[-_]/g, '').toLowerCase() === cleanId);
-        if (!movie) return '';
-        return metaCleanTitle(movie.title || movie.origin_title || movie.name || movie.translated_title || '');
-    }
-    async function refillAnalyticsTitles() {
-        if (titleSyncBusy) return;
-        const targets = analyticsRecords().filter(titleSyncPending).slice(0, TITLE_SYNC_LIMIT);
-        if (!targets.length) return;
-        titleSyncBusy = true;
-        let filled = 0;
-        try {
-            for (const record of targets) {
-                let title = await javDbTitle(record.code);
-                if (!title) {
-                    const url = analyticsFetchUrl(record);
-                    if (!url) continue;
-                    title = titleFromHtml(await fetchHtml(url, { skipProxy: true, timeout: 8000 }));
-                }
-                if (title && title !== record.code) {
-                    record.title = title;
-                    record.titleSyncedAt = Date.now();
-                    delete record.titleSyncFailedAt;
-                    filled++;
-                } else {
-                    record.titleSyncFailedAt = Date.now();
-                }
-                await new Promise(resolve => setTimeout(resolve, 350));
-            }
-        } catch (error) {
-            console.warn('[av-helper] 标题补全失败:', error && error.message ? error.message : error);
-        } finally {
-            titleSyncBusy = false;
-        }
-        saveAnalyticsRecords();
-        if (filled) {
-            renderAnalytics();
-            log(`📝 已补全 ${filled} 部影片标题`);
-        }
-    }
-    function scheduleTitleRefill() {
-        if (titleRefillQueued || titleSyncBusy) return;
-        if (!analyticsRecords().some(titleSyncPending)) return;
-        titleRefillQueued = true;
-        setTimeout(() => {
-            titleRefillQueued = false;
-            refillAnalyticsTitles();
-        }, 1500);
-    }
-    const CREDITS_SYNC_LIMIT = 8;
-    const CREDITS_SYNC_FAIL_RETRY = 1800000;
-    let creditsSyncBusy = false;
-    let creditsRefillQueued = false;
     function creditsSyncPending(record) {
         if (!IS_JABLE || !record || !record.code) return false;
         if (String(record.maker || '').trim()) return false;
         const failedAt = Number(record.creditsSyncFailedAt) || 0;
         return !failedAt || Date.now() - failedAt > CREDITS_SYNC_FAIL_RETRY;
     }
-    async function refillAnalyticsCredits() {
-        if (creditsSyncBusy) return;
-        const targets = analyticsRecords().filter(creditsSyncPending).slice(0, CREDITS_SYNC_LIMIT);
+    async function javDbTitle(code) {
+        const raw = String(code || '').trim();
+        if (!javDbCodeKey(raw)) return '';
+        let movie = null;
+        try {
+            movie = await searchJavDbMovie(raw);
+        } catch (_) {
+            return '';
+        }
+        if (!movie) return '';
+        return metaCleanTitle(movie.title || movie.origin_title || movie.name || movie.translated_title || '');
+    }
+    const TITLE_REFILL = {
+        delay: 1500,
+        limit: () => TITLE_SYNC_LIMIT,
+        pending: titleSyncPending,
+        busy: () => titleSyncBusy,
+        setBusy: value => { titleSyncBusy = value; },
+        queued: () => titleRefillQueued,
+        setQueued: value => { titleRefillQueued = value; },
+        async resolve(record) {
+            const title = await javDbTitle(record.code);
+            if (title) return title;
+            const url = analyticsFetchUrl(record);
+            if (!url) return null;
+            return titleFromHtml(await fetchHtml(url, { skipProxy: true, timeout: 8000 }));
+        },
+        valid: (value, record) => Boolean(value) && value !== record.code,
+        apply(record, value) {
+            record.title = value;
+            record.titleSyncedAt = Date.now();
+            delete record.titleSyncFailedAt;
+        },
+        fail(record) {
+            record.titleSyncFailedAt = Date.now();
+        },
+        icon: '📝',
+        label: '标题',
+        warn: error => console.warn('[av-helper] 标题补全失败:', error && error.message ? error.message : error)
+    };
+    const CREDITS_REFILL = {
+        delay: 1800,
+        limit: () => CREDITS_SYNC_LIMIT,
+        pending: creditsSyncPending,
+        busy: () => creditsSyncBusy,
+        setBusy: value => { creditsSyncBusy = value; },
+        queued: () => creditsRefillQueued,
+        setQueued: value => { creditsRefillQueued = value; },
+        async resolve(record) {
+            const credits = await javDbCreditsFor(record.code);
+            return credits && credits.maker ? String(credits.maker).trim() : '';
+        },
+        valid: value => Boolean(value),
+        apply(record, value) {
+            record.maker = value;
+            record.creditsSyncedAt = Date.now();
+            delete record.creditsSyncFailedAt;
+        },
+        fail(record) {
+            record.creditsSyncFailedAt = Date.now();
+        },
+        icon: '🏷️',
+        label: '片商',
+        warn: error => console.warn('[av-helper] 片商补全失败:', error && error.message ? error.message : error)
+    };
+    async function runRefill(config) {
+        if (config.busy()) return;
+        const targets = analyticsRecords().filter(config.pending).slice(0, config.limit());
         if (!targets.length) return;
-        creditsSyncBusy = true;
+        config.setBusy(true);
         let filled = 0;
         try {
             for (const record of targets) {
-                const credits = await javDbCreditsFor(record.code);
-                const maker = credits && credits.maker ? String(credits.maker).trim() : '';
-                if (maker) {
-                    record.maker = maker;
-                    record.creditsSyncedAt = Date.now();
-                    delete record.creditsSyncFailedAt;
+                const value = await config.resolve(record);
+                if (value === null) continue;
+                if (config.valid(value, record)) {
+                    config.apply(record, value);
                     filled++;
                 } else {
-                    record.creditsSyncFailedAt = Date.now();
+                    config.fail(record);
                 }
                 await new Promise(resolve => setTimeout(resolve, 350));
             }
         } catch (error) {
-            console.warn('[av-helper] 片商补全失败:', error && error.message ? error.message : error);
+            config.warn(error);
         } finally {
-            creditsSyncBusy = false;
+            config.setBusy(false);
         }
         saveAnalyticsRecords();
         if (filled) {
             renderAnalytics();
-            log(`🏷️ 已补全 ${filled} 部影片片商`);
+            log(`${config.icon} 已补全 ${filled} 部影片${config.label}`);
         }
     }
-    function scheduleCreditsRefill() {
-        if (creditsRefillQueued || creditsSyncBusy) return;
-        if (!analyticsRecords().some(creditsSyncPending)) return;
-        creditsRefillQueued = true;
+    function scheduleRefill(config) {
+        if (config.queued() || config.busy()) return;
+        if (!analyticsRecords().some(config.pending)) return;
+        config.setQueued(true);
         setTimeout(() => {
-            creditsRefillQueued = false;
-            refillAnalyticsCredits();
-        }, 1800);
+            config.setQueued(false);
+            runRefill(config);
+        }, config.delay);
+    }
+    function scheduleTitleRefill() {
+        scheduleRefill(TITLE_REFILL);
+    }
+    function scheduleCreditsRefill() {
+        scheduleRefill(CREDITS_REFILL);
     }
     function deleteAnalyticsRecord(code) {
         const key = String(code || '').toUpperCase();
@@ -7754,10 +8560,7 @@
         actressCard.className = 'av-cockpit-card';
         actressCard.appendChild(buildCardTitle('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', '偏好女优 TOP 10', '频次与时长加权，条长为相对榜首', true));
         if (!data.topActresses.length) {
-            const empty = document.createElement('div');
-            empty.className = 'av-mini-empty';
-            empty.textContent = '暂无女优信息（将在观看带演员标签的影片时更新）';
-            actressCard.appendChild(empty);
+            actressCard.appendChild(buildMiniEmpty('暂无女优信息（将在观看带演员标签的影片时更新）'));
         } else {
             data.topActresses.forEach((item, index) => {
                 const row = document.createElement('div');
@@ -7793,10 +8596,7 @@
         genreCard.className = 'av-cockpit-card';
         genreCard.appendChild(buildCardTitle('<path d="M20.6 13.4 12 22l-9-9V3h10z"/><path d="M7.5 7.5h.01"/>', '偏好题材 TOP 15', '出现频次，条长为相对榜首'));
         if (!data.topGenres.length) {
-            const empty = document.createElement('div');
-            empty.className = 'av-mini-empty';
-            empty.textContent = '暂无题材信息';
-            genreCard.appendChild(empty);
+            genreCard.appendChild(buildMiniEmpty('暂无题材信息'));
         } else {
             data.topGenres.forEach((item, index) => {
                 const row = document.createElement('div');
@@ -7822,10 +8622,7 @@
         makerCard.className = 'av-cockpit-card';
         makerCard.appendChild(buildCardTitle('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>', '偏爱片商 TOP 8', '厂牌出品偏好'));
         if (!data.topMakers.length) {
-            const empty = document.createElement('div');
-            empty.className = 'av-mini-empty';
-            empty.textContent = IS_JABLE ? '暂无片商信息（已尝试从 JavDB 补全）' : '暂无片商信息';
-            makerCard.appendChild(empty);
+            makerCard.appendChild(buildMiniEmpty(IS_JABLE ? '暂无片商信息（已尝试从 JavDB 补全）' : '暂无片商信息'));
         } else {
             const chips = document.createElement('div');
             chips.className = 'av-maker-chips';
@@ -7842,10 +8639,16 @@
         main.dataset.range = range;
         return main;
     }
+    function buildMiniEmpty(text) {
+        const empty = document.createElement('div');
+        empty.className = 'av-mini-empty';
+        empty.textContent = text;
+        return empty;
+    }
     function renderAnalytics() {
         const page = state.analyticsPage;
         if (!page) return;
-        state.analyticsSignature = store.get(ANALYTICS_KEY) || '[]';
+        state.analyticsSignature = historyStorageGet(ANALYTICS_KEY) || '[]';
         const range = state.analyticsRange;
         const data = aggregateAnalytics(range);
         const main = page.querySelector('.av-cockpit-main');
@@ -7861,41 +8664,100 @@
     }
     function exportAnalyticsJson() {
         const records = analyticsRecords();
+        const watched = [...watchedSet()];
         const payload = {
             app: 'AV Helper Analytics',
-            version: '1.0',
+            version: '2.0',
+            schemaVersion: HISTORY_SCHEMA_VERSION,
             exportedAt: new Date().toISOString(),
+            watchedCount: watched.length,
             recordsCount: records.length,
+            watched,
             records
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `av-helper-analytics-${new Date().toISOString().slice(0, 10)}.json`;
+        link.download = `av-helper-history-${new Date().toISOString().slice(0, 10)}.json`;
         link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
     }
+    function historyDecodeBackupValue(value) {
+        if (typeof value !== 'string') return value;
+        return historyParseJson(value, []);
+    }
+    function parseHistoryImport(payload) {
+        if (!payload || typeof payload !== 'object') throw new Error('备份文件不是有效对象');
+        const data = payload.data && typeof payload.data === 'object' ? payload.data : {};
+        let watchedRaw = null;
+        let recordsRaw = null;
+        for (const source of [payload, data]) {
+            if (watchedRaw === null && source.watched !== void 0) watchedRaw = historyDecodeBackupValue(source.watched);
+            if (watchedRaw === null && source[WATCHED_KEY] !== void 0) watchedRaw = historyDecodeBackupValue(source[WATCHED_KEY]);
+            if (watchedRaw === null && source.missavWatchedList !== void 0) watchedRaw = historyDecodeBackupValue(source.missavWatchedList);
+            if (recordsRaw === null && source.records !== void 0) recordsRaw = historyDecodeBackupValue(source.records);
+            if (recordsRaw === null && source[ANALYTICS_KEY] !== void 0) recordsRaw = historyDecodeBackupValue(source[ANALYTICS_KEY]);
+            if (recordsRaw === null && source.missavAnalyticsRecords_v1 !== void 0) recordsRaw = historyDecodeBackupValue(source.missavAnalyticsRecords_v1);
+        }
+        if (watchedRaw === null && recordsRaw === null) throw new Error('未找到可导入的历史记录');
+        return {
+            watched: watchedRaw === null ? null : historyWatchedList(watchedRaw),
+            records: recordsRaw === null ? null : historyNormalizeRecordList(recordsRaw, true)
+        };
+    }
+    function importAnalyticsJson() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.style.display = 'none';
+        input.addEventListener('change', async () => {
+            const file = input.files && input.files[0];
+            input.remove();
+            if (!file) return;
+            try {
+                const payload = JSON.parse(await file.text());
+                const imported = parseHistoryImport(payload);
+                const details = [];
+                if (imported.watched) details.push(`观看标记 ${imported.watched.length} 条`);
+                if (imported.records) details.push(`播放记录 ${imported.records.length} 条`);
+                if (!confirm(`将用备份覆盖当前数据：${details.join('，')}。\n此操作无法撤销，确定继续吗？`)) return;
+                if (imported.watched) {
+                    historyStorageSet(WATCHED_KEY, JSON.stringify(imported.watched));
+                    state.watchGen += 1;
+                }
+                if (imported.records) historyStorageSet(ANALYTICS_KEY, JSON.stringify(imported.records));
+                resetHistoryCaches();
+                refreshFilters();
+                refreshCockpit();
+                log(`✅ 历史备份已导入：${details.join('，')}`);
+            } catch (error) {
+                alert(`导入失败：${error.message || '文件格式错误'}`);
+            }
+        });
+        document.body.appendChild(input);
+        input.click();
+    }
     function clearAnalyticsData() {
         state.analyticsRecords = [];
-        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
-        store.set(ANALYTICS_KEY, '[]');
+        bumpAnalyticsVersion();
+        historyStorageSet(ANALYTICS_KEY, '[]');
     }
     function refreshCockpit() {
         if (!state.analyticsPage) return;
         state.analyticsRecords = null;
-        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
+        bumpAnalyticsVersion();
         analyticsRecords();
         renderAnalytics();
     }
     function syncCockpit() {
-        if (!state.analyticsPage || document.hidden) return;
-        if ((store.get(ANALYTICS_KEY) || '[]') === state.analyticsSignature) return;
+        if (!state.analyticsPage || isPageHidden()) return;
+        if ((historyStorageGet(ANALYTICS_KEY) || '[]') === state.analyticsSignature) return;
         state.analyticsRecords = null;
-        state.analyticsVersion = (state.analyticsVersion || 0) + 1;
+        bumpAnalyticsVersion();
         renderAnalytics();
     }
     function handleClearAnalytics() {
@@ -7990,8 +8852,8 @@
     function watchAnalyticsBody() {
         if (analyticsObserver) return;
         analyticsObserver = new MutationObserver(evictForeignNodes);
-        analyticsObserver.observe(document.documentElement, { childList: true });
-        if (document.body) analyticsObserver.observe(document.body, { childList: true });
+        trackObserver(analyticsObserver, document.documentElement, { childList: true });
+        if (document.body) trackObserver(analyticsObserver, document.body, { childList: true });
     }
     let cockpitPinGuard = '';
     function ensureCockpit() {
@@ -8085,9 +8947,10 @@
         actions.className = 'av-cockpit-actions';
         const refresh = buildCockpitAction('<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16M21 21v-5h-5"/>', '刷新', 'av-btn av-btn-secondary', '刷新统计数据', refreshCockpit);
         const exportBtn = buildCockpitAction('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>', '导出 JSON', 'av-btn av-btn-secondary', '导出 JSON 格式数据备份', exportAnalyticsJson);
+        const importBtn = buildCockpitAction('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>', '导入 JSON', 'av-btn av-btn-secondary', '导入历史与播放进度备份', importAnalyticsJson);
         const clearBtn = buildCockpitAction('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', '清空', 'av-btn av-btn-danger', '清空全部行为记录', handleClearAnalytics);
         const close = buildCockpitAction('<path d="M18 6 6 18M6 6l12 12"/>', '', 'av-btn av-btn-close', '关闭大屏', closeCockpit);
-        actions.append(refresh, exportBtn, clearBtn, close);
+        actions.append(refresh, exportBtn, importBtn, clearBtn, close);
         header.append(brand, tabs, actions);
         const main = document.createElement('main');
         main.className = 'av-cockpit-main';
@@ -8127,14 +8990,15 @@
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
         else boot();
         if (!analyticsGuard) {
-            analyticsGuard = setInterval(() => {
+            const guardTimer = setInterval(() => {
                 if (!analyticsRequested) {
-                    clearInterval(analyticsGuard);
+                    clearInterval(guardTimer);
                     analyticsGuard = 0;
                     return;
                 }
                 ensureCockpit();
             }, 500);
+            analyticsGuard = trackInterval(guardTimer);
         }
     }
     const isAnalyticsRoute = () => cockpitSticky || analyticsRequested || /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
@@ -8196,8 +9060,8 @@
         const hostObserver = new MutationObserver(() => {
             if (isAnalyticsRoute()) watchHostChurn();
         });
-        hostObserver.observe(document.documentElement, { childList: true });
-        if (document.body) hostObserver.observe(document.body, { childList: true });
+        trackObserver(hostObserver, document.documentElement, { childList: true });
+        if (document.body) trackObserver(hostObserver, document.body, { childList: true });
         for (const method of ['pushState', 'replaceState']) {
             const original = history[method];
             if (typeof original !== 'function') continue;
@@ -8220,15 +9084,7 @@
         initPage();
     }
     if (!isAnalyticsRoute()) installSpaWatch();
-    document.addEventListener('click', event => {
-        const target = event.target;
-        if (!target || typeof target.closest !== 'function') return;
-        const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
-        if (!link) return;
-        link.href = analyticsUrl();
-        event.stopImmediatePropagation();
-    }, true);
-    for (const type of ['auxclick', 'pointerdown', 'mousedown']) {
+    for (const type of ['click', 'auxclick', 'pointerdown', 'mousedown']) {
         document.addEventListener(type, event => {
             const target = event.target;
             if (!target || typeof target.closest !== 'function') return;
@@ -8251,6 +9107,7 @@
         clearInterval(state.quickWatchTimer);
         cancelAnimationFrame(state.subtitleRAF);
         clearTimeout(state.holdTimer);
+        disposePageLifecycle();
     }, { once: true });
     } catch (error) {
         console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
