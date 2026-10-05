@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.3
+// @version      12.5
 // @description  PC端专用、广告清理、字幕加载/偏移/字号高度、站点记忆、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -1968,6 +1968,8 @@
     let quickPointerX = Number.NaN;
     let quickPointerY = Number.NaN;
     let quickBarHover = false;
+    let quickClickHold = false;
+    let quickClickAt = 0;
     const QUICK_HOVER_MARGIN = 4;
     function quickMetricsReady(video) {
         const now = Date.now();
@@ -1981,12 +1983,14 @@
     function quickShouldStayOpen() {
         const quick = state.quick;
         if (!quick || !quick.isConnected) return false;
+        if (quickPointerOnBar()) return true;
         return Boolean(quick.contains(document.activeElement) || isLoopMenuOpen());
     }
     function applyQuickControlsHide() {
         const quick = state.quick;
         if (!quick || !quick.isConnected) return;
         if (quickShouldStayOpen()) return;
+        quickClickHold = false;
         quick.classList.remove('quick-visible');
         paintQuickVisibility(false);
     }
@@ -2038,12 +2042,16 @@
     function quickHideDecision() {
         const quick = state.quick;
         if (!quick?.isConnected) return 'none';
-        if (quick.contains(document.activeElement)) return 'none';
+        if (quickPointerOnBar()) return 'cancel';
         if (isLoopMenuOpen()) return 'none';
-        if (quickBarHover) return 'cancel';
         if (quickPlayerPaused()) return 'cancel';
-        if (!quick.classList.contains('quick-visible')) return 'none';
+        // The pointer has already left the bar here. A bar the user clicked must hide as
+        // soon as the pointer moves off it, even though the clicked button keeps focus.
+        if (quickClickHold && Date.now() - quickClickAt < 15000) return 'now';
         if (!quickPointerInsidePlayer()) return 'now';
+        if (quickBarHover) return 'cancel';
+        if (quick.contains(document.activeElement)) return 'none';
+        if (!quick.classList.contains('quick-visible')) return 'none';
         return QUICK_HIDE_DELAY;
     }
     function reconcileQuickControls() {
@@ -2069,10 +2077,14 @@
         quickPointerY = event.clientY;
         if (quickPointerOnBarEvent(event)) {
             quickBarHover = true;
+            quickClickHold = false;
             cancelQuickControlsHide();
             return;
         }
         quickBarHover = false;
+        // Clicking a quick-bar button leaves DOM focus on it. Keyboard focus keeps the bar
+        // open, but a pointer that moved off the bar must release it so the bar can hide.
+        releaseQuickFocus();
         reconcileQuickControls();
     }
     function menuContains(target) {
@@ -2120,6 +2132,12 @@
             quickPointerY >= box.top &&
             quickPointerY <= box.bottom
         );
+    }
+    function releaseQuickFocus(active = document.activeElement) {
+        const quick = state.quick;
+        if (!active || active === document.body) return;
+        if (quick?.contains(active)) active.blur();
+        else if (menuContains(active)) active.blur();
     }
     function showQuickControls() {
         const video = state.video;
@@ -2282,6 +2300,7 @@
     let quickGlobalBound = false;
     let quickResizeHandler = null;
     let quickFullscreenHandler = null;
+    let quickScrollFrame = 0;
     function bindQuickHost(container) {
         bindQuickPointer();
         bindQuickPlayback(state.video);
@@ -2315,6 +2334,19 @@
         document.addEventListener('mousedown', forwardQuickBarHit, true);
         document.addEventListener('pointerdown', forwardQuickBarHit, true);
         document.addEventListener('click', forwardQuickBarHit, true);
+        // When the pointer leaves the page without firing mouseleave on the player
+        // (first entry, tab switch, pointer over the bar), the cached coordinates and
+        // the hover flag must not keep the bar visible forever.
+        const forgetQuickPointer = () => {
+            quickPointerX = Number.NaN;
+            quickPointerY = Number.NaN;
+            quickBarHover = false;
+            reconcileQuickControls();
+        };
+        for (const host of [document, window]) {
+            host.addEventListener('pointerleave', forgetQuickPointer, { passive: true });
+            host.addEventListener('mouseleave', forgetQuickPointer, { passive: true });
+        }
     }
     function setupQuickAutoHide() {
         const { container, quick, video } = state;
@@ -2336,15 +2368,51 @@
             paintQuickVisibility(true);
             fitQuickControls();
         });
-        quick.addEventListener('mouseleave', () => {
-            quickBarHover = false;
-            reconcileQuickControls();
-        });
+        const bindQuickLeave = () => {
+            quick.addEventListener('mouseleave', () => {
+                quickBarHover = false;
+                releaseQuickFocus();
+                reconcileQuickControls();
+            });
+            state.loopMenu?.addEventListener('mouseleave', () => {
+                quickBarHover = false;
+                releaseQuickFocus();
+                reconcileQuickControls();
+            });
+        };
+        bindQuickLeave();
         if (!quickGlobalBound) {
             quickGlobalBound = true;
+            const onQuickPress = event => {
+                quickClickHold = quickPointerOnBarEvent(event);
+                if (quickClickHold) quickClickAt = Date.now();
+            };
+            const clearQuickHold = event => {
+                const target = event?.target;
+                if (target === document || target === window || target === document.documentElement) quickClickHold = false;
+            };
+            for (const host of [document, window]) {
+                host.addEventListener('mousedown', onQuickPress, true);
+                host.addEventListener('pointerdown', onQuickPress, true);
+                host.addEventListener('mouseup', clearQuickHold, true);
+                host.addEventListener('pointerup', clearQuickHold, true);
+                host.addEventListener('blur', clearQuickHold, true);
+                host.addEventListener('pointerleave', clearQuickHold, { passive: true });
+                host.addEventListener('mouseleave', clearQuickHold, { passive: true });
+            }
             quickResizeHandler = throttle(fitQuickControls, MUTATION_THROTTLE);
             quickFullscreenHandler = () => setTimeout(fitQuickControls, 120);
+            // A capture listener on the window sees scrolls from every ancestor container (scroll
+            // does not bubble). One refit per frame keeps the bar anchored to the moving player.
+            const queueQuickFit = () => {
+                if (quickScrollFrame) return;
+                quickScrollFrame = requestAnimationFrame(() => {
+                    quickScrollFrame = 0;
+                    fitQuickControls();
+                });
+            };
             window.addEventListener('resize', quickResizeHandler, { passive: true });
+            window.addEventListener('scroll', queueQuickFit, { passive: true, capture: true });
             document.addEventListener('fullscreenchange', quickFullscreenHandler);
             document.addEventListener('webkitfullscreenchange', quickFullscreenHandler);
         }
