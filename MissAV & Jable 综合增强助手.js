@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.5
-// @description  PC端专用、广告清理、字幕加载/偏移/字号高度、站点记忆、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      12.7
+// @description  PC端专用、广告清理、字幕加载/偏移/字号高度、站点记忆、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -70,6 +70,7 @@
     const PREVIEW_HOST_SELECTOR = '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .jable-carousel, .owl-carousel, .owl-stage, .owl-stage-outer, .owl-item, .horizontal-img-box, .av-info-section, .av-analytics-page, .custom-ui-layer, .custom-control-panel, .custom-quick-controls, .av-stills-grid, .av-review-list, .av-list-grid';
     const REPEAT_SEEK_INTERVAL = 120;
     const PANEL_WIDTH = 310;
+    const PASSIVE_CAPTURE = { passive: true, capture: true };
     const SPEED_MIN = 0.1;
     const SPEED_MAX = 16;
     const SKIP_MIN = 1;
@@ -591,12 +592,9 @@
         subtitleRAF: 0,
         subtitleIdleTimer: 0,
         panel: null,
-        panelBody: null,
-        loginPanel: null,
         loginStatusEl: null,
         loginBusy: false,
         quick: null,
-        quickHost: null,
         quickWatchTimer: 0,
         playPauseBtn: null,
         loopBtn: null,
@@ -614,6 +612,15 @@
         pickerLayer: null,
         hudHost: null,
         hudEl: null,
+        resumeHost: null,
+        resumeToast: null,
+        resumeToastTimer: 0,
+        resumeTimer: 0,
+        resumeVideo: null,
+        resumeDoneCode: '',
+        resumeLastSaved: 0,
+        resumeGuard: null,
+        resumeUserSeekAt: 0,
         holdTimer: 0,
         holdPointerId: -1,
         holdStartX: 0,
@@ -644,6 +651,10 @@
         analyticsPage: null,
         analyticsRange: 'all',
         analyticsQuery: '',
+        analyticsHourlyMetric: 'count',
+        analyticsHourmapMetric: 'count',
+        analyticsActressMetric: 'count',
+        analyticsMakerMetric: 'count',
         reviewsCode: '',
         reviewsPage: 1,
         reviewsHasMore: false,
@@ -692,19 +703,32 @@
         cockpitMediaKiller.disconnect();
         cockpitMediaKiller = null;
     }
-    if (ANALYTICS_ENTRY) {
-        engageCockpitGuard();
-        armMediaKiller();
+    const COCKPIT_FLAG_KEY = 'avSub:cockpit';
+    function cockpitFlagGet() {
         try {
-            sessionStorage.setItem('avSub:cockpit', '1');
+            return sessionStorage.getItem(COCKPIT_FLAG_KEY) === '1';
+        } catch (_) {
+            return false;
+        }
+    }
+    function cockpitFlagSet() {
+        try {
+            sessionStorage.setItem(COCKPIT_FLAG_KEY, '1');
         } catch (_) {
         }
     }
-    let cockpitSticky = ANALYTICS_ENTRY;
-    try {
-        cockpitSticky = cockpitSticky || sessionStorage.getItem('avSub:cockpit') === '1';
-    } catch (_) {
+    function cockpitFlagClear() {
+        try {
+            sessionStorage.removeItem(COCKPIT_FLAG_KEY);
+        } catch (_) {
+        }
     }
+    if (ANALYTICS_ENTRY) {
+        engageCockpitGuard();
+        armMediaKiller();
+        cockpitFlagSet();
+    }
+    let cockpitSticky = ANALYTICS_ENTRY || cockpitFlagGet();
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
         return;
@@ -1228,6 +1252,13 @@
         .speed-hud-rate { color: #50e3c2; font-family: ui-monospace,Consolas,monospace; font-size: 14px; font-weight: 600; }
         .speed-hud-arrows { font-size: 12px; letter-spacing: -1px; opacity: .85; }
         @keyframes speed-hud-pulse { from { transform: scale(1); } to { transform: scale(1.03); } }
+        .av-resume-toast { display: inline-flex; align-items: center; gap: 12px; padding: 10px 14px 10px 18px; border-radius: 9999px; background: rgba(10,10,10,.88); border: 1px solid rgba(255,255,255,.16); color: #ededed; box-shadow: 0 6px 24px rgba(0,0,0,.5); pointer-events: auto; user-select: none; -webkit-user-select: none; font: 500 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; }
+        .av-resume-toast-text { white-space: nowrap; }
+        .av-resume-toast-pos { color: #50e3c2; font-family: ui-monospace,Consolas,monospace; font-weight: 600; }
+        .av-resume-toast-btn { appearance: none; border: 0; border-radius: 9999px; padding: 6px 14px; background: #3b82f6; color: #fff; font: 600 12px/1 inherit; cursor: pointer; }
+        .av-resume-toast-btn:hover { background: #2563eb; }
+        .av-resume-toast-close { appearance: none; border: 0; background: transparent; color: #9ca3af; font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; }
+        .av-resume-toast-close:hover { color: #e5e7eb; }
         .info-rating-badge { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; padding: 2px 8px; border-radius: 9999px; background: rgba(245,158,11,.16); border: 1px solid rgba(245,158,11,.45); color: #fbbf24; font: 600 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; white-space: nowrap; vertical-align: middle; }
         .info-rating-badge small { color: #94a3b8; font-weight: 500; font-size: 10px; }
         .social-badges { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
@@ -1808,9 +1839,10 @@
             openCockpit.href = analyticsUrl();
         });
         const btnClearLib = createButton('🗑 清空已看库');
+        btnClearLib.title = '只清空当前站点的已看标记，不影响另一个站点';
         btnClearLib.addEventListener('click', () => {
             clearWatched();
-            log('已看库已清空');
+            log('本站已看库已清空');
             refreshFilters();
         });
         const btnBackup = createButton('收藏批量备份');
@@ -2034,17 +2066,13 @@
         }
         return quickPointerOnBar();
     }
-    function quickPlayerPaused() {
-        const video = state.video;
-        if (!video || !video.isConnected) return false;
-        return video.paused === true && video.ended !== true;
-    }
     function quickHideDecision() {
         const quick = state.quick;
         if (!quick?.isConnected) return 'none';
         if (quickPointerOnBar()) return 'cancel';
         if (isLoopMenuOpen()) return 'none';
-        if (quickPlayerPaused()) return 'cancel';
+        // Pausing no longer pins the bar: it leaves with the pointer and it still idles out
+        // after QUICK_HIDE_DELAY when the pointer stays in the player without touching it.
         // The pointer has already left the bar here. A bar the user clicked must hide as
         // soon as the pointer moves off it, even though the clicked button keeps focus.
         if (quickClickHold && Date.now() - quickClickAt < 15000) return 'now';
@@ -2077,7 +2105,6 @@
         quickPointerY = event.clientY;
         if (quickPointerOnBarEvent(event)) {
             quickBarHover = true;
-            quickClickHold = false;
             cancelQuickControlsHide();
             return;
         }
@@ -2114,6 +2141,7 @@
         const quick = state.quick;
         if (!quick?.isConnected) return;
         if (event.target === quick || quick.contains(event.target) || menuContains(event.target)) return;
+        if (event.target.closest && event.target.closest('.av-analytics-page')) return;
         const button = quickBarButtonAtPoint(event.clientX, event.clientY);
         if (!button) return;
         event.preventDefault();
@@ -2190,7 +2218,7 @@
         base.appendChild(quickPortalNode);
         if (!quickPortalScrollBound.has(base)) {
             quickPortalScrollBound.add(base);
-            base.addEventListener('scroll', quickPortalSync, { passive: true, capture: true });
+            base.addEventListener('scroll', quickPortalSync, PASSIVE_CAPTURE);
         }
         return quickPortalNode;
     }
@@ -2318,8 +2346,7 @@
         if (!video?.addEventListener || quickPlaybackBound.has(video)) return;
         quickPlaybackBound.add(video);
         const sync = () => {
-            if (quickPlayerPaused()) showQuickControls();
-            else reconcileQuickControls();
+            reconcileQuickControls();
         };
         video.addEventListener('play', sync);
         video.addEventListener('playing', sync);
@@ -2412,7 +2439,7 @@
                 });
             };
             window.addEventListener('resize', quickResizeHandler, { passive: true });
-            window.addEventListener('scroll', queueQuickFit, { passive: true, capture: true });
+            window.addEventListener('scroll', queueQuickFit, PASSIVE_CAPTURE);
             document.addEventListener('fullscreenchange', quickFullscreenHandler);
             document.addEventListener('webkitfullscreenchange', quickFullscreenHandler);
         }
@@ -5632,6 +5659,7 @@
         } catch (_) {
         }
         setupHoldAccelerate(container);
+        setupResumePlayback(video, container);
         syncFilterBar();
         if (video.dataset && video.dataset.avHelperBound !== '1') {
             video.dataset.avHelperBound = '1';
@@ -5906,6 +5934,7 @@
             width: 100%;
             min-height: 100vh;
             padding: 24px 32px 48px;
+            color: #e2e8f0;
             background-color: #090a0f;
             background-image: radial-gradient(circle at 100% 0, rgba(16, 185, 129, .05), transparent 40%), radial-gradient(circle at 0 100%, rgba(56, 189, 248, .05), transparent 40%);
         }
@@ -5947,6 +5976,13 @@
         .av-card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
         .av-card-title .av-svg { color: #38bdf8; }
         .av-card-subtitle { font-size: 11px; color: #64748b; margin-top: 3px; }
+        .av-stat-toggle { position: relative; display: inline-flex; align-items: center; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(148, 163, 184, .1); }
+        .av-stat-toggle-pill { position: absolute; top: 3px; left: 0; height: calc(100% - 6px); border-radius: 999px; background: rgba(56, 189, 248, .18); box-shadow: inset 0 0 0 1px rgba(56, 189, 248, .22); transition: transform .22s cubic-bezier(.4, 0, .2, 1), width .22s cubic-bezier(.4, 0, .2, 1); pointer-events: none; }
+        .av-stat-toggle button { position: relative; z-index: 1; appearance: none; border: 0; background: transparent; color: #94a3b8; font-size: 11px; line-height: 1; padding: 5px 12px; border-radius: 999px; cursor: pointer; transition: color .18s ease; }
+        .av-stat-toggle button:hover:not(.is-on) { color: #cbd5e1; }
+        .av-stat-toggle button.is-on { color: #e2e8f0; }
+        .av-stat-toggle button:focus-visible { outline: 1px solid rgba(56, 189, 248, .6); outline-offset: 1px; }
+        .av-stat-toggle-row { display: flex; justify-content: flex-end; margin: -6px 0 10px; }
         .av-rank-crown { font-size: 14px; }
         .av-heatmap-wrap { display: flex; gap: 6px; }
         .av-heatmap-weekdays { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; font-size: 9px; color: #64748b; }
@@ -5968,6 +6004,15 @@
         .av-bar-col:hover .av-bar-fill { filter: brightness(1.3); }
         .av-bar-fill.is-peak { background: linear-gradient(180deg, #34d399, rgba(16, 185, 129, .35)); }
         .av-bar-label { font-size: 9px; color: #64748b; margin-top: 4px; height: 11px; }
+        .av-hourmap { overflow-x: auto; padding-bottom: 4px; }
+        .av-hourmap-grid { display: grid; grid-template-columns: 20px repeat(24, minmax(14px, 1fr)); gap: 3px; min-width: 560px; align-items: center; }
+        .av-hourmap-head { font-size: 9px; color: #64748b; text-align: center; height: 12px; }
+        .av-hourmap-day { font-size: 10px; color: #64748b; text-align: right; padding-right: 4px; }
+        .av-hourmap-cell { height: 15px; border-radius: 3px; background: rgba(56, 189, 248, .08); cursor: help; }
+        .av-hourmap-cell.level-1 { background: rgba(56, 189, 248, .28); }
+        .av-hourmap-cell.level-2 { background: rgba(56, 189, 248, .46); }
+        .av-hourmap-cell.level-3 { background: rgba(56, 189, 248, .68); }
+        .av-hourmap-cell.level-4 { background: rgba(56, 189, 248, .92); }
         .av-habit-list { display: flex; flex-direction: column; gap: 12px; }
         .av-habit-label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; color: #cbd5e1; }
         .av-progress-bar { height: 6px; border-radius: 999px; background: rgba(148, 163, 184, .14); overflow: hidden; }
@@ -5975,6 +6020,7 @@
         .av-progress-bar.is-habit > div { background: linear-gradient(90deg, #34d399, #38bdf8); }
         .av-progress-bar.is-actress > div { background: linear-gradient(90deg, #a78bfa, #38bdf8); }
         .av-progress-bar.is-genre > div { background: linear-gradient(90deg, #f472b6, #a78bfa); }
+        .av-progress-bar.is-maker > div { background: linear-gradient(90deg, #34d399, #22d3ee); }
         .av-rank-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; }
         .av-rank-badge { width: 20px; height: 20px; flex: 0 0 20px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; background: rgba(148, 163, 184, .16); color: #cbd5e1; }
         .av-rank-badge.is-gold { background: rgba(250, 204, 21, .22); color: #fde047; }
@@ -5989,8 +6035,6 @@
         .av-genre-name { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; }
         .av-genre-row .av-progress-bar { flex: 1 1 auto; }
         .av-genre-count { flex: 0 0 auto; color: #64748b; }
-        .av-maker-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-        .av-maker-chip { padding: 6px 12px; border-radius: 999px; font-size: 12px; background: rgba(56, 189, 248, .12); border: 1px solid rgba(56, 189, 248, .28); color: #bae6fd; }
         .av-empty { text-align: center; padding: 80px 20px; }
         .av-empty-icon { display: inline-flex; padding: 14px; border-radius: 50%; background: rgba(148, 163, 184, .12); color: #94a3b8; }
         .av-empty-icon svg { width: 30px; height: 30px; }
@@ -6031,7 +6075,7 @@
         .av-search-clear svg { width: 12px; height: 12px; }
         .av-records-count { font-size: 12px; color: #94a3b8; }
         .av-records-list { display: flex; flex-direction: column; }
-        .av-record-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 150px 96px 72px; align-items: center; gap: 12px; padding: 10px 8px; border-top: 1px solid rgba(148, 163, 184, .1); font-size: 12px; }
+        .av-record-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 168px 92px 72px; align-items: center; gap: 12px; padding: 10px 8px; border-top: 1px solid rgba(148, 163, 184, .1); font-size: 12px; }
         .av-record-row:first-child { border-top: 0; }
         .av-record-row:hover { background: rgba(148, 163, 184, .05); }
         .av-record-code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #7dd3fc; text-decoration: none; }
@@ -6040,11 +6084,15 @@
         .av-record-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e2e8f0; }
         .av-record-tags { display: flex; flex-wrap: wrap; gap: 5px; }
         .av-record-tag { padding: 1px 7px; border-radius: 999px; font-size: 10px; color: #94a3b8; background: rgba(148, 163, 184, .12); border: 1px solid rgba(148, 163, 184, .16); }
-        .av-record-progress { display: flex; flex-direction: column; gap: 5px; }
-        .av-record-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; }
-        .av-record-progress-left { display: inline-flex; align-items: center; gap: 6px; }
-        .av-record-badge { padding: 1px 6px; border-radius: 999px; font-size: 10px; color: #6ee7b7; background: rgba(16, 185, 129, .16); border: 1px solid rgba(16, 185, 129, .32); }
-        .av-record-date { font-size: 11px; color: #64748b; }
+        .av-record-tag.is-state { display: inline-flex; align-items: center; white-space: nowrap; font-weight: 600; }
+        .av-record-tag.is-complete { color: #7dd3fc; background: rgba(56, 189, 248, .14); border-color: rgba(56, 189, 248, .32); }
+        .av-record-tag.is-resume { color: #6ee7b7; background: rgba(16, 185, 129, .16); border-color: rgba(16, 185, 129, .32); }
+        .av-record-progress { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+        .av-record-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .av-record-progress-left { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+        .av-record-progress-pct { font-weight: 600; color: #cbd5e1; }
+        .av-record-time { margin-left: auto; flex: 0 0 auto; color: #94a3b8; }
+        .av-record-date { font-size: 11px; color: #64748b; white-space: nowrap; }
         .av-record-actions { display: flex; justify-content: flex-end; gap: 6px; }
         .av-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .22); background: rgba(148, 163, 184, .1); color: #cbd5e1; cursor: pointer; text-decoration: none; }
         .av-icon-btn svg { width: 14px; height: 14px; }
@@ -6069,9 +6117,26 @@
             .av-record-progress { order: 5; flex: 1 1 100%; }
         }
     `);
-    const WATCHED_KEY = 'watchedList';
+    const WATCHED_KEY_BASE = 'watchedList';
+    const WATCHED_KEY = `${WATCHED_KEY_BASE}@${SITE_TAG}`;
     const MAX_WATCHED = 5000;
-    const ANALYTICS_KEY = 'analyticsRecords_v1';
+    const ANALYTICS_KEY_BASE = 'analyticsRecords_v1';
+    const ANALYTICS_KEY = `${ANALYTICS_KEY_BASE}@${SITE_TAG}`;
+    const ANALYTICS_SPLIT_KEY = 'analyticsSplit_v1';
+    const RESUME_KEY_BASE = 'resumePlayback_v1';
+    const RESUME_KEY = `${RESUME_KEY_BASE}@${SITE_TAG}`;
+    const SITE_SPLIT_KEY = 'siteSplit_v1';
+    const MAX_RESUME = 1000;
+    const RESUME_SAVE_INTERVAL = 5000;
+    const RESUME_MIN_SECONDS = 30;
+    const RESUME_TAIL_RATIO = 0.95;
+    const RESUME_EXPIRE_MS = 120 * 86400000;
+    const RESUME_GUARD_MS = 180000;
+    const RESUME_GUARD_TOLERANCE = 3;
+    const RESUME_GUARD_RELEASE = 20;
+    const RESUME_GUARD_TRIES = 6;
+    const RESUME_TOAST_MS = 10000;
+    const resumeSeekBound = new WeakSet();
     const MAX_RECORDS = 3000;
     const MAX_RECORDS_SLACK = 200;
     const ANALYTICS_SAVE_INTERVAL = 25000;
@@ -6221,29 +6286,114 @@
     function historyMergeRecordLists(...lists) {
         return historyNormalizeRecordList(lists.flat(), true);
     }
+    function analyticsRecordSite(record) {
+        return siteTagFromUrl(record && record.url);
+    }
+    function siteTagFromUrl(url) {
+        const text = String(url || '').toLowerCase();
+        if (text.includes('jable.')) return 'jable';
+        if (text.includes('missav.')) return 'missav';
+        return '';
+    }
+    function analyticsOtherSiteClaimed() {
+        const otherTag = SITE_TAG === 'jable' ? 'missav' : 'jable';
+        const otherKey = `${ANALYTICS_KEY_BASE}@${otherTag}`;
+        return historyGmGet(otherKey) !== null || historyLocalGet(otherKey) !== null;
+    }
+    function siteSplitMarked(markerKey) {
+        return historyGmGet(markerKey) === '1' || historyLocalGet(markerKey) === '1';
+    }
+    function markSiteSplit(markerKey) {
+        historyGmSet(markerKey, '1');
+        historyLocalSet(markerKey, '1');
+    }
+    function migrateLegacyAnalyticsKey() {
+        const markerKey = `${ANALYTICS_SPLIT_KEY}:${SITE_TAG}`;
+        if (siteSplitMarked(markerKey)) return;
+        const legacy = historyMergeRecordLists(
+            historyNormalizeRecordList(historyParseJson(historyGmGet(ANALYTICS_KEY_BASE), []), true),
+            historyNormalizeRecordList(historyParseJson(historyLocalGet(ANALYTICS_KEY_BASE), []), true)
+        );
+        const unclaimed = analyticsOtherSiteClaimed() ? '' : SITE_TAG;
+        const mine = legacy.filter(record => {
+            const site = analyticsRecordSite(record);
+            return site ? site === SITE_TAG : Boolean(unclaimed);
+        });
+        if (mine.length) {
+            const existing = historyMergeRecordLists(
+                historyNormalizeRecordList(historyParseJson(historyGmGet(ANALYTICS_KEY), []), true),
+                historyNormalizeRecordList(historyParseJson(historyLocalGet(ANALYTICS_KEY), []), true)
+            );
+            const merged = historyMergeRecordLists(existing, mine);
+            historyGmSet(ANALYTICS_KEY, JSON.stringify(merged));
+            historyLocalSet(ANALYTICS_KEY, JSON.stringify(merged));
+        }
+        markSiteSplit(markerKey);
+    }
+    function migrateLegacySiteKeys() {
+        const markerKey = `${SITE_SPLIT_KEY}:${SITE_TAG}`;
+        if (siteSplitMarked(markerKey)) return;
+        const legacyWatched = [...new Set([
+            ...historyWatchedList(historyGmGet(WATCHED_KEY_BASE)),
+            ...historyWatchedList(historyLocalGet(WATCHED_KEY_BASE))
+        ])].slice(-MAX_WATCHED);
+        if (legacyWatched.length) {
+            const mergedWatched = [...new Set([
+                ...historyWatchedList(historyGmGet(WATCHED_KEY)),
+                ...historyWatchedList(historyLocalGet(WATCHED_KEY)),
+                ...legacyWatched
+            ])].slice(-MAX_WATCHED);
+            historyGmSet(WATCHED_KEY, JSON.stringify(mergedWatched));
+            historyLocalSet(WATCHED_KEY, JSON.stringify(mergedWatched));
+        }
+        const legacyResume = Object.assign(
+            {},
+            historyParseJson(historyGmGet(RESUME_KEY_BASE), {}),
+            historyParseJson(historyLocalGet(RESUME_KEY_BASE), {})
+        );
+        const otherResumeKey = `${RESUME_KEY_BASE}@${SITE_TAG === 'jable' ? 'missav' : 'jable'}`;
+        const unclaimed = historyGmGet(otherResumeKey) === null && historyLocalGet(otherResumeKey) === null;
+        const mine = {};
+        if (legacyResume && typeof legacyResume === 'object' && !Array.isArray(legacyResume)) {
+            for (const [code, entry] of Object.entries(legacyResume)) {
+                if (!entry || typeof entry !== 'object') continue;
+                const site = siteTagFromUrl(entry.url);
+                if (site ? site === SITE_TAG : unclaimed) mine[code] = entry;
+            }
+        }
+        if (Object.keys(mine).length) {
+            const mergedResume = Object.assign(
+                {},
+                historyParseJson(historyGmGet(RESUME_KEY), {}),
+                historyParseJson(historyLocalGet(RESUME_KEY), {}),
+                mine
+            );
+            historyGmSet(RESUME_KEY, JSON.stringify(mergedResume));
+            historyLocalSet(RESUME_KEY, JSON.stringify(mergedResume));
+        }
+        markSiteSplit(markerKey);
+    }
     function initializeHistoryStorage() {
         if (historyStorageReady) return;
         historyStorageReady = true;
+        migrateLegacyAnalyticsKey();
+        migrateLegacySiteKeys();
         const markerKey = `${HISTORY_MIGRATION_KEY}:${SITE_TAG}:${location.hostname}`;
-        try {
-            if (localStorage.getItem(STORAGE_PREFIX + markerKey) === '1') return;
-        } catch (_) {
-        }
+        if (historyLocalGet(markerKey) === '1') return;
         const gmWatched = historyWatchedList(historyGmGet(WATCHED_KEY));
         const localWatched = historyWatchedList(historyLocalGet(WATCHED_KEY));
         const mergedWatched = [...new Set([...gmWatched, ...localWatched])].slice(-MAX_WATCHED);
-        const gmRecords = historyNormalizeRecordList(historyParseJson(historyGmGet(ANALYTICS_KEY), []), true);
-        const localRecords = historyNormalizeRecordList(historyParseJson(historyLocalGet(ANALYTICS_KEY), []), true);
-        const mergedRecords = historyMergeRecordLists(gmRecords, localRecords);
-        historyGmSet(WATCHED_KEY, JSON.stringify(mergedWatched));
-        historyGmSet(ANALYTICS_KEY, JSON.stringify(mergedRecords));
+        const gmRecordsRaw = historyGmGet(ANALYTICS_KEY);
+        const localRecordsRaw = historyLocalGet(ANALYTICS_KEY);
+        const gmRecords = historyNormalizeRecordList(historyParseJson(gmRecordsRaw, []), true);
+        const localRecords = historyNormalizeRecordList(historyParseJson(localRecordsRaw, []), true);
+        const mergedRecords = gmRecordsRaw !== null && gmRecordsRaw === localRecordsRaw
+            ? gmRecords
+            : historyMergeRecordLists(gmRecords, localRecords);
+        historyStorageSet(WATCHED_KEY, JSON.stringify(mergedWatched));
+        historyStorageSet(ANALYTICS_KEY, JSON.stringify(mergedRecords));
         historyGmSet(HISTORY_MIGRATION_KEY, '1');
-        historyLocalSet(WATCHED_KEY, JSON.stringify(mergedWatched));
-        historyLocalSet(ANALYTICS_KEY, JSON.stringify(mergedRecords));
-        try {
-            localStorage.setItem(STORAGE_PREFIX + markerKey, '1');
-        } catch (_) {
-        }
+        historyLocalSet(markerKey, '1');
     }
     function historyStorageGet(key) {
         initializeHistoryStorage();
@@ -6264,7 +6414,317 @@
     function resetHistoryCaches() {
         watchedCache = null;
         state.analyticsRecords = null;
+        resumeCache = null;
         bumpAnalyticsVersion();
+    }
+    let resumeCache = null;
+    function resumeNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) && number > 0 ? number : 0;
+    }
+    function resumeCodeKey(code) {
+        return String(normalizeVideoCode(code) || '')
+            .replace(/_/g, '-')
+            .replace(/-+/g, '-')
+            .toUpperCase();
+    }
+    function resumeStore() {
+        if (resumeCache) return resumeCache;
+        const raw = historyStorageGet(RESUME_KEY) || '{}';
+        const parsed = historyParseJson(raw, {});
+        const store = {};
+        const now = Date.now();
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            for (const [rawCode, value] of Object.entries(parsed)) {
+                if (!value || typeof value !== 'object') continue;
+                const key = resumeCodeKey(rawCode);
+                const at = resumeNumber(value.at);
+                const position = resumeNumber(value.position);
+                if (!key || !position || !at || now - at > RESUME_EXPIRE_MS) continue;
+                store[key] = {
+                    position,
+                    duration: resumeNumber(value.duration),
+                    at,
+                    title: historyText(value.title),
+                    url: historyText(value.url)
+                };
+            }
+        }
+        resumeCache = store;
+        return store;
+    }
+    function resumeEntry(code) {
+        const key = resumeCodeKey(code);
+        return key ? (resumeStore()[key] || null) : null;
+    }
+    function resumePosition(code, total) {
+        const entry = resumeEntry(code);
+        const position = entry ? entry.position : 0;
+        if (!position) return null;
+        const duration = total > 0 ? total : entry.duration;
+        if (!duration || position < RESUME_MIN_SECONDS || position >= duration * RESUME_TAIL_RATIO) return null;
+        return { position, duration, at: entry.at };
+    }
+    function resumeList() {
+        const store = resumeStore();
+        return Object.entries(store)
+            .map(([code, entry]) => ({ code, ...entry }))
+            .sort((a, b) => b.at - a.at);
+    }
+    function resumePendingList(limit = 12) {
+        return resumeList()
+            .filter(item => {
+                if (!item.position || item.position < RESUME_MIN_SECONDS) return false;
+                return !item.duration || item.position < item.duration * RESUME_TAIL_RATIO;
+            })
+            .slice(0, limit);
+    }
+    function persistResumeStore(force) {
+        if (!force && state.resumeLastSaved && Date.now() - state.resumeLastSaved < RESUME_SAVE_INTERVAL) return;
+        const store = resumeStore();
+        const keys = Object.keys(store);
+        if (keys.length > MAX_RESUME) {
+            keys.sort((a, b) => (store[b]?.at || 0) - (store[a]?.at || 0));
+            for (const key of keys.slice(MAX_RESUME)) delete store[key];
+        }
+        state.resumeLastSaved = Date.now();
+        historyStorageSet(RESUME_KEY, JSON.stringify(store));
+    }
+    function clearResume(code) {
+        const key = resumeCodeKey(code);
+        if (!key) return false;
+        const store = resumeStore();
+        if (!store[key]) return false;
+        delete store[key];
+        persistResumeStore(true);
+        return true;
+    }
+    function videoPlaybackWindow(video) {
+        const duration = Number(video?.duration);
+        if (Number.isFinite(duration) && duration > 0) return { total: duration, origin: 0 };
+        const seekable = video?.seekable;
+        if (seekable && seekable.length) {
+            const origin = Number(seekable.start(0)) || 0;
+            const total = (Number(seekable.end(seekable.length - 1)) || 0) - origin;
+            if (Number.isFinite(total) && total > 0) return { total, origin };
+        }
+        return { total: 0, origin: 0 };
+    }
+    function resumeTotal(video) {
+        return videoPlaybackWindow(video).total;
+    }
+    function resumePageCode() {
+        return getPageVideoCode() || '';
+    }
+    function resumeSaveCurrent(force) {
+        const video = state.video;
+        const code = resumePageCode();
+        if (!video || !code || !video.isConnected) return false;
+        const total = resumeTotal(video);
+        const position = Number(video.currentTime) || 0;
+        if (!total || position < RESUME_MIN_SECONDS) return false;
+        const meta = extractPageMetadata();
+        const entry = {
+            title: meta?.title || '',
+            url: location.origin + location.pathname
+        };
+        const store = resumeStore();
+        const key = resumeCodeKey(code);
+        const previous = store[key];
+        const changed = !previous || Math.abs(previous.position - Math.round(position)) >= 1;
+        if (!changed && !force) return false;
+        store[key] = {
+            position: Math.round(position),
+            duration: Math.round(total),
+            at: Date.now(),
+            title: entry.title || previous?.title || '',
+            url: entry.url || previous?.url || ''
+        };
+        persistResumeStore(force);
+        return true;
+    }
+    function hideResumeToast() {
+        clearTimeout(state.resumeToastTimer);
+        state.resumeToastTimer = 0;
+        if (state.resumeToast) state.resumeToast.remove();
+        state.resumeToast = null;
+        if (state.resumeHost) {
+            state.resumeHost.remove();
+            state.resumeHost = null;
+        }
+    }
+    function showResumeToast(container, seconds, onUndo) {
+        hideResumeToast();
+        if (!container?.isConnected) return;
+        const host = document.createElement('div');
+        host.className = 'speed-hud-host';
+        const toast = document.createElement('div');
+        toast.className = 'av-resume-toast';
+        const text = document.createElement('span');
+        text.className = 'av-resume-toast-text';
+        text.textContent = '已从上次位置继续：';
+        const pos = document.createElement('span');
+        pos.className = 'av-resume-toast-pos';
+        pos.textContent = formatDuration(seconds);
+        const undo = document.createElement('button');
+        undo.type = 'button';
+        undo.className = 'av-resume-toast-btn';
+        undo.textContent = '从头播放';
+        undo.addEventListener('click', () => {
+            try {
+                if (state.video?.isConnected) state.video.currentTime = 0;
+            } catch (_) {
+            }
+            if (typeof onUndo === 'function') onUndo();
+            hideResumeToast();
+        });
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'av-resume-toast-close';
+        close.title = '关闭提示';
+        close.setAttribute('aria-label', '关闭提示');
+        close.textContent = '×';
+        close.addEventListener('click', hideResumeToast);
+        toast.append(text, pos, undo, close);
+        host.appendChild(toast);
+        container.appendChild(host);
+        state.resumeHost = host;
+        state.resumeToast = toast;
+        state.resumeToastTimer = setTimeout(hideResumeToast, RESUME_TOAST_MS);
+    }
+    function resumeStopGuard() {
+        state.resumeGuard = null;
+    }
+    function resumeStartGuard(code, position) {
+        if (!code) {
+            resumeStopGuard();
+            return;
+        }
+        state.resumeGuard = {
+            code,
+            target: position,
+            until: Date.now() + RESUME_GUARD_MS,
+            tries: 0
+        };
+    }
+    function resumeKeepGuard() {
+        const guard = state.resumeGuard;
+        if (!guard) return false;
+        const video = state.video;
+        if (!video || !video.isConnected || guard.code !== resumePageCode()) {
+            resumeStopGuard();
+            return false;
+        }
+        if (video.paused) guard.until = Date.now() + RESUME_GUARD_MS;
+        if (Date.now() > guard.until) {
+            resumeStopGuard();
+            return false;
+        }
+        const target = guard.target;
+        const position = Number(video.currentTime) || 0;
+        if (position >= target + RESUME_GUARD_RELEASE) {
+            resumeStopGuard();
+            return false;
+        }
+        if (position >= target - RESUME_GUARD_TOLERANCE) return false;
+        if (guard.tries >= RESUME_GUARD_TRIES) {
+            resumeStopGuard();
+            return false;
+        }
+        guard.tries += 1;
+        try {
+            video.currentTime = target;
+        } catch (_) {
+            return false;
+        }
+        return true;
+    }
+    function resumeApplyPosition(video, container, code, entry) {
+        const jump = Math.min(Math.max(1, entry.position), Math.max(1, entry.duration - 1));
+        try {
+            video.currentTime = jump;
+        } catch (_) {
+            return false;
+        }
+        resumeStartGuard(code, jump);
+        showResumeToast(container, jump, () => {
+            resumeStopGuard();
+            clearResume(code);
+        });
+        log(`⏱️ 已从上次位置继续：${formatDuration(jump)}`);
+        return true;
+    }
+    function maybeRestoreResumePosition() {
+        const video = state.video;
+        if (!video || !video.isConnected) return false;
+        const code = resumePageCode();
+        if (!code || code === state.resumeDoneCode) return false;
+        const total = resumeTotal(video);
+        if (!total) return false;
+        state.resumeDoneCode = code;
+        const saved = resumeEntry(code);
+        const entry = resumePosition(code, total);
+        if (!entry) {
+            if (saved && saved.duration && saved.position >= saved.duration * RESUME_TAIL_RATIO) clearResume(code);
+            return false;
+        }
+        return resumeApplyPosition(video, state.container, code, entry);
+    }
+    function bindResumeSeekIntent(container) {
+        if (resumeSeekBound.has(container)) return;
+        resumeSeekBound.add(container);
+        const onSeekIntent = event => {
+            const target = event.target;
+            if (!target || typeof target.closest !== 'function') return;
+            if (!target.closest('input[type="range"], .plyr__progress, .plyr__progress__container')) return;
+            state.resumeUserSeekAt = Date.now();
+        };
+        const onSeekKey = event => {
+            if (!/^(ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Home|End|PageUp|PageDown|[0-9])$/.test(event.key || '')) return;
+            state.resumeUserSeekAt = Date.now();
+        };
+        for (const type of ['pointerdown', 'mousedown', 'touchstart']) {
+            container.addEventListener(type, onSeekIntent, PASSIVE_CAPTURE);
+        }
+        container.addEventListener('keydown', onSeekKey, PASSIVE_CAPTURE);
+    }
+    function resumeTick() {
+        if (isPageHidden()) return;
+        if (resumeKeepGuard()) return;
+        if (state.video?.paused) return;
+        resumeSaveCurrent(false);
+    }
+    function setupResumePlayback(video, container) {
+        if (!video || !container || video === state.resumeVideo) return;
+        const onMeta = () => {
+            maybeRestoreResumePosition();
+            resumeKeepGuard();
+            resumeSaveCurrent(false);
+        };
+        const onPlay = () => resumeKeepGuard();
+        const onPause = () => resumeSaveCurrent(true);
+        const onEnded = () => {
+            resumeStopGuard();
+            clearResume(resumePageCode());
+        };
+        const onSeeked = () => {
+            if (Date.now() - state.resumeUserSeekAt < 1000) resumeStopGuard();
+            else resumeKeepGuard();
+            resumeSaveCurrent(true);
+        };
+        video.addEventListener('loadedmetadata', onMeta, { passive: true });
+        video.addEventListener('durationchange', onMeta, { passive: true });
+        video.addEventListener('play', onPlay, { passive: true });
+        video.addEventListener('playing', onPlay, { passive: true });
+        video.addEventListener('canplay', onPlay, { passive: true });
+        video.addEventListener('pause', onPause, { passive: true });
+        video.addEventListener('seeked', onSeeked, { passive: true });
+        video.addEventListener('ended', onEnded, { passive: true });
+        bindResumeSeekIntent(container);
+        state.resumeVideo = video;
+        clearInterval(state.resumeTimer);
+        state.resumeTimer = trackInterval(setInterval(resumeTick, RESUME_SAVE_INTERVAL));
+        if (video.readyState >= 1) onMeta();
     }
     function watchedSet() {
         if (watchedCache) return watchedCache;
@@ -7573,6 +8033,37 @@
         }
         if (changed) persistAnalyticsRecords();
     }
+    function analyticsTick() {
+        const session = state.analyticsSession;
+        if (!session || !state.video) return;
+        const now = Date.now();
+        const wallDelta = Math.max(0, (now - session.lastTick) / 1000);
+        session.lastTick = now;
+        const mediaTime = Number(state.video.currentTime) || 0;
+        const mediaDelta = mediaTime - session.lastMediaTime;
+        session.lastMediaTime = mediaTime;
+        if (isPageHidden() || wallDelta > 120) return;
+        if (!state.video.paused && !state.video.seeking && mediaDelta > 0) {
+            const jumped = mediaDelta > wallDelta * 8 + 2;
+            session.watchedSeconds += jumped ? wallDelta : mediaDelta;
+            session.dirty = true;
+            const window_ = videoPlaybackWindow(state.video);
+            if (window_.total > 0) {
+                session.duration = Math.round(window_.total);
+                session.maxProgress = Math.max(session.maxProgress, Math.min(1, (mediaTime - window_.origin) / window_.total));
+            }
+        }
+        if (!session.metaTries || ((!session.actresses.length || !session.genres.length) && session.metaTries < 3)) {
+            session.metaTries++;
+            const fresh = extractPageMetadata();
+            if (fresh.title && (!session.title || session.title === session.code)) session.title = fresh.title;
+            if (!session.actresses.length && fresh.actresses.length) session.actresses = fresh.actresses;
+            if (!session.genres.length && fresh.genres.length) session.genres = fresh.genres;
+            if (!session.maker && fresh.maker) session.maker = fresh.maker;
+            backfillAnalyticsMetadata(fresh);
+        }
+        if (session.dirty && session.watchedSeconds >= 30) commitAnalyticsSession();
+    }
     function startAnalyticsTracking() {
         const video = state.video;
         if (!video) return;
@@ -7600,45 +8091,7 @@
             metaTries: 0
         };
         clearInterval(state.analyticsTimer);
-        state.analyticsTimer = trackInterval(setInterval(() => {
-            const session = state.analyticsSession;
-            if (!session || !state.video) return;
-            const now = Date.now();
-            const wallDelta = Math.max(0, (now - session.lastTick) / 1000);
-            session.lastTick = now;
-            const mediaTime = Number(state.video.currentTime) || 0;
-            const mediaDelta = mediaTime - session.lastMediaTime;
-            session.lastMediaTime = mediaTime;
-            if (isPageHidden() || wallDelta > 120) return;
-            if (!state.video.paused && !state.video.seeking && mediaDelta > 0) {
-                const jumped = mediaDelta > wallDelta * 8 + 2;
-                session.watchedSeconds += jumped ? wallDelta : mediaDelta;
-                session.dirty = true;
-                let total = Number(state.video.duration);
-                let origin = 0;
-                if (!Number.isFinite(total) || total <= 0) {
-                    const seekable = state.video.seekable;
-                    if (seekable && seekable.length) {
-                        origin = Number(seekable.start(0)) || 0;
-                        total = (Number(seekable.end(seekable.length - 1)) || 0) - origin;
-                    }
-                }
-                if (Number.isFinite(total) && total > 0) {
-                    session.duration = Math.round(total);
-                    session.maxProgress = Math.max(session.maxProgress, Math.min(1, (mediaTime - origin) / total));
-                }
-            }
-            if (!session.metaTries || ((!session.actresses.length || !session.genres.length) && session.metaTries < 3)) {
-                session.metaTries++;
-                const fresh = extractPageMetadata();
-                if (fresh.title && (!session.title || session.title === session.code)) session.title = fresh.title;
-                if (!session.actresses.length && fresh.actresses.length) session.actresses = fresh.actresses;
-                if (!session.genres.length && fresh.genres.length) session.genres = fresh.genres;
-                if (!session.maker && fresh.maker) session.maker = fresh.maker;
-                backfillAnalyticsMetadata(fresh);
-            }
-            if (session.dirty && session.watchedSeconds >= 30) commitAnalyticsSession();
-        }, 2000));
+        state.analyticsTimer = trackInterval(setInterval(analyticsTick, 2000));
 
         const onAnalyticsPause = () => commitAnalyticsSession(true);
         const onAnalyticsEnded = () => commitAnalyticsSession(true);
@@ -7743,6 +8196,8 @@
             allActiveDays: new Set(),
             hourlyCount: new Array(24).fill(0),
             hourlySeconds: new Array(24).fill(0),
+            hourWeekdayCount: Array.from({ length: 7 }, () => new Array(24).fill(0)),
+            hourWeekdaySeconds: Array.from({ length: 7 }, () => new Array(24).fill(0)),
             actressMap: new Map(),
             genreMap: new Map(),
             makerMap: new Map(),
@@ -7770,6 +8225,9 @@
             const hour = date.getHours();
             result.hourlyCount[hour]++;
             result.hourlySeconds[hour] += seconds;
+            const weekday = date.getDay();
+            result.hourWeekdayCount[weekday][hour]++;
+            result.hourWeekdaySeconds[weekday][hour] += seconds;
             for (const name of record.actresses || []) {
                 const entry = result.actressMap.get(name) || { count: 0, seconds: 0 };
                 entry.count++;
@@ -7779,7 +8237,12 @@
             for (const genre of record.genres || []) {
                 result.genreMap.set(genre, (result.genreMap.get(genre) || 0) + 1);
             }
-            if (record.maker) result.makerMap.set(record.maker, (result.makerMap.get(record.maker) || 0) + 1);
+            if (record.maker) {
+                const maker = result.makerMap.get(record.maker) || { count: 0, seconds: 0 };
+                maker.count++;
+                maker.seconds += seconds;
+                result.makerMap.set(record.maker, maker);
+            }
             const minutes = seconds / 60;
             if (minutes < 5) result.bucketUnder5++;
             else if (minutes < 15) result.bucket5to15++;
@@ -7831,20 +8294,52 @@
                 isFuture: true
             });
         }
+        const hourWeekdayHeat = result.hourWeekdayCount.map((row, weekday) => row.map((countValue, hour) => ({
+            weekday,
+            hour,
+            count: countValue,
+            seconds: result.hourWeekdaySeconds[weekday][hour]
+        })));
         const maxActressCount = maxOf([...result.actressMap.values()].map(item => item.count));
-        const topActresses = [...result.actressMap.entries()]
-            .map(([name, entry]) => ({ name, count: entry.count, seconds: entry.seconds, percentage: Math.round((entry.count / maxActressCount) * 100) }))
+        const maxActressSeconds = maxOf([...result.actressMap.values()].map(item => item.seconds));
+        const actressEntries = [...result.actressMap.entries()]
+            .map(([name, entry]) => ({
+                name,
+                count: entry.count,
+                seconds: entry.seconds,
+                percentage: Math.round((entry.count / maxActressCount) * 100),
+                secondsPercentage: Math.round((entry.seconds / maxActressSeconds) * 100)
+            }));
+        const topActresses = actressEntries
+            .slice()
             .sort((a, b) => b.count - a.count || b.seconds - a.seconds)
+            .slice(0, 10);
+        const topActressesByTime = actressEntries
+            .slice()
+            .sort((a, b) => b.seconds - a.seconds || b.count - a.count)
             .slice(0, 10);
         const maxGenreCount = maxOf(result.genreMap.values());
         const topGenres = [...result.genreMap.entries()]
             .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / maxGenreCount) * 100) }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 15);
-        const maxMakerCount = maxOf(result.makerMap.values());
-        const topMakers = [...result.makerMap.entries()]
-            .map(([name, value]) => ({ name, count: value, percentage: Math.round((value / maxMakerCount) * 100) }))
-            .sort((a, b) => b.count - a.count)
+        const maxMakerCount = maxOf([...result.makerMap.values()].map(item => item.count));
+        const maxMakerSeconds = maxOf([...result.makerMap.values()].map(item => item.seconds));
+        const makerEntries = [...result.makerMap.entries()]
+            .map(([name, entry]) => ({
+                name,
+                count: entry.count,
+                seconds: entry.seconds,
+                percentage: Math.round((entry.count / maxMakerCount) * 100),
+                secondsPercentage: Math.round((entry.seconds / maxMakerSeconds) * 100)
+            }));
+        const topMakers = makerEntries
+            .slice()
+            .sort((a, b) => b.count - a.count || b.seconds - a.seconds)
+            .slice(0, 8);
+        const topMakersByTime = makerEntries
+            .slice()
+            .sort((a, b) => b.seconds - a.seconds || b.count - a.count)
             .slice(0, 8);
         const habitBuckets = [
             { label: '< 5 分钟 (速览)', count: result.bucketUnder5 },
@@ -7860,10 +8355,13 @@
             activeDaysCount: result.allActiveDays.size,
             rangeActiveDaysCount: result.activeDays.size,
             hourlyDistribution,
+            hourWeekdayHeat,
             dailyHeatmap,
             topActresses,
+            topActressesByTime,
             topGenres,
             topMakers,
+            topMakersByTime,
             habitBuckets,
             records: result.rangeRecords.slice().sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0))
         };
@@ -7875,12 +8373,24 @@
         const code = encodeURIComponent(record && record.code ? record.code : '');
         return IS_JABLE ? `https://jable.tv/videos/${code}/` : `https://missav.ai/${code}`;
     }
+    function formatClock(seconds) {
+        const total = Math.max(0, Math.round(Number(seconds) || 0));
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const secs = String(total % 60).padStart(2, '0');
+        return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${secs}` : `${minutes}:${secs}`;
+    }
     function recordProgress(record) {
         const watched = Math.max(0, Number(record.watchedSeconds) || 0);
         const total = Math.max(0, Number(record.duration) || 0);
         const ratio = total > 0 ? watched / total : 0;
         const percent = Math.max(0, Math.min(100, Math.round(Math.max(Number(record.maxProgress) || 0, ratio) * 100)));
-        return { percent, isCompleted: percent >= 80 || watched >= 1200 || (total > 0 && ratio >= .75), timeText: total > 0 ? `${formatDuration(watched)} / ${formatDuration(total)}` : formatDuration(watched) };
+        return {
+            percent,
+            isCompleted: percent >= 80 || watched >= 1200 || (total > 0 && ratio >= .75),
+            timeText: total > 0 ? `${formatDuration(watched)} / ${formatDuration(total)}` : formatDuration(watched),
+            timeCompact: total > 0 ? `${formatClock(watched)} / ${formatClock(total)}` : formatClock(watched)
+        };
     }
     function formatRecordDate(timestamp) {
         const at = Number(timestamp) || 0;
@@ -8310,7 +8820,7 @@
         const row = document.createElement('div');
         row.className = 'av-record-row';
         const codeLink = document.createElement('a');
-        codeLink.className = 'av-record-code';
+        codeLink.className = 'av-record-code av-open-record';
         codeLink.href = recordWatchUrl(record);
         codeLink.target = '_blank';
         codeLink.rel = 'noopener noreferrer';
@@ -8334,6 +8844,20 @@
             tag.textContent = text;
             tags.appendChild(tag);
         }
+        if (progress.isCompleted) {
+            const badge = document.createElement('span');
+            badge.className = 'av-record-tag is-state is-complete';
+            badge.textContent = '完播';
+            tags.appendChild(badge);
+        }
+        const resume = resumeEntry(record.code);
+        if (resume && resume.position >= RESUME_MIN_SECONDS && (!resume.duration || resume.position < resume.duration * RESUME_TAIL_RATIO)) {
+            const badge = document.createElement('span');
+            badge.className = 'av-record-tag is-state is-resume';
+            badge.textContent = `续播 ${formatClock(resume.position)}`;
+            badge.title = `已保存上次播放位置：${formatDuration(resume.position)}${resume.duration ? ` / ${formatDuration(resume.duration)}` : ''}`;
+            tags.appendChild(badge);
+        }
         main.append(title, tags);
         const prog = document.createElement('div');
         prog.className = 'av-record-progress';
@@ -8342,16 +8866,13 @@
         const progLeft = document.createElement('span');
         progLeft.className = 'av-record-progress-left';
         const pct = document.createElement('span');
+        pct.className = 'av-record-progress-pct';
         pct.textContent = `${progress.percent}%`;
         progLeft.appendChild(pct);
-        if (progress.isCompleted) {
-            const badge = document.createElement('span');
-            badge.className = 'av-record-badge';
-            badge.textContent = '完播';
-            progLeft.appendChild(badge);
-        }
         const time = document.createElement('span');
-        time.textContent = progress.timeText;
+        time.className = 'av-record-time';
+        time.textContent = progress.timeCompact;
+        time.title = progress.timeText;
         progHead.append(progLeft, time);
         const track = document.createElement('div');
         track.className = 'av-progress-bar';
@@ -8366,7 +8887,7 @@
         const actions = document.createElement('div');
         actions.className = 'av-record-actions';
         const play = document.createElement('a');
-        play.className = 'av-icon-btn';
+        play.className = 'av-icon-btn av-open-record';
         play.href = recordWatchUrl(record);
         play.target = '_blank';
         play.rel = 'noopener noreferrer';
@@ -8522,6 +9043,8 @@
         );
         main.appendChild(kpiGrid);
         main.appendChild(buildPersonaCard(computeUserPersona(data.records || [], data), range));
+        const resumeCard = buildResumeCard();
+        if (resumeCard) main.appendChild(resumeCard);
         const heat = document.createElement('section');
         heat.className = 'av-cockpit-card';
         const heatSubtitle = range === 'all'
@@ -8572,6 +9095,53 @@
         legend.appendChild(more);
         heat.appendChild(legend);
         main.appendChild(heat);
+        const hourmap = document.createElement('section');
+        hourmap.className = 'av-cockpit-card';
+        hourmap.appendChild(buildCardTitle('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/><path d="M12 17h.01"/>', '周内时段热力图', '星期 × 小时，定位高效时段'));
+        const hourmapWrap = document.createElement('div');
+        hourmapWrap.className = 'av-hourmap';
+        const hourmapGrid = document.createElement('div');
+        hourmapGrid.className = 'av-hourmap-grid';
+        const weekdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+        const paintHourmap = metric => {
+            state.analyticsHourmapMetric = metric;
+            const peak = Math.max(1, ...data.hourWeekdayHeat.flatMap(row => row.map(cell => (metric === 'seconds' ? cell.seconds : cell.count))));
+            hourmapGrid.replaceChildren();
+            const corner = document.createElement('span');
+            corner.className = 'av-hourmap-day';
+            hourmapGrid.appendChild(corner);
+            for (let hour = 0; hour < 24; hour++) {
+                const head = document.createElement('span');
+                head.className = 'av-hourmap-head';
+                head.textContent = hour % 3 === 0 ? String(hour) : '';
+                hourmapGrid.appendChild(head);
+            }
+            for (let weekday = 0; weekday < 7; weekday++) {
+                const dayLabel = document.createElement('span');
+                dayLabel.className = 'av-hourmap-day';
+                dayLabel.textContent = weekdayNames[weekday];
+                hourmapGrid.appendChild(dayLabel);
+                for (let hour = 0; hour < 24; hour++) {
+                    const cell = data.hourWeekdayHeat[weekday][hour];
+                    const value = metric === 'seconds' ? cell.seconds : cell.count;
+                    const level = value <= 0 ? 0 : Math.max(1, Math.min(4, Math.ceil((value / peak) * 4)));
+                    const box = document.createElement('div');
+                    box.className = `av-hourmap-cell level-${level}`;
+                    box.title = `周${weekdayNames[weekday]} ${String(hour).padStart(2, '0')}:00 - ${String(hour).padStart(2, '0')}:59：${cell.count} 部 · ${formatDuration(cell.seconds)}`;
+                    hourmapGrid.appendChild(box);
+                }
+            }
+            syncMetricToggle(hourmapToggle, metric);
+        };
+        const hourmapToggle = buildMetricToggle(
+            [{ value: 'count', label: '按频次' }, { value: 'seconds', label: '按时长' }],
+            state.analyticsHourmapMetric || 'count',
+            paintHourmap
+        );
+        hourmap.append(hourmapToggle, hourmapWrap);
+        hourmapWrap.appendChild(hourmapGrid);
+        paintHourmap(state.analyticsHourmapMetric || 'count');
+        main.appendChild(hourmap);
         const duo = document.createElement('div');
         duo.className = 'av-duo-grid';
         const hourly = document.createElement('section');
@@ -8579,22 +9149,38 @@
         hourly.appendChild(buildCardTitle('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>', '24 小时活跃时段分布', '作息节律洞察'));
         const bars = document.createElement('div');
         bars.className = 'av-bar-chart';
-        for (const item of data.hourlyDistribution) {
-            const col = document.createElement('div');
-            col.className = 'av-bar-col';
-            col.title = `${item.hour}:00 - ${item.hour}:59：观看 ${item.count} 次 · ${formatDuration(item.seconds)}`;
-            const track = document.createElement('div');
-            track.className = 'av-bar-track';
-            const fill = document.createElement('div');
-            fill.className = `av-bar-fill${item.percentage >= 70 ? ' is-peak' : ''}`;
-            fill.style.height = `${Math.max(4, item.percentage)}%`;
-            track.appendChild(fill);
-            const label = document.createElement('span');
-            label.className = 'av-bar-label';
-            label.textContent = item.hour % 3 === 0 ? `${item.hour}h` : '';
-            col.append(track, label);
-            bars.appendChild(col);
-        }
+        const paintHourly = metric => {
+            state.analyticsHourlyMetric = metric;
+            const values = data.hourlyDistribution.map(item => (metric === 'seconds' ? item.seconds : item.count));
+            const peak = Math.max(1, ...values);
+            bars.replaceChildren();
+            for (const item of data.hourlyDistribution) {
+                const value = metric === 'seconds' ? item.seconds : item.count;
+                const percentage = Math.round((value / peak) * 100);
+                const col = document.createElement('div');
+                col.className = 'av-bar-col';
+                col.title = `${item.hour}:00 - ${item.hour}:59：观看 ${item.count} 次 · ${formatDuration(item.seconds)}`;
+                const track = document.createElement('div');
+                track.className = 'av-bar-track';
+                const fill = document.createElement('div');
+                fill.className = `av-bar-fill${percentage >= 70 ? ' is-peak' : ''}`;
+                fill.style.height = `${Math.max(4, percentage)}%`;
+                track.appendChild(fill);
+                const label = document.createElement('span');
+                label.className = 'av-bar-label';
+                label.textContent = item.hour % 3 === 0 ? `${item.hour}h` : '';
+                col.append(track, label);
+                bars.appendChild(col);
+            }
+            syncMetricToggle(toggle, metric);
+        };
+        const toggle = buildMetricToggle(
+            [{ value: 'count', label: '按频次' }, { value: 'seconds', label: '按时长' }],
+            state.analyticsHourlyMetric || 'count',
+            paintHourly
+        );
+        hourly.appendChild(toggle);
+        paintHourly(state.analyticsHourlyMetric || 'count');
         hourly.appendChild(bars);
         const habit = document.createElement('section');
         habit.className = 'av-cockpit-card';
@@ -8630,35 +9216,52 @@
         if (!data.topActresses.length) {
             actressCard.appendChild(buildMiniEmpty('暂无女优信息（将在观看带演员标签的影片时更新）'));
         } else {
-            data.topActresses.forEach((item, index) => {
-                const row = document.createElement('div');
-                row.className = 'av-rank-row';
-                const badge = document.createElement('span');
-                badge.className = `av-rank-badge ${index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : ''}`;
-                badge.textContent = String(index + 1);
-                const body = document.createElement('div');
-                body.className = 'av-rank-body';
-                const head = document.createElement('div');
-                head.className = 'av-rank-head';
-                const link = document.createElement('a');
-                link.className = 'av-actress-link';
-                link.href = IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`;
-                link.target = '_blank';
-                link.rel = 'noopener noreferrer';
-                link.textContent = item.name;
-                const meta = document.createElement('span');
-                meta.className = 'av-rank-meta';
-                meta.textContent = `${item.count} 次 · ${formatDuration(item.seconds)}`;
-                head.append(link, meta);
-                const bar = document.createElement('div');
-                bar.className = 'av-progress-bar is-actress';
-                const fill = document.createElement('div');
-                fill.style.width = `${Math.min(100, item.percentage)}%`;
-                bar.appendChild(fill);
-                body.append(head, bar);
-                row.append(badge, body);
-                actressCard.appendChild(row);
-            });
+            const rankList = document.createElement('div');
+            rankList.className = 'av-rank-list';
+            const paintActress = metric => {
+                state.analyticsActressMetric = metric;
+                const source = metric === 'seconds' ? data.topActressesByTime : data.topActresses;
+                rankList.replaceChildren();
+                source.forEach((item, index) => {
+                    const row = document.createElement('div');
+                    row.className = 'av-rank-row';
+                    const badge = document.createElement('span');
+                    badge.className = `av-rank-badge ${index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : ''}`;
+                    badge.textContent = String(index + 1);
+                    const body = document.createElement('div');
+                    body.className = 'av-rank-body';
+                    const head = document.createElement('div');
+                    head.className = 'av-rank-head';
+                    const link = document.createElement('a');
+                    link.className = 'av-actress-link';
+                    link.href = IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.textContent = item.name;
+                    const meta = document.createElement('span');
+                    meta.className = 'av-rank-meta';
+                    meta.textContent = metric === 'seconds'
+                        ? `${formatDuration(item.seconds)} · ${item.count} 次`
+                        : `${item.count} 次 · ${formatDuration(item.seconds)}`;
+                    head.append(link, meta);
+                    const bar = document.createElement('div');
+                    bar.className = 'av-progress-bar is-actress';
+                    const fill = document.createElement('div');
+                    fill.style.width = `${Math.min(100, metric === 'seconds' ? item.secondsPercentage : item.percentage)}%`;
+                    bar.appendChild(fill);
+                    body.append(head, bar);
+                    row.append(badge, body);
+                    rankList.appendChild(row);
+                });
+                syncMetricToggle(toggle, metric);
+            };
+            const toggle = buildMetricToggle(
+                [{ value: 'count', label: '按频次' }, { value: 'seconds', label: '按时长' }],
+                state.analyticsActressMetric || 'count',
+                paintActress
+            );
+            actressCard.append(toggle, rankList);
+            paintActress(state.analyticsActressMetric || 'count');
         }
         const genreCard = document.createElement('section');
         genreCard.className = 'av-cockpit-card';
@@ -8692,20 +9295,136 @@
         if (!data.topMakers.length) {
             makerCard.appendChild(buildMiniEmpty(IS_JABLE ? '暂无片商信息（已尝试从 JavDB 补全）' : '暂无片商信息'));
         } else {
-            const chips = document.createElement('div');
-            chips.className = 'av-maker-chips';
-            for (const item of data.topMakers) {
-                const chip = document.createElement('span');
-                chip.className = 'av-maker-chip';
-                chip.textContent = `${item.name} · ${item.count} 部`;
-                chips.appendChild(chip);
-            }
-            makerCard.appendChild(chips);
+            const makerList = document.createElement('div');
+            makerList.className = 'av-rank-list';
+            const paintMaker = metric => {
+                state.analyticsMakerMetric = metric;
+                const source = metric === 'seconds' ? data.topMakersByTime : data.topMakers;
+                makerList.replaceChildren();
+                source.forEach((item, index) => {
+                    const row = document.createElement('div');
+                    row.className = 'av-rank-row';
+                    const badge = document.createElement('span');
+                    badge.className = `av-rank-badge ${index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : ''}`;
+                    badge.textContent = String(index + 1);
+                    const body = document.createElement('div');
+                    body.className = 'av-rank-body';
+                    const head = document.createElement('div');
+                    head.className = 'av-rank-head';
+                    const link = document.createElement('a');
+                    link.className = 'av-actress-link';
+                    link.href = IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.textContent = item.name;
+                    const meta = document.createElement('span');
+                    meta.className = 'av-rank-meta';
+                    meta.textContent = metric === 'seconds'
+                        ? `${formatDuration(item.seconds)} · ${item.count} 部`
+                        : `${item.count} 部 · ${formatDuration(item.seconds)}`;
+                    head.append(link, meta);
+                    const bar = document.createElement('div');
+                    bar.className = 'av-progress-bar is-maker';
+                    const fill = document.createElement('div');
+                    fill.style.width = `${Math.min(100, metric === 'seconds' ? item.secondsPercentage : item.percentage)}%`;
+                    bar.appendChild(fill);
+                    body.append(head, bar);
+                    row.append(badge, body);
+                    makerList.appendChild(row);
+                });
+                syncMetricToggle(makerToggle, metric);
+            };
+            const makerToggle = buildMetricToggle(
+                [{ value: 'count', label: '按频次' }, { value: 'seconds', label: '按时长' }],
+                state.analyticsMakerMetric || 'count',
+                paintMaker
+            );
+            makerCard.append(makerToggle, makerList);
+            paintMaker(state.analyticsMakerMetric || 'count');
         }
         main.appendChild(makerCard);
         main.appendChild(buildRecordsSection(data, range));
         main.dataset.range = range;
         return main;
+    }
+    function syncMetricToggle(group, metric) {
+        if (!group) return;
+        const buttons = Array.prototype.slice.call(group.querySelectorAll('button[data-metric]'));
+        let target = null;
+        for (const button of buttons) {
+            const on = button.dataset.metric === metric;
+            button.classList.toggle('is-on', on);
+            if (on) target = button;
+        }
+        group.dataset.metric = metric;
+        const pill = group.querySelector('.av-stat-toggle-pill');
+        if (!target || !pill) return;
+        pill.style.width = `${target.offsetWidth}px`;
+        pill.style.transform = `translateX(${target.offsetLeft}px)`;
+    }
+    function buildMetricToggle(options, active, onPick) {
+        const wrap = document.createElement('div');
+        wrap.className = 'av-stat-toggle-row';
+        const group = document.createElement('div');
+        group.className = 'av-stat-toggle';
+        group.dataset.metric = active;
+        const pill = document.createElement('span');
+        pill.className = 'av-stat-toggle-pill';
+        pill.setAttribute('aria-hidden', 'true');
+        group.appendChild(pill);
+        for (const option of options) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.metric = option.value;
+            button.textContent = option.label;
+            button.classList.toggle('is-on', option.value === active);
+            button.addEventListener('click', () => onPick(option.value));
+            group.appendChild(button);
+        }
+        const settle = () => syncMetricToggle(group, group.dataset.metric);
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settle);
+        else setTimeout(settle, 0);
+        wrap.appendChild(group);
+        return wrap;
+    }
+    function buildResumeCard() {
+        const items = resumePendingList(12);
+        if (!items.length) return null;
+        const card = document.createElement('section');
+        card.className = 'av-cockpit-card';
+        card.appendChild(buildCardTitle('<path d="M8 5v14l11-7z"/>', '继续观看', '按上次播放位置排序，点击番号回到该位置', true));
+        for (const item of items) {
+            const row = document.createElement('div');
+            row.className = 'av-rank-row';
+            const badge = document.createElement('span');
+            badge.className = 'av-rank-badge';
+            badge.textContent = '▶';
+            const body = document.createElement('div');
+            body.className = 'av-rank-body';
+            const head = document.createElement('div');
+            head.className = 'av-rank-head';
+            const link = document.createElement('a');
+            link.className = 'av-actress-link av-open-record';
+            link.href = item.url || (IS_JABLE ? `https://jable.tv/videos/${encodeURIComponent(item.code.toLowerCase())}/` : `https://missav.ai/${encodeURIComponent(item.code.toLowerCase())}`);
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = item.title || item.code;
+            link.title = `${item.code} · ${formatDuration(item.position)}${item.duration ? ` / ${formatDuration(item.duration)}` : ''}`;
+            const meta = document.createElement('span');
+            meta.className = 'av-rank-meta';
+            const percent = item.duration ? Math.min(100, Math.round((item.position / item.duration) * 100)) : 0;
+            meta.textContent = `${item.code} · ${formatDuration(item.position)}${item.duration ? ` / ${formatDuration(item.duration)} · ${percent}%` : ''} · ${formatRecordDate(item.at)}`;
+            head.append(link, meta);
+            const bar = document.createElement('div');
+            bar.className = 'av-progress-bar is-actress';
+            const fill = document.createElement('div');
+            fill.style.width = `${Math.max(2, percent)}%`;
+            bar.appendChild(fill);
+            body.append(head, bar);
+            row.append(badge, body);
+            card.appendChild(row);
+        }
+        return card;
     }
     function buildMiniEmpty(text) {
         const empty = document.createElement('div');
@@ -8716,7 +9435,7 @@
     function renderAnalytics() {
         const page = state.analyticsPage;
         if (!page) return;
-        state.analyticsSignature = historyStorageGet(ANALYTICS_KEY) || '[]';
+        state.analyticsSignature = `${historyStorageGet(ANALYTICS_KEY) || '[]'}|${historyStorageGet(RESUME_KEY) || '{}'}`;
         const range = state.analyticsRange;
         const data = aggregateAnalytics(range);
         const main = page.querySelector('.av-cockpit-main');
@@ -8765,10 +9484,10 @@
         let recordsRaw = null;
         for (const source of [payload, data]) {
             if (watchedRaw === null && source.watched !== void 0) watchedRaw = historyDecodeBackupValue(source.watched);
-            if (watchedRaw === null && source[WATCHED_KEY] !== void 0) watchedRaw = historyDecodeBackupValue(source[WATCHED_KEY]);
+            if (watchedRaw === null && source[WATCHED_KEY_BASE] !== void 0) watchedRaw = historyDecodeBackupValue(source[WATCHED_KEY_BASE]);
             if (watchedRaw === null && source.missavWatchedList !== void 0) watchedRaw = historyDecodeBackupValue(source.missavWatchedList);
             if (recordsRaw === null && source.records !== void 0) recordsRaw = historyDecodeBackupValue(source.records);
-            if (recordsRaw === null && source[ANALYTICS_KEY] !== void 0) recordsRaw = historyDecodeBackupValue(source[ANALYTICS_KEY]);
+            if (recordsRaw === null && source[ANALYTICS_KEY_BASE] !== void 0) recordsRaw = historyDecodeBackupValue(source[ANALYTICS_KEY_BASE]);
             if (recordsRaw === null && source.missavAnalyticsRecords_v1 !== void 0) recordsRaw = historyDecodeBackupValue(source.missavAnalyticsRecords_v1);
         }
         if (watchedRaw === null && recordsRaw === null) throw new Error('未找到可导入的历史记录');
@@ -8811,6 +9530,10 @@
     }
     function clearAnalyticsData() {
         state.analyticsRecords = [];
+        resumeCache = {};
+        state.resumeDoneCode = '';
+        resumeStopGuard();
+        historyStorageSet(RESUME_KEY, '{}');
         bumpAnalyticsVersion();
         historyStorageSet(ANALYTICS_KEY, '[]');
     }
@@ -8823,35 +9546,74 @@
     }
     function syncCockpit() {
         if (!state.analyticsPage || isPageHidden()) return;
-        if ((historyStorageGet(ANALYTICS_KEY) || '[]') === state.analyticsSignature) return;
+        const recordsRaw = historyStorageGet(ANALYTICS_KEY) || '[]';
+        const resumeRaw = historyStorageGet(RESUME_KEY) || '{}';
+        if (`${recordsRaw}|${resumeRaw}` === state.analyticsSignature) return;
         state.analyticsRecords = null;
+        resumeCache = null;
         bumpAnalyticsVersion();
         renderAnalytics();
     }
     function handleClearAnalytics() {
-        if (!confirm('确定要清空全部观影统计与行为数据吗？此操作无法撤销。')) return;
+        if (!confirm('确定要清空本站的观影统计、续播与行为数据吗？另一个站点的数据不受影响，此操作无法撤销。')) return;
         clearAnalyticsData();
         state.analyticsQuery = '';
         refreshCockpit();
         log('🗑 数据大屏记录已清空');
     }
-    function closeCockpit() {
+    function quitCockpitMode() {
         analyticsRequested = false;
         cockpitSticky = false;
-        try {
-            sessionStorage.removeItem('avSub:cockpit');
-        } catch (_) {
+        cockpitPinGuard = '';
+        if (analyticsGuard) {
+            clearInterval(analyticsGuard);
+            analyticsGuard = 0;
         }
+        cockpitFlagClear();
         if (analyticsObserver) {
             analyticsObserver.disconnect();
             analyticsObserver = null;
         }
         disarmMediaKiller();
         releaseCockpitGuard();
+    }
+    function leaveCockpitFor(url) {
+        let target = null;
+        try {
+            target = new URL(url, location.href);
+            if (/^#av-analytics\b/.test(target.hash)) target.hash = '';
+        } catch (_) {
+            target = null;
+        }
+        quitCockpitMode();
+        if (!target) {
+            location.assign(url);
+            return;
+        }
+        let current = null;
+        try {
+            current = new URL(location.href);
+        } catch (_) {
+            current = null;
+        }
+        const sameDocument = current && current.origin === target.origin && current.pathname === target.pathname && current.search === target.search;
+        if (!sameDocument) {
+            location.assign(target.href);
+            return;
+        }
+        try {
+            history.replaceState(null, '', target.href);
+        } catch (_) {
+        }
+        location.reload();
+    }
+    function closeCockpit() {
+        const exitUrl = analyticsUrl().replace('#av-analytics', '');
+        quitCockpitMode();
         window.close();
         setTimeout(() => {
             if (window.closed || !state.analyticsPage) return;
-            location.replace(analyticsUrl().replace('#av-analytics', ''));
+            leaveCockpitFor(exitUrl);
         }, 160);
     }
     function buildCockpitAction(iconPaths, label, className, title, onClick) {
@@ -9036,10 +9798,7 @@
         engageCockpitGuard();
         armMediaKiller();
         document.title = ANALYTICS_TITLE;
-        try {
-            sessionStorage.setItem('avSub:cockpit', '1');
-        } catch (_) {
-        }
+        cockpitFlagSet();
         if (!/^#av-analytics\b/.test(location.hash)) {
             try {
                 if (typeof history.replaceState === 'function') history.replaceState(null, '', analyticsUrl());
@@ -9157,9 +9916,28 @@
             const target = event.target;
             if (!target || typeof target.closest !== 'function') return;
             const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
-            if (!link) return;
-            link.href = analyticsUrl();
-            event.stopImmediatePropagation();
+            if (link) {
+                link.href = analyticsUrl();
+                event.stopImmediatePropagation();
+                return;
+            }
+            const recordLink = target.closest('.av-open-record');
+            if (recordLink) {
+                const url = String(recordLink.getAttribute('href') || recordLink.href || '');
+                if (!url) return;
+                event.stopImmediatePropagation();
+                if (type !== 'click' && type !== 'auxclick') return;
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                    if (state.analyticsPage) quitCockpitMode();
+                    return;
+                }
+                event.preventDefault();
+                if (state.analyticsPage) leaveCockpitFor(url);
+                else location.assign(url);
+                return;
+            }
+            const cockpitAnchor = (type === 'click' || type === 'auxclick') && state.analyticsPage && target.closest('.av-analytics-page') && target.closest('a[href]');
+            if (cockpitAnchor) quitCockpitMode();
         }, true);
     }
     document.addEventListener('keydown', event => {
@@ -9171,6 +9949,8 @@
         state.panelLayoutObserver?.disconnect();
         analyticsObserver?.disconnect();
         stopAnalyticsTracking();
+        resumeSaveCurrent(true);
+        hideResumeToast();
         stopPlayerPoll();
         clearInterval(state.quickWatchTimer);
         cancelAnimationFrame(state.subtitleRAF);
