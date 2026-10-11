@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.7
+// @version      12.9
 // @description  PC端专用、广告清理、字幕加载/偏移/字号高度、站点记忆、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -48,8 +48,10 @@
 // @run-at       document-start
 // @noframes
 // @license      MIT
-// @downloadURL  https://update.greasyfork.org/scripts/000000/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.user.js
-// @updateURL    https://update.greasyfork.org/scripts/000000/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.meta.js
+// @homepageURL  https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant
+// @supportURL   https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/issues
+// @downloadURL  https://raw.githubusercontent.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/main/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.js
+// @updateURL    https://raw.githubusercontent.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/main/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.js
 // ==/UserScript==
 (function () {
     'use strict';
@@ -91,6 +93,11 @@
     const HOLD_CANCEL_DISTANCE = 12;
     const HOLD_CLICK_SUPPRESS = 300;
     const INFO_CACHE_TTL = 86400000;
+    const AUDIO_GAIN_MIN = 0;
+    const AUDIO_GAIN_MAX = 6;
+    const AUDIO_GAIN_STEP = 0.05;
+    const AUDIO_GAIN_PRESETS = [1, 1.5, 2, 3, 4.5, 6];
+    const AUDIO_CORS_WAIT_MS = 4000;
     const INFO_CACHE_PREFIX = 'info:v4:';
     const ACTRESS_CACHE_PREFIX = 'actress:';
     const JDFORREPAM_API = 'https://jdforrepam.com';
@@ -497,6 +504,7 @@
     };
     loginVault.migrate();
     const siteOffsetKey = () => `offset@${SITE_TAG}`;
+    const siteAudioKey = name => `audio${name}@${SITE_TAG}`;
     const settings = {
         accelerationRate: store.getNumber('accelerationRate', 3, SPEED_MIN, SPEED_MAX),
         skipTime: store.getNumber('skipTime', 5, SKIP_MIN, SKIP_MAX),
@@ -525,6 +533,13 @@
         filterBarVisible: store.getBool('filterBarVisible', true),
         filterPanelOpen: store.getBool('filterPanelOpen', false),
         analyticsTrack: store.getBool('analyticsTrack', true),
+        audioGain: store.getNumber(siteAudioKey('Gain'), 1, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX),
+        audioRoute: store.getBool(siteAudioKey('Route'), false),
+        audioDeviceId: store.getKeyName(siteAudioKey('Device'), ''),
+        audioDeviceLabel: store.getKeyName(siteAudioKey('DeviceLabel'), ''),
+        audioSliderOpen: store.getBool(siteAudioKey('SliderOpen'), false),
+        [siteAudioKey('WinX')]: store.getNumber(siteAudioKey('WinX'), NaN, 0, 99999),
+        [siteAudioKey('WinY')]: store.getNumber(siteAudioKey('WinY'), NaN, 0, 99999),
         loginUser: loginVault.read('loginUser'),
         loginPass: loginVault.read('loginPass'),
         autoLogin: store.getBool('autoLogin', true),
@@ -566,6 +581,11 @@
         store.set('filterBarVisible', settings.filterBarVisible);
         store.set('filterPanelOpen', settings.filterPanelOpen);
         store.set('analyticsTrack', settings.analyticsTrack);
+        store.set(siteAudioKey('Gain'), settings.audioGain);
+        store.set(siteAudioKey('Route'), settings.audioRoute);
+        store.set(siteAudioKey('Device'), settings.audioDeviceId);
+        store.set(siteAudioKey('DeviceLabel'), settings.audioDeviceLabel);
+        store.set(siteAudioKey('SliderOpen'), settings.audioSliderOpen);
         loginVault.write('loginUser', settings.loginUser || '');
         loginVault.write('loginPass', settings.loginPass || '');
         store.set('autoLogin', settings.autoLogin);
@@ -620,6 +640,21 @@
         resumeDoneCode: '',
         resumeLastSaved: 0,
         resumeGuard: null,
+        audioWin: null,
+        audioVideo: null,
+        audioGainBtn: null,
+        audioGainLabel: null,
+        audioCaret: null,
+        audioSliderWrap: null,
+        audioSlider: null,
+        audioSliderValue: null,
+        audioRouteBtn: null,
+        audioDeviceList: null,
+        audioStatusEl: null,
+        audioStatusHint: null,
+        audioStateEl: null,
+        audioRouteToggle: null,
+        audioApplyTimer: 0,
         resumeUserSeekAt: 0,
         holdTimer: 0,
         holdPointerId: -1,
@@ -1037,6 +1072,15 @@
         pageLifecycle.push(dispose);
         return id;
     };
+    const trackFrameSlot = read => {
+        pageLifecycle.push(() => {
+            try {
+                cancelAnimationFrame(read());
+            } catch (_) {
+            }
+        });
+    };
+    trackFrameSlot(() => state.subtitleRAF);
     const trackObserver = (observer, target, options) => {
         if (!observer || !target) return observer;
         observer.observe(target, options);
@@ -1165,6 +1209,24 @@
         .btn-group button.btn-ghost:hover { background: rgba(148,163,184,.3); }
         .btn-group .av-open-cockpit { display: inline-flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; width: 100%; min-height: 26px; padding: 4px 5px; border: 1px solid rgba(59,130,246,.5); border-radius: 6px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #f8fafc; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; text-decoration: none; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: pointer; transition: filter .2s ease; }
         .btn-group .av-open-cockpit:hover { filter: brightness(1.12); }
+        .av-audio { margin: 0 0 6px; }
+        .av-audio .av-audio-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
+        .av-audio .av-audio-caret { display: inline-block; font-size: 9px; line-height: 1; color: #cbd5e1; transition: transform .2s ease; }
+        .av-audio .av-audio-btn.is-open .av-audio-caret { transform: rotate(180deg); }
+        .av-audio .av-audio-panel { max-height: 300px; margin-top: 6px; padding: 6px 8px 8px; border: 1px solid rgba(148,163,184,.24); border-radius: 6px; background: rgba(0,0,0,.24); }
+        .av-audio .av-audio-state { margin-top: 6px; color: #94a3b8; font-size: 10px; line-height: 1.35; }
+        .av-audio .av-audio-state.is-on { color: #6ee7b7; }
+        .av-audio .av-audio-state.is-warn { color: #fcd34d; }
+        .av-audio .av-audio-state.is-off { color: #fca5a5; }
+        .av-audio .av-audio-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #94a3b8; font-size: 11px; font-weight: 600; letter-spacing: .2px; }
+        .av-audio .av-audio-scope { color: #6ee7b7; }
+        .av-audio .av-audio-range { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .av-audio .av-audio-range input[type="range"] { flex: 1 1 auto; min-width: 0; }
+        .av-audio .av-audio-value { min-width: 46px; text-align: right; color: #e2e8f0; font-size: 12px; font-weight: 700; }
+        .av-audio .av-audio-presets { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+        .av-audio .av-audio-presets button { width: 100%; min-height: 22px; padding: 2px 0; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; background: rgba(255,255,255,.08); color: #cbd5e1; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 600; transition: background .2s ease, border-color .2s ease, color .2s ease; }
+        .av-audio .av-audio-presets button:hover { background: rgba(255,255,255,.2); color: #fff; }
+        .av-audio .av-audio-presets button.is-on { border-color: rgba(96,165,250,.55); background: rgba(59,130,246,.32); color: #fff; }
         .panel-full-btn { display: block; width: 100%; min-height: 24px; margin-top: 4px; padding: 2px 8px; border: 0; border-radius: 6px; background: rgba(255,255,255,.06); color: #cbd5e1; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .2s ease, color .2s ease; }
         .panel-full-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
         .av-collapse { overflow: hidden; max-height: 2000px; opacity: 1; transform: translateY(0); visibility: visible; pointer-events: auto; transition: max-height .3s cubic-bezier(.4,0,.2,1), opacity .22s ease, transform .3s cubic-bezier(.4,0,.2,1), margin-top .3s ease, padding-top .3s ease, padding-bottom .3s ease, border-top-width .3s ease, visibility .3s; }
@@ -1222,6 +1284,27 @@
         .subtitle-picker-close:hover { color: #fff; }
         .subtitle-picker-row { padding: 8px; margin-top: 5px; border-bottom: 1px solid rgba(255,255,255,.1); cursor: pointer; word-break: break-all; }
         .subtitle-picker-row:hover { background: rgba(96,165,250,.16); }
+        .av-audio-win { width: 322px; max-height: min(78vh, 560px); }
+        .av-audio-site { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 4px; font-size: 12px; font-weight: 600; }
+        .av-audio-site-name { color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-audio-badge { flex: 0 0 auto; padding: 1px 6px; border: 1px solid rgba(16,185,129,.32); border-radius: 999px; background: rgba(16,185,129,.16); color: #6ee7b7; font-size: 10px; font-weight: 700; }
+        .av-audio-toggle { display: flex; align-items: center; gap: 8px; padding: 8px; margin-top: 5px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: rgba(255,255,255,.05); cursor: pointer; }
+        .av-audio-toggle input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; accent-color: #3b82f6; cursor: pointer; }
+        .av-audio-toggle-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .av-audio-toggle-title { color: #e2e8f0; font-size: 12px; font-weight: 700; }
+        .av-audio-toggle-hint { color: #94a3b8; font-size: 10px; font-weight: 500; }
+        .av-audio-device { display: flex; align-items: center; gap: 8px; }
+        .av-audio-device input { flex: 0 0 auto; width: 13px; height: 13px; margin: 0; accent-color: #3b82f6; cursor: pointer; }
+        .av-audio-device-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-audio-device-tag { flex: 0 0 auto; margin-left: auto; color: #94a3b8; font-size: 10px; }
+        .av-audio-empty { padding: 10px 8px; color: #94a3b8; font-size: 11px; }
+        .av-audio-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+        .av-audio-actions button { width: 100%; min-height: 28px; padding: 4px 5px; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; background: rgba(255,255,255,.12); color: #f8fafc; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; transition: background .2s ease, border-color .2s ease; }
+        .av-audio-actions button:hover { background: rgba(255,255,255,.25); }
+        .av-audio-actions button.btn-primary { background: linear-gradient(135deg,#3b82f6,#2563eb); border-color: rgba(59,130,246,.5); }
+        .av-audio-actions button.btn-primary:hover { filter: brightness(1.12); }
+        .av-audio-status { margin-top: 8px; color: #6ee7b7; font-size: 11px; font-weight: 600; word-break: break-all; }
+        .av-audio-status-hint { margin-top: 3px; color: #94a3b8; font-size: 10px; font-weight: 500; }
         .av-backup-window { position: fixed; left: 15px; top: 12%; z-index: 1; box-sizing: border-box; width: min(560px, 94vw); max-height: min(78vh, 640px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border-radius: 12px; --ui-bg-opacity: .34; --ui-blur: 1px; --ui-hover-opacity: .94; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45); color: #f8fafc; font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); transition: background .2s ease, box-shadow .2s ease; pointer-events: auto; contain: layout style; }
         .av-backup-window:hover, .av-backup-window:focus-within { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55); }
         .av-backup-window.panel-dragging { transition: none; }
@@ -1710,7 +1793,7 @@
         for (const input of root.querySelectorAll('input[type="range"]')) syncRangeFill(input);
     }
     function applyUiStyles() {
-        for (const target of [state.panel, state.subtitlePicker, state.filterBar]) {
+        for (const target of [state.panel, state.subtitlePicker, state.filterBar, state.audioWin]) {
             if (!target) continue;
             target.style.setProperty('--ui-bg-opacity', settings.opacity);
             target.style.setProperty('--ui-blur', `${settings.blur}px`);
@@ -1923,13 +2006,11 @@
         body.className = 'panel-body';
         const footer = document.createElement('div');
         footer.className = 'panel-footer';
-        state.panelFooter = footer;
         const collapsible = document.createElement('div');
         collapsible.className = 'panel-collapse';
         const collapsibleInner = document.createElement('div');
         collapsibleInner.className = 'panel-collapse-inner';
         collapsible.appendChild(collapsibleInner);
-        state.panelCollapse = collapsible;
         if (settings.isMinimized) panel.classList.add('panel-collapsed');
         const layoutPanel = () => {
             const anchor = clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60));
@@ -1950,13 +2031,14 @@
         };
         gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
         const { keysRow, offsetInput } = buildPanelKeysRow();
+        const audioRow = buildPanelAudioRow();
         const actionRow = buildPanelActionRow(panel, offsetInput, layoutPanel);
         const sliderRow = buildPanelSliderRow();
         const { loginToggleBtn, loginPanel, toggleSliderBtn, filterToggleBtn, filterPanel } = buildPanelCollapseToggles(sliderRow);
         state.logEl = document.createElement('div');
         state.logEl.className = 'panel-status-log';
         footer.appendChild(state.logEl);
-        body.append(keysRow, actionRow, loginToggleBtn, loginPanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
+        body.append(keysRow, audioRow, actionRow, loginToggleBtn, loginPanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
         collapsibleInner.append(body, footer);
         panel.append(header, collapsible);
         getUiLayer().appendChild(panel);
@@ -2810,7 +2892,7 @@
                 state.subtitleIdleTimer = setTimeout(tick, SUBTITLE_IDLE_DELAY);
                 return;
             }
-            state.subtitleRAF = trackFrame(requestAnimationFrame(tick));
+            state.subtitleRAF = requestAnimationFrame(tick);
             if (isPageHidden()) return;
             if (state.loopActive) {
                 const time = video.currentTime;
@@ -2821,7 +2903,7 @@
             if (video.paused) return;
             renderSubtitle(false);
         };
-        state.subtitleRAF = trackFrame(requestAnimationFrame(tick));
+        state.subtitleRAF = requestAnimationFrame(tick);
     }
     function getCurrentVideoID() {
         if (IS_JABLE) return location.pathname.match(/\/videos\/([^/]+)/)?.[1] || null;
@@ -3206,6 +3288,758 @@
             store.set('pickerX', x);
             store.set('pickerY', y);
         }
+    }
+    function audioGainText(gain) {
+        const value = clamp(Number(gain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        return `${Math.round(value * 100)}%`;
+    }
+    function audioSiteName() {
+        return location.hostname || (IS_JABLE ? 'jable.tv' : 'missav.ws');
+    }
+    function audioContextCtor() {
+        if (typeof AudioContext === 'function') return AudioContext;
+        if (typeof webkitAudioContext === 'function') return webkitAudioContext;
+        return null;
+    }
+    const audioEngine = {
+        ctx: null,
+        source: null,
+        gain: null,
+        video: null,
+        error: '',
+        errorVideo: null
+    };
+    function audioContext() {
+        if (audioEngine.ctx) return audioEngine.ctx;
+        const Ctor = audioContextCtor();
+        if (!Ctor) return null;
+        try {
+            audioEngine.ctx = new Ctor();
+        } catch (_) {
+            audioEngine.ctx = null;
+        }
+        return audioEngine.ctx;
+    }
+    function audioResumeContext() {
+        const ctx = audioEngine.ctx;
+        if (!ctx || ctx.state !== 'suspended') return;
+        try {
+            const result = ctx.resume();
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+        } catch (_) {
+        }
+    }
+    function audioGraphReady(video) {
+        return Boolean(video && audioEngine.video === video && audioEngine.source && audioEngine.gain);
+    }
+    function audioGraftGraph(video) {
+        if (audioGraphReady(video)) return audioEngine.gain;
+        const ctx = audioContext();
+        if (!ctx || !video) return null;
+        try {
+            if (audioEngine.source) {
+                try {
+                    audioEngine.source.disconnect();
+                } catch (_) {
+                }
+            }
+            if (audioEngine.gain) {
+                try {
+                    audioEngine.gain.disconnect();
+                } catch (_) {
+                }
+            }
+            const source = ctx.createMediaElementSource(video);
+            const gain = ctx.createGain();
+            source.connect(gain);
+            gain.connect(ctx.destination);
+            audioEngine.source = source;
+            audioEngine.gain = gain;
+            audioEngine.video = video;
+            audioEngine.error = '';
+            audioEngine.errorVideo = null;
+            return gain;
+        } catch (error) {
+            audioEngine.source = null;
+            audioEngine.gain = null;
+            audioEngine.video = null;
+            audioEngine.error = error && error.name ? String(error.name) : 'Error';
+            audioEngine.errorVideo = video;
+            return null;
+        }
+    }
+    function audioGraphError(video) {
+        return audioEngine.errorVideo === video ? audioEngine.error : '';
+    }
+    function audioActiveVideo() {
+        const candidates = [state.audioVideo, state.video];
+        let fallback = null;
+        for (const node of candidates) {
+            if (!node || node.isConnected === false) continue;
+            if (!fallback) fallback = node;
+            if (node.paused === false && node.readyState >= 1) return node;
+        }
+        return fallback;
+    }
+    function audioApplyGainLive(video) {
+        const target = video || audioActiveVideo();
+        if (!target) return false;
+        const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        const ready = audioGraphReady(target);
+        if (!ready && gain > 1) return false;
+        try {
+            target.volume = Math.min(1, gain);
+        } catch (_) {
+        }
+        if (ready) {
+            try {
+                audioEngine.gain.gain.value = gain > 1 ? gain : 1;
+            } catch (_) {
+            }
+            audioResumeContext();
+            audioApplySink(target, { silent: true });
+        }
+        return true;
+    }
+    function scheduleAudioGainApply() {
+        clearTimeout(state.audioApplyTimer);
+        state.audioApplyTimer = setTimeout(() => {
+            state.audioApplyTimer = 0;
+            audioApplyGain(audioActiveVideo(), { silent: true, allowReload: false }).then(audioPaintPanel, audioPaintPanel);
+        }, 160);
+    }
+    function mediaSourceUrl(video) {
+        return video?.currentSrc || video?.src || '';
+    }
+    function mediaIsCrossOrigin(video) {
+        const raw = mediaSourceUrl(video);
+        if (!raw) return false;
+        try {
+            const url = new URL(raw, location.href);
+            if (['blob:', 'data:', 'mediastream:', 'file:'].includes(url.protocol)) return false;
+            return url.origin !== location.origin;
+        } catch (_) {
+            return false;
+        }
+    }
+    function audioNeedsCorsReload(video) {
+        return Boolean(video) && mediaIsCrossOrigin(video) && !video.crossOrigin;
+    }
+    function mediaSnapshot(video) {
+        return {
+            time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+            paused: video.paused !== false,
+            volume: Number.isFinite(video.volume) ? video.volume : 1,
+            muted: video.muted === true
+        };
+    }
+    function mediaRestore(video, snapshot) {
+        let restored = false;
+        const apply = () => {
+            if (restored) return;
+            restored = true;
+            try {
+                if (snapshot.time > 0) video.currentTime = snapshot.time;
+            } catch (_) {
+            }
+            try {
+                video.volume = snapshot.volume;
+                video.muted = snapshot.muted;
+            } catch (_) {
+            }
+            if (!snapshot.paused) {
+                try {
+                    const result = video.play();
+                    if (result && typeof result.catch === 'function') result.catch(() => {});
+                } catch (_) {
+                }
+            }
+        };
+        if (video.readyState >= 1) {
+            apply();
+            return;
+        }
+        const onMeta = () => {
+            video.removeEventListener('loadedmetadata', onMeta);
+            apply();
+        };
+        video.addEventListener('loadedmetadata', onMeta);
+        setTimeout(() => {
+            video.removeEventListener('loadedmetadata', onMeta);
+            apply();
+        }, AUDIO_CORS_WAIT_MS);
+    }
+    function waitMediaReload(video, timeout = AUDIO_CORS_WAIT_MS) {
+        return new Promise(resolve => {
+            let done = false;
+            const finish = ok => {
+                if (done) return;
+                done = true;
+                video.removeEventListener('loadeddata', onLoad);
+                video.removeEventListener('canplay', onLoad);
+                video.removeEventListener('error', onError);
+                clearTimeout(timer);
+                resolve(ok);
+            };
+            const onLoad = () => finish(true);
+            const onError = () => finish(false);
+            const timer = setTimeout(() => finish(false), timeout);
+            video.addEventListener('loadeddata', onLoad);
+            video.addEventListener('canplay', onLoad);
+            video.addEventListener('error', onError);
+        });
+    }
+    async function audioBoostGraph(video, options = {}) {
+        if (audioGraphReady(video)) return audioEngine.gain;
+        if (!audioNeedsCorsReload(video)) return audioGraftGraph(video);
+        if (options.allowReload === false) return null;
+        const snapshot = mediaSnapshot(video);
+        try {
+            video.crossOrigin = 'anonymous';
+        } catch (_) {
+            audioEngine.error = 'CorsBlocked';
+            audioEngine.errorVideo = video;
+            return null;
+        }
+        try {
+            video.load();
+        } catch (_) {
+        }
+        const loaded = await waitMediaReload(video);
+        if (!loaded) {
+            try {
+                video.removeAttribute('crossOrigin');
+            } catch (_) {
+            }
+            try {
+                video.load();
+            } catch (_) {
+            }
+            mediaRestore(video, snapshot);
+            audioEngine.error = 'CorsBlocked';
+            audioEngine.errorVideo = video;
+            return null;
+        }
+        const gain = audioGraftGraph(video);
+        mediaRestore(video, snapshot);
+        return gain;
+    }
+    async function audioApplyGain(video, options = {}) {
+        const target = video || audioActiveVideo();
+        if (!target) return { ok: false, reason: 'no-video' };
+        const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        try {
+            target.volume = Math.min(1, gain);
+        } catch (_) {
+        }
+        if (gain <= 1) {
+            if (audioEngine.gain) {
+                try {
+                    audioEngine.gain.gain.value = 1;
+                } catch (_) {
+                }
+                audioResumeContext();
+                audioApplySink(target, { silent: true });
+            }
+            return { ok: true, boosted: false };
+        }
+        const node = await audioBoostGraph(target, options);
+        if (!node) {
+            try {
+                target.volume = 1;
+            } catch (_) {
+            }
+            if (!audioContextCtor()) return { ok: false, reason: 'unsupported' };
+            const error = audioGraphError(target);
+            if (error === 'InvalidStateError') return { ok: false, reason: 'claimed', error };
+            if (!error) return { ok: false, reason: 'deferred', error };
+            return { ok: false, reason: 'cors', error };
+        }
+        try {
+            node.gain.value = gain;
+        } catch (_) {
+        }
+        audioResumeContext();
+        audioApplySink(target, { silent: true });
+        if (!options.silent) log(`🔊 音量已提升到 ${audioGainText(gain)}`);
+        return { ok: true, boosted: true };
+    }
+    function audioSinkSupported(video = state.video) {
+        return Boolean(video && typeof video.setSinkId === 'function');
+    }
+    function audioApplySink(video, options = {}) {
+        const target = video || state.video;
+        const ctx = audioEngine.ctx;
+        if (!target) return false;
+        const sinkId = settings.audioRoute ? String(settings.audioDeviceId || '') : '';
+        let applied = false;
+        if (typeof target.setSinkId === 'function') {
+            try {
+                const result = target.setSinkId(sinkId);
+                if (result && typeof result.catch === 'function') result.catch(() => {});
+                applied = true;
+            } catch (_) {
+            }
+        }
+        if (ctx && typeof ctx.setSinkId === 'function') {
+            try {
+                const result = ctx.setSinkId(sinkId);
+                if (result && typeof result.catch === 'function') result.catch(() => {});
+                applied = true;
+            } catch (_) {
+            }
+        }
+        if (!options.silent) {
+            log(applied
+                ? (sinkId ? `🔊 输出已切到 ${settings.audioDeviceLabel || '所选设备'}` : '🔊 输出已恢复系统默认')
+                : '⚠️ 当前浏览器不支持设备路由');
+        }
+        return applied;
+    }
+    const audioRetryBound = new WeakSet();
+    function audioBoostStatus(video) {
+        const target = video || audioActiveVideo();
+        const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        if (!target) return { level: '', text: '等待播放器就绪后自动套用' };
+        if (gain <= 1) return { level: '', text: `原声音量 ${audioGainText(gain)}，无需增益` };
+        if (!audioContextCtor()) return { level: 'is-off', text: '当前浏览器不支持音量增益' };
+        if (audioGraphReady(target)) return { level: 'is-on', text: `已生效 · 播放增益 ${audioGainText(gain)}` };
+        const error = audioGraphError(target);
+        if (error === 'InvalidStateError') {
+            return { level: 'is-off', text: '未生效 · 播放器音频通道已被其他脚本占用' };
+        }
+        if (error === 'CorsBlocked') {
+            return { level: 'is-warn', text: '未生效 · 该视频源不允许跨域音频处理' };
+        }
+        if (error) return { level: 'is-off', text: `未生效 · 无法连接音频通道（${error}）` };
+        if (audioNeedsCorsReload(target)) return { level: 'is-warn', text: '已设置 · 开始播放后自动应用增益' };
+        return { level: 'is-warn', text: '未生效 · 无法连接音频通道' };
+    }
+    function setupAudioControl(video) {
+        if (!video) return;
+        state.audioVideo = video;
+        const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        try {
+            video.volume = Math.min(1, gain);
+        } catch (_) {
+        }
+        if (gain > 1) audioApplyGain(video, { silent: true });
+        if (settings.audioRoute) audioApplySink(video, { silent: true });
+        if (!audioRetryBound.has(video)) {
+            audioRetryBound.add(video);
+            video.addEventListener('playing', () => {
+                if (!audioGraphReady(video)
+                    && Number(settings.audioGain) > 1
+                    && !audioGraphError(video)) {
+                    audioApplyGain(video, { silent: true }).then(audioPaintPanel, audioPaintPanel);
+                } else {
+                    audioPaintPanel();
+                }
+            });
+        }
+        audioPaintPanel();
+    }
+    function audioPaintPanel() {
+        const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        if (state.audioGainLabel) state.audioGainLabel.textContent = `音量 ${audioGainText(gain)}`;
+        if (state.audioSliderValue) state.audioSliderValue.textContent = audioGainText(gain);
+        if (state.audioSlider) {
+            state.audioSlider.value = String(gain);
+            syncRangeFill(state.audioSlider);
+        }
+        if (state.audioSliderWrap) {
+            for (const button of state.audioSliderWrap.querySelectorAll('.av-audio-presets button')) {
+                const preset = Number.parseFloat(button.dataset.gain);
+                button.classList.toggle('is-on', Number.isFinite(preset) && Math.abs(preset - gain) < 0.001);
+            }
+        }
+        if (state.audioGainBtn) {
+            const open = Boolean(state.audioSliderWrap && !state.audioSliderWrap.classList.contains('av-collapsed'));
+            state.audioGainBtn.classList.toggle('is-open', open);
+            state.audioGainBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+        if (state.audioStateEl) {
+            const boost = audioBoostStatus(audioActiveVideo());
+            state.audioStateEl.textContent = boost.text;
+            state.audioStateEl.classList.toggle('is-on', boost.level === 'is-on');
+            state.audioStateEl.classList.toggle('is-off', boost.level === 'is-off');
+            state.audioStateEl.classList.toggle('is-warn', boost.level === 'is-warn');
+        }
+    }
+    function setAudioSliderOpen(open) {
+        settings.audioSliderOpen = Boolean(open);
+        store.set(siteAudioKey('SliderOpen'), settings.audioSliderOpen);
+        if (state.audioSliderWrap) state.audioSliderWrap.classList.toggle('av-collapsed', !settings.audioSliderOpen);
+        audioPaintPanel();
+        if (typeof state.layoutPanel === 'function') state.layoutPanel();
+    }
+    async function applyAudioGainFromUI() {
+        const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+        const result = await audioApplyGain(audioActiveVideo());
+        if (result.ok) {
+            log(result.boosted ? `🔊 音量已提升到 ${audioGainText(gain)}` : `🔊 音量已设为 ${audioGainText(gain)}`);
+        } else if (result.reason === 'claimed') {
+            log('⚠️ 播放器音频通道已被其他脚本占用，无法提升音量，已保持原生音量');
+        } else if (result.reason === 'cors') {
+            log('⚠️ 该视频源不允许跨域音频处理，已保持原生音量');
+        } else if (result.reason === 'unsupported') {
+            log('⚠️ 当前浏览器不支持音量增益，已保持原生音量');
+        } else if (result.reason !== 'deferred') {
+            log(`⚠️ 未找到播放器，音量 ${audioGainText(gain)} 已保存`);
+        }
+        audioPaintPanel();
+        return result;
+    }
+    function buildPanelAudioRow() {
+        const row = document.createElement('div');
+        row.className = 'av-audio';
+        const buttons = document.createElement('div');
+        buttons.className = 'btn-group av-audio-buttons';
+        const gainBtn = document.createElement('button');
+        gainBtn.type = 'button';
+        gainBtn.className = 'av-audio-btn';
+        gainBtn.title = '点击展开音量增益滑杆（0% – 600%）';
+        const gainLabel = document.createElement('span');
+        gainLabel.className = 'av-audio-label';
+        const caret = document.createElement('span');
+        caret.className = 'av-audio-caret';
+        caret.textContent = '▾';
+        gainBtn.append(gainLabel, caret);
+        const routeBtn = createButton('设备路由', 'btn-primary');
+        routeBtn.title = '打开设备路由悬浮窗（按站点独立保存）';
+        const box = document.createElement('div');
+        box.className = 'av-audio-panel av-collapse av-collapsed';
+        const line = document.createElement('div');
+        line.className = 'av-audio-line';
+        const lineLabel = document.createElement('span');
+        lineLabel.textContent = '音频增益';
+        const scope = document.createElement('span');
+        scope.className = 'av-audio-scope';
+        scope.textContent = '按站点独立保存';
+        line.append(lineLabel, scope);
+        const range = document.createElement('div');
+        range.className = 'av-audio-range';
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = String(AUDIO_GAIN_MIN);
+        slider.max = String(AUDIO_GAIN_MAX);
+        slider.step = String(AUDIO_GAIN_STEP);
+        slider.value = String(settings.audioGain);
+        slider.title = '0% – 600%';
+        const sliderValue = document.createElement('span');
+        sliderValue.className = 'av-audio-value';
+        range.append(slider, sliderValue);
+        const presets = document.createElement('div');
+        presets.className = 'av-audio-presets';
+        for (const preset of AUDIO_GAIN_PRESETS) {
+            const presetBtn = document.createElement('button');
+            presetBtn.type = 'button';
+            presetBtn.dataset.gain = String(preset);
+            presetBtn.textContent = audioGainText(preset);
+            presetBtn.addEventListener('click', () => {
+                settings.audioGain = preset;
+                store.set(siteAudioKey('Gain'), preset);
+                audioPaintPanel();
+                applyAudioGainFromUI();
+            });
+            presets.appendChild(presetBtn);
+        }
+        const stateLine = document.createElement('div');
+        stateLine.className = 'av-audio-state';
+        box.append(line, range, presets, stateLine);
+        slider.addEventListener('input', event => {
+            settings.audioGain = clamp(Number.parseFloat(event.target.value) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+            audioPaintPanel();
+            if (!audioApplyGainLive()) scheduleAudioGainApply();
+        });
+        slider.addEventListener('change', () => {
+            clearTimeout(state.audioApplyTimer);
+            state.audioApplyTimer = 0;
+            store.set(siteAudioKey('Gain'), settings.audioGain);
+            applyAudioGainFromUI();
+        });
+        gainBtn.addEventListener('click', () => setAudioSliderOpen(state.audioSliderWrap ? state.audioSliderWrap.classList.contains('av-collapsed') : true));
+        routeBtn.addEventListener('click', openAudioWindow);
+        buttons.append(gainBtn, routeBtn);
+        row.append(buttons, box);
+        state.audioGainBtn = gainBtn;
+        state.audioGainLabel = gainLabel;
+        state.audioCaret = caret;
+        state.audioSliderWrap = box;
+        state.audioSlider = slider;
+        state.audioSliderValue = sliderValue;
+        state.audioRouteBtn = routeBtn;
+        state.audioStateEl = stateLine;
+        box.classList.toggle('av-collapsed', !settings.audioSliderOpen);
+        audioPaintPanel();
+        return row;
+    }
+    function audioSetStatus(text, hint = '') {
+        if (state.audioStatusEl) state.audioStatusEl.textContent = text;
+        if (state.audioStatusHint) state.audioStatusHint.textContent = hint;
+    }
+    function audioDefaultStatus() {
+        return settings.audioRoute
+            ? `已启用：${audioSiteName()} · ${settings.audioDeviceLabel || '系统默认输出'} · 音量 ${audioGainText(settings.audioGain)}`
+            : `未启用设备路由 · 音量 ${audioGainText(settings.audioGain)}`;
+    }
+    function audioRenderDevices(items) {
+        const list = state.audioDeviceList;
+        if (!list) return;
+        list.replaceChildren();
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'av-audio-empty';
+            empty.textContent = '没有检测到输出设备';
+            list.appendChild(empty);
+            return;
+        }
+        const selected = settings.audioDeviceId || '';
+        for (const item of items) {
+            const label = document.createElement('label');
+            label.className = 'subtitle-picker-row av-audio-device';
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = 'av-audio-device';
+            input.value = item.deviceId;
+            input.checked = item.deviceId === selected;
+            input.addEventListener('change', () => {
+                settings.audioDeviceId = item.deviceId;
+                settings.audioDeviceLabel = item.label;
+                audioApplySink(audioActiveVideo(), { silent: true });
+                audioSetStatus(`已选择：${item.label}`, '点「保存」写入本站配置');
+            });
+            const name = document.createElement('span');
+            name.className = 'av-audio-device-name';
+            name.textContent = item.label;
+            label.append(input, name);
+            if (item.tag) {
+                const tag = document.createElement('span');
+                tag.className = 'av-audio-device-tag';
+                tag.textContent = item.tag;
+                label.appendChild(tag);
+            }
+            list.appendChild(label);
+        }
+    }
+    async function audioListOutputs() {
+        const media = navigator.mediaDevices;
+        if (!media || typeof media.enumerateDevices !== 'function') return null;
+        try {
+            const devices = await media.enumerateDevices();
+            return devices.filter(device => device.kind === 'audiooutput');
+        } catch (_) {
+            return [];
+        }
+    }
+    async function audioRefreshDevices() {
+        const list = state.audioDeviceList;
+        if (!list) return;
+        const outputs = await audioListOutputs();
+        if (outputs === null) {
+            audioRenderDevices([]);
+            audioSetStatus('当前浏览器不支持设备路由', '需要 Chrome 或 Edge 110 及以上版本');
+            return;
+        }
+        const items = [{ deviceId: '', label: '系统默认输出', tag: settings.audioDeviceId ? '' : '已选' }];
+        const seen = new Set(['']);
+        let index = 0;
+        for (const device of outputs) {
+            const deviceId = String(device.deviceId || '');
+            if (!deviceId || seen.has(deviceId)) continue;
+            seen.add(deviceId);
+            index += 1;
+            items.push({
+                deviceId,
+                label: device.label || `输出设备 ${index}`,
+                tag: deviceId === settings.audioDeviceId ? '已选' : ''
+            });
+        }
+        audioRenderDevices(items);
+        const hint = settings.audioRoute && !settings.audioDeviceId ? '当前使用系统默认输出' : '';
+        audioSetStatus(audioDefaultStatus(), audioSinkSupported(audioActiveVideo()) ? hint : '当前浏览器不支持设备路由，所选设备会保存但不会生效');
+    }
+    async function audioRequestPermission() {
+        const media = navigator.mediaDevices;
+        if (!media || typeof media.getUserMedia !== 'function') {
+            audioSetStatus('当前浏览器不支持设备授权', '');
+            return;
+        }
+        try {
+            const stream = await media.getUserMedia({ audio: true });
+            for (const track of stream.getTracks()) track.stop();
+            await audioRefreshDevices();
+            audioSetStatus('已授权，设备名称现已可见', '');
+        } catch (_) {
+            audioSetStatus('授权失败，设备名称可能仍为空', '可检查浏览器的麦克风权限');
+        }
+    }
+    async function audioTestTone() {
+        const ctx = audioContext();
+        if (!ctx) {
+            audioSetStatus('当前浏览器不支持音频处理', '');
+            return;
+        }
+        const sinkId = settings.audioRoute ? String(settings.audioDeviceId || '') : '';
+        try {
+            if (ctx.state === 'suspended') await ctx.resume();
+            if (typeof ctx.setSinkId === 'function') await ctx.setSinkId(sinkId);
+            else if (sinkId) {
+                audioSetStatus('当前浏览器不支持设备路由', '测试音将从系统默认输出播放');
+            }
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 660;
+            gain.gain.value = 0.12;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            setTimeout(() => {
+                try {
+                    osc.stop();
+                    osc.disconnect();
+                    gain.disconnect();
+                } catch (_) {
+                }
+            }, 700);
+            if (sinkId && typeof ctx.setSinkId === 'function') {
+                audioSetStatus(`测试音已播放：${settings.audioDeviceLabel || '所选设备'}`, '');
+            }
+        } catch (_) {
+            audioSetStatus('测试音播放失败', '请先点「授权设备」');
+        }
+    }
+    function audioSaveSettings() {
+        persistSettings();
+        store.set(siteAudioKey('Route'), settings.audioRoute);
+        store.set(siteAudioKey('Device'), settings.audioDeviceId);
+        store.set(siteAudioKey('DeviceLabel'), settings.audioDeviceLabel);
+        audioSetStatus(audioDefaultStatus(), '已保存到本站，切到另一个站点互不影响');
+        log(`💾 ${audioSiteName()} 音频设置已保存`);
+    }
+    function clampAudioWinPosition(win) {
+        if (!win) return;
+        const rect = win.getBoundingClientRect?.() || { width: 0, height: 0 };
+        const maxX = Math.max(0, window.innerWidth - rect.width - 8);
+        const maxY = Math.max(0, window.innerHeight - rect.height - 8);
+        const keyX = siteAudioKey('WinX');
+        const keyY = siteAudioKey('WinY');
+        const x = clamp(Number.parseFloat(win.style.left) || 0, 0, maxX);
+        const y = clamp(Number.parseFloat(win.style.top) || 0, 0, maxY);
+        win.style.left = `${x}px`;
+        win.style.top = `${y}px`;
+        win.style.bottom = 'auto';
+        settings[keyX] = x;
+        settings[keyY] = y;
+        store.set(keyX, x);
+        store.set(keyY, y);
+    }
+    function closeAudioWindow() {
+        state.audioWin?.remove();
+        state.audioWin = null;
+        state.audioDeviceList = null;
+        state.audioStatusEl = null;
+        state.audioStatusHint = null;
+        state.audioRouteToggle = null;
+    }
+    function openAudioWindow() {
+        if (state.audioWin?.isConnected) {
+            closeAudioWindow();
+            return;
+        }
+        closeAudioWindow();
+        const win = document.createElement('div');
+        win.className = 'subtitle-picker av-audio-win';
+        const header = document.createElement('div');
+        header.className = 'subtitle-picker-header';
+        const title = document.createElement('span');
+        title.className = 'subtitle-picker-title';
+        title.textContent = '🎧 设备路由';
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'subtitle-picker-close';
+        closeBtn.textContent = '[关闭]';
+        closeBtn.addEventListener('click', closeAudioWindow);
+        header.append(title, closeBtn);
+        const siteRow = document.createElement('div');
+        siteRow.className = 'av-audio-site';
+        const siteName = document.createElement('span');
+        siteName.className = 'av-audio-site-name';
+        siteName.textContent = `当前站点：${audioSiteName()}`;
+        const badge = document.createElement('span');
+        badge.className = 'av-audio-badge';
+        badge.textContent = '独立配置';
+        siteRow.append(siteName, badge);
+        const toggle = document.createElement('label');
+        toggle.className = 'av-audio-toggle';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = Boolean(settings.audioRoute);
+        const toggleText = document.createElement('span');
+        toggleText.className = 'av-audio-toggle-text';
+        const toggleTitle = document.createElement('span');
+        toggleTitle.className = 'av-audio-toggle-title';
+        toggleTitle.textContent = '启用设备路由';
+        const toggleHint = document.createElement('span');
+        toggleHint.className = 'av-audio-toggle-hint';
+        toggleHint.textContent = '关掉则回到系统默认输出（不影响增益）';
+        toggleText.append(toggleTitle, toggleHint);
+        toggle.append(checkbox, toggleText);
+        const deviceHead = document.createElement('div');
+        deviceHead.className = 'av-audio-site';
+        const deviceTitle = document.createElement('span');
+        deviceTitle.textContent = '输出设备';
+        const refreshBtn = document.createElement('span');
+        refreshBtn.className = 'subtitle-picker-close';
+        refreshBtn.textContent = '刷新列表';
+        deviceHead.append(deviceTitle, refreshBtn);
+        const list = document.createElement('div');
+        const actions = document.createElement('div');
+        actions.className = 'av-audio-actions';
+        const authBtn = createButton('授权设备');
+        const testBtn = createButton('测试音');
+        const saveBtn = createButton('保存', 'btn-primary');
+        actions.append(authBtn, testBtn, saveBtn);
+        const status = document.createElement('div');
+        status.className = 'av-audio-status';
+        const statusHint = document.createElement('div');
+        statusHint.className = 'av-audio-status-hint';
+        statusHint.textContent = '切到另一个站点会读取它自己的设备与音量，两边互不影响';
+        win.append(header, siteRow, toggle, deviceHead, list, actions, status, statusHint);
+        state.audioWin = win;
+        state.audioDeviceList = list;
+        state.audioStatusEl = status;
+        state.audioStatusHint = statusHint;
+        state.audioRouteToggle = checkbox;
+        checkbox.addEventListener('change', () => {
+            settings.audioRoute = checkbox.checked;
+            audioApplySink(audioActiveVideo(), { silent: true });
+            audioSetStatus(audioDefaultStatus(), checkbox.checked ? '点「保存」写入本站配置' : '已停用设备路由');
+        });
+        refreshBtn.addEventListener('click', () => audioRefreshDevices());
+        authBtn.addEventListener('click', audioRequestPermission);
+        testBtn.addEventListener('click', audioTestTone);
+        saveBtn.addEventListener('click', audioSaveSettings);
+        for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
+            win.addEventListener(type, event => event.stopPropagation());
+        }
+        getUiLayer(2147483646).appendChild(win);
+        const keyX = siteAudioKey('WinX');
+        const keyY = siteAudioKey('WinY');
+        const savedX = settings[keyX];
+        const savedY = settings[keyY];
+        if (Number.isFinite(savedX) && Number.isFinite(savedY)) {
+            win.style.left = `${savedX}px`;
+            win.style.top = `${savedY}px`;
+        } else {
+            const rect = win.getBoundingClientRect?.() || { width: 0, height: 0 };
+            win.style.left = '15px';
+            win.style.top = `${Math.max(60, window.innerHeight - (rect.height || 420) - 140)}px`;
+        }
+        applyUiStyles();
+        makeDraggable(win, header, { x: keyX, y: keyY });
+        clampAudioWinPosition(win);
+        audioRefreshDevices();
     }
     const BACKUP_FIELDS = [
         { key: 'name', label: '名称' },
@@ -5660,6 +6494,7 @@
         }
         setupHoldAccelerate(container);
         setupResumePlayback(video, container);
+        setupAudioControl(video);
         syncFilterBar();
         if (video.dataset && video.dataset.avHelperBound !== '1') {
             video.dataset.avHelperBound = '1';
@@ -9856,7 +10691,6 @@
             document.querySelector('.info-rating-badge')?.remove();
             state.player = null;
             state.video = null;
-            state.videoCode = '';
             state.bound = false;
             stopPlayerPoll();
             setTimeout(() => {
