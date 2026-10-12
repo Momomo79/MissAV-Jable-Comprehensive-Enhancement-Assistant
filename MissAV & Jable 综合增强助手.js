@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.9
+// @version      12.10
 // @description  PC端专用、广告清理、字幕加载/偏移/字号高度、音量增强0-600%与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -696,7 +696,7 @@
         reviewsLoadingMore: false
     };
     const ANALYTICS_ENTRY = /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
-    const COCKPIT_GUARD_CSS = 'html.av-cockpit-mode,html.av-cockpit-mode body{margin:0 !important;padding:0 !important;background:#090a0f !important;overflow-x:hidden !important}html.av-cockpit-mode body>*:not(.av-analytics-page){display:none !important}html.av-cockpit-mode .av-analytics-page{position:fixed !important;inset:0 !important;z-index:2147483600 !important;overflow-y:auto !important;background:#090a0f !important}';
+    const COCKPIT_GUARD_CSS = 'html.av-cockpit-mode,html.av-cockpit-mode body{margin:0 !important;padding:0 !important;background:#090a0f !important;overflow-x:hidden !important}html.av-cockpit-mode body>*:not(.av-analytics-page){display:none !important}html.av-cockpit-mode .custom-ui-layer-top{display:none !important}html.av-cockpit-mode .av-analytics-page{position:fixed !important;inset:0 !important;z-index:2147483600 !important;overflow-y:auto !important;background:#090a0f !important}';
     function engageCockpitGuard() {
         try {
             document.documentElement.classList.add('av-cockpit-mode');
@@ -1136,7 +1136,7 @@
             opacity: 1;
             isolation: auto;
         }
-        .custom-ui-layer.custom-ui-layer-top { z-index: 2147483646; }
+        .custom-ui-layer.custom-ui-layer-top { z-index: 2147483647; }
         .custom-ui-layer > * { pointer-events: auto; }
         .custom-ui-layer .custom-control-panel { position: fixed; }
         .custom-control-panel,
@@ -1663,14 +1663,24 @@
         group.append(label, input);
         return group;
     }
+    function raiseTopLayer(layer) {
+        const layerRoot = document.documentElement || document.body;
+        if (!layerRoot) return;
+        if (layer.parentNode !== layerRoot || layerRoot.lastElementChild !== layer) {
+            layerRoot.appendChild(layer);
+        }
+    }
     function getUiLayer(zIndex = 2147483600) {
         if (zIndex !== 2147483600) {
-            if (state.pickerLayer?.isConnected) return state.pickerLayer;
+            if (state.pickerLayer?.isConnected) {
+                raiseTopLayer(state.pickerLayer);
+                return state.pickerLayer;
+            }
             const layer = document.createElement('div');
             layer.className = 'custom-ui-layer custom-ui-layer-top';
             layer.setAttribute?.('data-av-helper', 'layer');
             layer.style.zIndex = String(zIndex);
-            (document.body || document.documentElement).appendChild(layer);
+            raiseTopLayer(layer);
             state.pickerLayer = layer;
             return layer;
         }
@@ -1917,11 +1927,11 @@
         openCockpit.rel = 'noopener noreferrer';
         openCockpit.title = '在新标签页打开观影行为数据大屏';
         openCockpit.setAttribute('aria-label', '数据大屏');
-        openCockpit.append(document.createTextNode('📊 数据大屏'));
+        openCockpit.append(document.createTextNode('数据大屏'));
         openCockpit.addEventListener('click', () => {
             openCockpit.href = analyticsUrl();
         });
-        const btnClearLib = createButton('🗑 清空已看库');
+        const btnClearLib = createButton('清空已看库');
         btnClearLib.title = '只清空当前站点的已看标记，不影响另一个站点';
         btnClearLib.addEventListener('click', () => {
             clearWatched();
@@ -1972,7 +1982,7 @@
         return sliderRow;
     }
     function buildPanelCollapseToggles(sliderRow) {
-        const loginToggleBtn = createButton('👤 隐藏/显示自动登录', 'btn-primary panel-full-btn');
+        const loginToggleBtn = createButton('隐藏/显示自动登录', 'btn-primary panel-full-btn');
         const loginPanel = buildLoginPanel();
         loginToggleBtn.addEventListener('click', () => {
             const collapsed = !loginPanel.classList.contains('av-collapsed');
@@ -1984,7 +1994,7 @@
         toggleSliderBtn.addEventListener('click', () => {
             setCollapsed(sliderRow, !sliderRow.classList.contains('av-collapsed'));
         });
-        const filterToggleBtn = createButton('🛡 隐藏/显示内容过滤与屏蔽', 'btn-primary panel-full-btn');
+        const filterToggleBtn = createButton('隐藏/显示内容过滤与屏蔽', 'btn-primary panel-full-btn');
         const filterPanel = buildFilterPanel();
         filterToggleBtn.addEventListener('click', () => {
             const collapsed = !filterPanel.classList.contains('av-collapsed');
@@ -3257,7 +3267,7 @@
         for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
             list.addEventListener(type, event => event.stopPropagation());
         }
-        getUiLayer(2147483646).appendChild(list);
+        getUiLayer(2147483647).appendChild(list);
         if (!Number.isFinite(settings.pickerX) || !Number.isFinite(settings.pickerY)) {
             const rect = list.getBoundingClientRect?.() || { width: 0, height: 0 };
             list.style.left = '15px';
@@ -4023,7 +4033,7 @@
         for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
             win.addEventListener(type, event => event.stopPropagation());
         }
-        getUiLayer(2147483646).appendChild(win);
+        getUiLayer(2147483647).appendChild(win);
         const keyX = siteAudioKey('WinX');
         const keyY = siteAudioKey('WinY');
         const savedX = settings[keyX];
@@ -5151,7 +5161,7 @@
         for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
             win.addEventListener(type, event => event.stopPropagation());
         }
-        getUiLayer(2147483646).appendChild(win);
+        getUiLayer(2147483647).appendChild(win);
         state.favoriteBackup = { win, inputs, sourceInput, limitInput, startBtn, stopBtn, bar, logEl, running: false, cancelled: false };
         syncBackupFields();
         if (Number.isFinite(settings.backupX) && Number.isFinite(settings.backupY)) {
