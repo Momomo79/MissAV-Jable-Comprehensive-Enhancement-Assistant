@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.10
+// @version      12.11
 // @description  PC端专用、广告清理、字幕加载/偏移/字号高度、音量增强0-600%与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -4068,6 +4068,12 @@
     const BACKUP_DATE_TEXT_RE = /^(?:\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}\s*(?:分钟|分鐘|小时|小時|天|日|週|周|个月|個月|月|年)前|\d{1,2}:\d{2}(?::\d{2})?|\d{4}年\d{1,2}月(?:\d{1,2}日)?)(?:\s*\d{1,2}:\d{2}(?::\d{2})?)?$/;
     const BACKUP_ENTITY_SLUG_JUNK = new Set(['ranking', 'ranks', 'rank', 'popular', 'new', 'new-release', 'all', 'list', 'index', 'best', 'top', 'featured', 'recommend', 'category', 'categories', 'tag', 'tags', 'genre', 'genres', 'uncensored', 'censored', 'western', 'amateur', 'search', 'month', 'year', 'page']);
     const JABLE_FAVORITES_PATH = '/my/favourites/videos/';
+    const MISSAV_FAVORITES_PATH = '/saved';
+    function favoritesHomeUrl() {
+        return IS_JABLE
+            ? `${location.origin}${JABLE_FAVORITES_PATH}`
+            : `${location.origin}${MISSAV_FAVORITES_PATH}?page=1`;
+    }
     function backupSleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -4630,10 +4636,7 @@
         const here = location.href.split('#')[0];
         if (IS_JABLE && /favourites?/i.test(here)) return here.split('?')[0];
         if (/favorite|favourite|collection|playlist|bookmark|mark|收藏|片单|片單/i.test(here)) return here.split('?')[0];
-        if (IS_JABLE) return `${location.origin}${JABLE_FAVORITES_PATH}`;
-        const seg = location.pathname.split('/').filter(Boolean)[0] || '';
-        const lang = /^(?:en|zh|cn|ja|ko|tw)$/i.test(seg) ? `/${seg}` : '';
-        return `${location.origin}${lang}/favorites`;
+        return favoritesHomeUrl();
     }
     async function resolveFavoriteSource(explicit, ui) {
         const typed = String(explicit || '').trim();
@@ -4657,11 +4660,11 @@
         const seg = location.pathname.split('/').filter(Boolean)[0] || '';
         const lang = /^(?:en|zh|cn|ja|ko|tw)$/i.test(seg) ? `/${seg}` : '';
         const candidates = [
-            `${location.origin}${lang}/favorites`,
+            favoritesHomeUrl(),
+            `${location.origin}${MISSAV_FAVORITES_PATH}`,
+            `${location.origin}${lang}${MISSAV_FAVORITES_PATH}?page=1`,
             `${location.origin}/favorites`,
-            `${location.origin}${lang}/my/favorites`,
-            `${location.origin}/my/collections`,
-            `${location.origin}${lang}/collections`
+            `${location.origin}${lang}/my/favorites`
         ];
         for (const url of candidates) {
             if (ui?.cancelled) return '';
@@ -4674,7 +4677,7 @@
             await backupSleep(160);
         }
         backupLog('⚠️ 未自动识别收藏页，请在“收藏页”输入框粘贴地址');
-        return candidates[1];
+        return favoritesHomeUrl();
     }
     async function collectFavoriteItems({ base, limit, ui }) {
         const out = [];
@@ -5121,7 +5124,7 @@
         const sourceInput = document.createElement('input');
         sourceInput.type = 'text';
         sourceInput.placeholder = '留空自动识别，或粘贴收藏/片单地址';
-        sourceInput.value = settings.backupSource || (IS_JABLE ? `${location.origin}${JABLE_FAVORITES_PATH}` : '');
+        sourceInput.value = settings.backupSource || favoritesHomeUrl();
         sourceLine.append(sourceLabel, sourceInput);
         const limitLine = document.createElement('div');
         limitLine.className = 'av-backup-line';
@@ -10500,6 +10503,25 @@
             return '#av-analytics';
         }
     }
+    function openCockpitTab(url) {
+        const target = String(url || analyticsUrl());
+        try {
+            if (typeof GM_openInTab === 'function') {
+                GM_openInTab(target, { active: true, insert: true });
+                return;
+            }
+        } catch (_) {
+        }
+        try {
+            const opened = window.open(target, '_blank');
+            if (opened) return;
+        } catch (_) {
+        }
+        try {
+            location.assign(target);
+        } catch (_) {
+        }
+    }
     const ANALYTICS_TITLE = '观影行为数据 — 增强助手';
     let analyticsGuard = 0;
     let analyticsObserver = null;
@@ -10761,8 +10783,12 @@
             if (!target || typeof target.closest !== 'function') return;
             const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
             if (link) {
-                link.href = analyticsUrl();
+                const url = analyticsUrl();
+                link.href = url;
                 event.stopImmediatePropagation();
+                if (type !== 'click' || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                openCockpitTab(url);
                 return;
             }
             const recordLink = target.closest('.av-open-record');
