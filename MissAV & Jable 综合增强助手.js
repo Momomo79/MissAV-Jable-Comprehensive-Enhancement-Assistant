@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      12.11
-// @description  PC端专用、广告清理、字幕加载/偏移/字号高度、音量增强0-600%与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+// @version      13.15
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -16,6 +16,11 @@
 // @match        *://missav.media/*
 // @match        *://jable.tv/*
 // @match        *://www.jable.tv/*
+// @match        *://m.jable.tv/*
+// @match        *://m.missav.com/*
+// @match        *://m.missav.ws/*
+// @match        *://m.missav.ai/*
+// @match        *://m.missav.live/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_openInTab
@@ -58,18 +63,146 @@
     try {
     const STORAGE_PREFIX = 'avSub:';
     const IS_JABLE = location.hostname.includes('jable');
+
+    const PLATFORM_MODE_KEY = `${STORAGE_PREFIX}platformMode`;
+    const PLATFORM_MODES = ['auto', 'mobile', 'desktop'];
+    const PLATFORM_UA_MOBILE = /Android|iPhone|iPod|Windows Phone|webOS|BlackBerry|Opera Mini|IEMobile|HarmonyOS|MicroMessenger|MiuiBrowser|Quark|UCBrowser/i;
+    function platformForcedMode() {
+        let forced = '';
+        try {
+            const param = new URLSearchParams(location.search).get('avplat');
+            const value = String(param || '').toLowerCase();
+            if (PLATFORM_MODES.includes(value)) forced = value;
+        } catch (_) {
+        }
+        if (!forced) {
+            try {
+                const stored = String(localStorage.getItem(PLATFORM_MODE_KEY) || '').toLowerCase();
+                if (PLATFORM_MODES.includes(stored)) forced = stored;
+            } catch (_) {
+            }
+        }
+        return forced;
+    }
+    const AV_PLATFORM = (() => {
+        const ua = navigator.userAgent || '';
+        const touchPoints = Number(navigator.maxTouchPoints) || 0;
+        let coarse = false;
+        let noHover = false;
+        let finePointer = false;
+        try {
+            if (typeof matchMedia === 'function') {
+                coarse = matchMedia('(pointer: coarse)').matches;
+                noHover = matchMedia('(hover: none)').matches;
+                finePointer = matchMedia('(any-pointer: fine)').matches;
+            }
+        } catch (_) {
+        }
+        const uaMobile = PLATFORM_UA_MOBILE.test(ua);
+        const iPadOS = /Macintosh|Mac OS X/i.test(ua) && touchPoints > 1;
+        const viewportWidth = Math.min(Number(window.innerWidth) || 0, Number(screen?.width) || 0);
+        const narrow = viewportWidth > 0 && viewportWidth <= 820;
+        let score = 0;
+        if (uaMobile || iPadOS) score += 4;
+        else if (coarse && noHover) score += 2;
+        if (narrow) score += 1;
+        if (finePointer && !uaMobile && !iPadOS) score = Math.min(score, 1);
+        const forced = platformForcedMode();
+        const isMobile = forced === 'mobile' ? true : forced === 'desktop' ? false : score >= 2;
+        return {
+            isMobile,
+            mode: isMobile ? 'mobile' : 'desktop',
+            forced: forced || 'auto',
+            score,
+            viewport: viewportWidth,
+            flags: { uaMobile, iPadOS, coarse, noHover, finePointer, narrow, touchPoints }
+        };
+    })();
+
+    const AV_SELECTOR_PROFILES = {
+        desktop: {
+            label: '桌面端配置',
+            playerHost: '.plyr__video-wrapper, .plyr, .video-js, .vjs-tech, #player, .player-wrapper, .player-container, .artplayer, .dplayer, .jwplayer',
+            previewHost: '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .jable-carousel, .owl-carousel, .owl-stage, .owl-stage-outer, .owl-item, .horizontal-img-box, .av-info-section, .av-analytics-page, .custom-ui-layer, .custom-control-panel, .custom-quick-controls, .av-stills-grid, .av-review-list, .av-list-grid',
+            videoDirect: '.plyr__video-wrapper video, .plyr video, .video-js video, .artplayer video, .dplayer video, #player video',
+            playEntry: ['a.text-nord13.font-medium.flex.items-center', 'a[href^="/play"]', 'button[class*="play"][class*="btn"]'],
+            infoAnchor: ['h1.text-base', 'h1.text-lg', '.video-title', '.video-detail-title', '.video-detail h1', '.detail h1', 'h1', 'h4.h4', 'h4'],
+            infoBlock: ['.video-detail', '.video-info', '.video-meta', '.detail', 'article', 'main'],
+            card: '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .grid > div, .row > div[class*="col-"], .video-list > div',
+            cardInner: '.thumbnail, .video-img-box, .video-item, .list-item, .video-list-item, article.video-card',
+            cardChrome: 'header, nav, footer, .site-header, .app-nav, .site-footer, .pagination, .breadcrumb, .custom-ui-layer, .av-analytics-page, .av-filter-bar, .av-filter-injected-header',
+            backupCard: 'div[class*="aspect-w-16"], .video-img-box, .thumbnail, article.video-card, .grid > div, .video-list > div, .col-6, .col-sm-4, .col-lg-3',
+            filterHeader: '.title-with-more, .title-with-avatar, .content-header, .flex.items-center.justify-between, .flex.justify-between, .d-flex.justify-content-between, .section-header, .section-title, .page-header, .list-header, .video-list-header',
+            sectionTitle: '.title-with-more, .title-with-avatar, .content-header, .section-title, .section-header, .list-header, .video-list-header, .page-header',
+            filterGrid: ['.grid', '.video-list', '[id^="list_videos_"]', '.row.gutter-20', '.row'],
+            profileNav: 'nav.profile-nav, .profile-nav',
+            pagination: ['a[href*="page="], a[href*="/page/"]', '.pagination .page-link, .pagination a[href*="#"], .page-item a, .pager a', 'ul.pagination a[href], .pagination a[href], .page-item a[href], nav.pagination a[href], a.page-link[href]'],
+            jableCardHost: ['.video-info h5.tags', 'h5.tags.h6-md', 'h5.tags'],
+            loginMark: 'a[href*="logout"], .user-info, .user-avatar, [data-user-id]',
+            loginMarkStrict: 'a[href*="logout"], .user-avatar, [data-user-id]'
+        },
+        mobile: {
+            label: '移动端配置',
+            playerHost: '.plyr__video-wrapper, .plyr, .video-js, .vjs-tech, #player, .player-wrapper, .player-container, #mobile-player, .mobile-player, .video-player, .video-wrap, .player-wrap, .player-box, .artplayer, .dplayer, .jwplayer, [class*="player-wrap"], [class*="video-wrap"]',
+            previewHost: '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .jable-carousel, .owl-carousel, .owl-stage, .owl-stage-outer, .owl-item, .horizontal-img-box, .swiper, .swiper-slide, .slick-slide, .carousel, .masonry, .thumb-block, .video-card, .av-info-section, .av-analytics-page, .custom-ui-layer, .custom-control-panel, .custom-quick-controls, .av-stills-grid, .av-review-list, .av-list-grid',
+            videoDirect: '.plyr__video-wrapper video, .plyr video, .video-js video, .artplayer video, .dplayer video, #player video, .player video, [class*="player"] video, video',
+            playEntry: ['a[href^="/play"]', 'button[class*="play"]', 'a[href*="/play/"]', 'a[class*="play"]'],
+            infoAnchor: ['.video-info h1', '.video-detail h1', '.mobile-title', '.title h1', '[class*="video-title"]', 'h1.text-base', 'h1.text-lg', '.video-title', '.video-detail-title', 'h1', 'h2', 'h4.h4', 'h4'],
+            infoBlock: ['.video-info', '.video-detail', '.video-meta', '.info-section', '.container', 'section', 'article', 'main', 'body > div'],
+            card: '.col-6, .col-4, .col-3, .col-12, [class*="thumb-block"], [class*="video-block"], .video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .grid > div, .row > div[class*="col-"], .video-list > div',
+            cardInner: '.thumbnail, .video-img-box, .video-item, .list-item, .video-list-item, article.video-card, [class*="thumb-block"], .video-card',
+            cardChrome: 'header, nav, footer, .site-header, .app-nav, .site-footer, .pagination, .breadcrumb, .custom-ui-layer, .av-analytics-page, .av-filter-bar, .av-filter-injected-header, .custom-control-panel, .custom-quick-controls, .av-info-section',
+            backupCard: '.col-6, .col-4, .col-3, .col-12, [class*="thumb-block"], div[class*="aspect-w-16"], .video-img-box, .thumbnail, article.video-card, .grid > div, .video-list > div',
+            filterHeader: '.title-with-more, .title-with-avatar, .content-header, .flex.items-center.justify-between, .flex.justify-between, .d-flex.justify-content-between, .section-header, .section-title, .page-header, .list-header, .video-list-header, .filter-bar, .filter-nav, .category-nav, .tabs, .nav-tabs, nav, h2',
+            sectionTitle: '.title-with-more, .title-with-avatar, .content-header, .section-title, .section-header, .list-header, .video-list-header, .page-header, .filter-bar, .filter-nav, .tabs, nav, h2',
+            filterGrid: ['.grid', '.video-list', '[id^="list_videos_"]', '.container', 'ul.list', '.row', 'main'],
+            profileNav: 'nav.profile-nav, .profile-nav, .category-nav, .filter-nav, .tabs, .nav-tabs',
+            pagination: ['a[rel="next"], .next a, .page-next a', 'a[href*="page="], a[href*="/page/"]', '[class*="pagination"] a[href], ul.pagination a[href], .pagination a[href], a.page-link[href]'],
+            jableCardHost: ['.video-info .tags', '.video-info h5.tags', 'h5.tags.h6-md', 'h5.tags'],
+            loginMark: 'a[href*="logout"], .user-info, .user-avatar, .header-user, .my-account, [data-user-id]',
+            loginMarkStrict: 'a[href*="logout"], .user-avatar, .header-user, .my-account, [data-user-id]'
+        }
+    };
+    const ACTIVE_SELECTORS = AV_SELECTOR_PROFILES[AV_PLATFORM.mode];
+    function markPlatformClass() {
+        const root = document.documentElement;
+        if (!root || !root.classList) return false;
+        root.classList.add(AV_PLATFORM.isMobile ? 'av-platform-mobile' : 'av-platform-desktop');
+        root.dataset.avPlatform = AV_PLATFORM.mode;
+        return true;
+    }
+    try {
+        if (!markPlatformClass()) document.addEventListener('DOMContentLoaded', markPlatformClass, { once: true });
+        const scope = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        scope.__avPlatform = AV_PLATFORM;
+        scope.__avSelectors = ACTIVE_SELECTORS;
+    } catch (_) {
+    }
+    function playerMinMetrics() {
+        if (!AV_PLATFORM.isMobile) return { width: 480, height: 260 };
+        const vw = Math.max(240, Number(window.innerWidth) || 360);
+        const vh = Math.max(320, Number(window.innerHeight) || 640);
+        return { width: Math.max(150, Math.round(Math.min(vw, vh) * 0.4)), height: 84 };
+    }
+
     const POLL_INTERVAL = 400;
     const POLL_TIMEOUT = 15000;
     const MUTATION_THROTTLE = 400;
     const SUBTITLE_IDLE_DELAY = 500;
     const QUICK_HIDE_DELAY = 2000;
     const QUICK_LEAVE_DELAY = 0;
-    const MIN_PLAYER_WIDTH = 480;
-    const MIN_PLAYER_HEIGHT = 260;
+    const MIN_PLAYER_WIDTH = AV_PLATFORM.isMobile ? playerMinMetrics().width : 480;
+    const MIN_PLAYER_HEIGHT = AV_PLATFORM.isMobile ? playerMinMetrics().height : 260;
     const QUICK_BOTTOM_OFFSET = 90;
     const QUICK_PORTAL_ID = 'av-helper-quick-portal';
-    const PLAYER_HOST_SELECTOR = '.plyr__video-wrapper, .plyr, .video-js, .vjs-tech, #player, .player-wrapper, .player-container, .artplayer, .dplayer, .jwplayer';
-    const PREVIEW_HOST_SELECTOR = '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .jable-carousel, .owl-carousel, .owl-stage, .owl-stage-outer, .owl-item, .horizontal-img-box, .av-info-section, .av-analytics-page, .custom-ui-layer, .custom-control-panel, .custom-quick-controls, .av-stills-grid, .av-review-list, .av-list-grid';
+    const QUICK_DOCK_WRAPPER = [
+        '.plyr__video-wrapper', '.plyr', '.video-js', '.vjs-tech', '.artplayer', '.dplayer', '.jwplayer',
+        '.player-wrapper', '.player-container', '#player', '.player',
+        '.aspect-w-16', '.aspect-h-9', '.ratio', '.embed-responsive', '.video-frame', '.video-wrapper',
+        '[class*="player"]', '[class*="video-wrap"]', '[class*="embed"]'
+    ].join(', ');
+    const PLAYER_HOST_SELECTOR = ACTIVE_SELECTORS.playerHost;
+    const PREVIEW_HOST_SELECTOR = ACTIVE_SELECTORS.previewHost;
     const REPEAT_SEEK_INTERVAL = 120;
     const PANEL_WIDTH = 310;
     const PASSIVE_CAPTURE = { passive: true, capture: true };
@@ -144,11 +277,7 @@
         'div[class*="ad_banner"]',
         'div[class*="ad-placement"]'
     ].join(',');
-    const PLAY_ENTRY_SELECTORS = [
-        'a.text-nord13.font-medium.flex.items-center',
-        'a[href^="/play"]',
-        'button[class*="play"][class*="btn"]'
-    ];
+    const PLAY_ENTRY_SELECTORS = ACTIVE_SELECTORS.playEntry.slice();
     const clamp = (value, min, max) => (value < min ? min : value > max ? max : value);
     const pad2 = value => String(value).padStart(2, '0');
     const formatSeconds = seconds => (seconds >= 60 ? `${seconds / 60}分钟` : `${seconds}秒`);
@@ -616,9 +745,14 @@
         loginBusy: false,
         quick: null,
         quickWatchTimer: 0,
+        quickScale: '1',
+        quickDock: null,
         playPauseBtn: null,
+        speedBtn: null,
         loopBtn: null,
         loopMenu: null,
+        moreBtn: null,
+        moreMenu: null,
         logEl: null,
         quickHideTimer: 0,
         acceleratePressed: false,
@@ -764,7 +898,7 @@
         cockpitFlagSet();
     }
     let cockpitSticky = ANALYTICS_ENTRY || cockpitFlagGet();
-    if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href)) {
+    if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href) && !/^https:\/\/m\./.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
         return;
     }
@@ -925,7 +1059,8 @@
         ensureVisibilityGuard(true);
         document.dispatchEvent(new Event('visibilitychange'));
     }, { once: true });
-    window.setInterval(() => {
+    let visibilityGuardTimer = 0;
+    visibilityGuardTimer = window.setInterval(() => {
         try {
             ensureVisibilityGuard(false);
         } catch (_) {
@@ -1072,6 +1207,10 @@
         pageLifecycle.push(dispose);
         return id;
     };
+    const trackTimeout = (id, dispose = () => clearTimeout(id)) => {
+        pageLifecycle.push(dispose);
+        return id;
+    };
     const trackFrameSlot = read => {
         pageLifecycle.push(() => {
             try {
@@ -1081,6 +1220,7 @@
         });
     };
     trackFrameSlot(() => state.subtitleRAF);
+    if (visibilityGuardTimer) trackInterval(visibilityGuardTimer);
     const trackObserver = (observer, target, options) => {
         if (!observer || !target) return observer;
         observer.observe(target, options);
@@ -1207,6 +1347,8 @@
         .btn-group button.btn-danger { background: rgba(239,68,68,.25); color: #fecaca; border-color: rgba(239,68,68,.4); }
         .btn-group button.btn-ghost { background: rgba(148,163,184,.18); color: #e2e8f0; border-color: rgba(148,163,184,.32); }
         .btn-group button.btn-ghost:hover { background: rgba(148,163,184,.3); }
+        .btn-group button.av-platform-btn { grid-column: 1 / -1; width: 100%; min-height: 30px; margin-top: 2px; padding: 5px 10px; text-align: center; letter-spacing: .6px; background: linear-gradient(135deg, rgba(56,189,248,.22), rgba(59,130,246,.22)); border-color: rgba(96,165,250,.45); color: #e0f2fe; }
+        .btn-group button.av-platform-btn:hover { background: linear-gradient(135deg, rgba(56,189,248,.34), rgba(59,130,246,.34)); border-color: rgba(125,211,252,.7); }
         .btn-group .av-open-cockpit { display: inline-flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; width: 100%; min-height: 26px; padding: 4px 5px; border: 1px solid rgba(59,130,246,.5); border-radius: 6px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #f8fafc; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; text-decoration: none; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: pointer; transition: filter .2s ease; }
         .btn-group .av-open-cockpit:hover { filter: brightness(1.12); }
         .av-audio { margin: 0 0 6px; }
@@ -1271,6 +1413,12 @@
         .quick-loop-btn { min-width: 46px; height: 32px; padding: 0 8px; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; line-height: 1; font-size: 13px; }
         .quick-loop-btn span { display: inline; }
         .quick-loop-btn.active { background: rgba(59,130,246,.45); color: #93c5fd; }
+        .quick-group-left { margin-right: 2px; }
+        .quick-group-right { margin-left: 2px; }
+        .quick-outer { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+        .quick-more-btn { min-width: 36px; padding: 0 6px; font-size: 15px; }
+        html:not(.av-platform-mobile) .quick-group-left { display: none; }
+        .more-menu { max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; }
         .loop-menu { position: absolute; bottom: 44px; left: 50%; transform: translateX(-50%); background: rgba(20,22,30,.95); border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 6px; display: none; flex-direction: column; gap: 4px; z-index: 2147480000; white-space: nowrap; backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,.5); pointer-events: auto; }
         .loop-menu.show { display: flex; }
         .loop-menu-btn { background: transparent; border: 0; color: #fff; padding: 6px 12px; text-align: left; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; }
@@ -1492,6 +1640,125 @@
         .av-list-movie:hover strong { color: #93c5fd; }
         .quick-pip-btn { min-width: 32px; font-size: 15px; line-height: 1; }
     `);
+    if (AV_PLATFORM.isMobile) {
+        GM_addStyle(`
+            .custom-control-panel { max-width: calc(100vw - 12px); }
+            .custom-control-panel .panel-collapse { width: ${PANEL_WIDTH - 2}px; max-width: calc(100vw - 14px); }
+            .custom-control-panel .panel-collapse-inner {
+                overflow-y: auto;
+                overscroll-behavior: contain;
+                -webkit-overflow-scrolling: touch;
+                max-height: calc(100vh - 96px);
+                max-height: calc(100dvh - 96px);
+            }
+            .custom-control-panel .panel-header { touch-action: none; }
+            .custom-control-panel input[type="text"],
+            .custom-control-panel input[type="number"],
+            html .custom-control-panel .av-login-panel input[type="text"],
+            html .custom-control-panel .av-login-panel input[type="password"] { font-size: 16px; }
+            .custom-control-panel button,
+            .custom-control-panel .panel-gear,
+            .custom-control-panel .panel-full-btn { min-height: 40px; }
+            .custom-control-panel .panel-gear { min-width: 40px; }
+            .custom-control-panel .av-audio-presets button,
+            .custom-control-panel .av-audio-actions button,
+            .custom-control-panel .av-audio-actions select { min-height: 40px; }
+            .custom-control-panel input[type="text"],
+            .custom-control-panel input[type="number"],
+            .custom-control-panel input[type="password"],
+            .custom-control-panel select { min-height: 40px; }
+            .custom-quick-controls { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
+            .quick-btn { min-width: 44px; height: 38px; font-size: 14px; }
+            .custom-quick-controls.quick-single { flex-wrap: nowrap !important; row-gap: 0; gap: 4px; padding: 6px 8px; border-radius: 22px; }
+            .custom-quick-controls.quick-single .quick-jump-group { flex-wrap: nowrap; }
+            .custom-quick-controls.quick-single .quick-btn { min-width: 44px; height: 40px; font-size: 14px; }
+            .custom-quick-controls.quick-single .quick-play-btn { min-width: 76px; margin: 0 2px; }
+            .custom-quick-controls.quick-single .quick-more-btn { min-width: 40px; }
+            .custom-quick-controls.quick-narrow-1 .quick-step-major { display: none !important; }
+            .custom-quick-controls.quick-narrow-2 .quick-group-right { display: none !important; }
+            .custom-quick-controls.quick-narrow-3 .quick-outer,
+            .custom-quick-controls.quick-narrow-3 .quick-divider { display: none !important; }
+            .custom-quick-controls.quick-docked { position: static !important; left: auto !important; top: auto !important; right: auto !important; bottom: auto !important; width: auto !important; min-width: 0 !important; max-width: 100% !important; transform: none !important; contain: inline-size; box-sizing: border-box; padding: 5px 6px; border-radius: 14px; justify-content: center; }
+            .custom-quick-controls.quick-docked .quick-btn { min-width: 42px; height: 40px; font-size: 13px; padding: 0 6px; border-radius: 10px; }
+            .custom-quick-controls.quick-docked .quick-play-btn { min-width: 72px; margin: 0 2px; border-radius: 14px; }
+            .custom-quick-controls.quick-docked .quick-more-btn { min-width: 38px; }
+            .custom-subtitle { font-size: 18px; bottom: 16%; max-width: 92%; }
+            .btn-group button.av-platform-btn { min-height: 40px; font-size: 13px; }
+            .av-info-section, .av-jable-meta { box-sizing: border-box; min-width: 0; max-width: 100%; }
+            .av-info-section *, .av-info-section *::before, .av-info-section *::after { box-sizing: border-box; }
+            .av-info-head { padding: 11px 12px; }
+            .av-info-body { padding: 12px; }
+            .av-hub-tabs { gap: 6px; padding-bottom: 2px; overflow-x: auto; scrollbar-width: none; }
+            .av-hub-tabs::-webkit-scrollbar { display: none; }
+            .av-hub-tab { flex: 0 0 auto; padding: 9px 12px; min-height: 40px; font-size: 13px; }
+            .av-stills-grid { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; max-height: 58vh; }
+            .av-review-list, .av-list-grid { max-height: 58vh; }
+            .av-list-head { flex-wrap: wrap; row-gap: 6px; padding: 10px 12px; }
+            .av-list-head > div:first-child { flex: 1 1 100% !important; }
+            .av-list-meta { margin-right: auto; }
+            .av-list-action { min-height: 40px; padding: 8px 12px; font-size: 13px; }
+            .av-list-movies { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+            .av-info-head, .av-info-body { padding-left: calc(12px + env(safe-area-inset-left, 0px)); padding-right: calc(12px + env(safe-area-inset-right, 0px)); }
+            .av-backup-window { left: 6px; right: 6px; top: 7%; width: auto; max-width: none; max-height: 84vh; max-height: 84dvh; padding: 10px; }
+            .av-backup-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .av-audio .av-audio-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .av-audio-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .av-audio input[type="range"] { height: 34px; }
+            .av-cockpit { padding: 16px 12px 28px; }
+            .av-cockpit-header { margin: -16px -12px 16px; padding: 14px 12px; gap: 10px; }
+            .av-range-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+            .av-range-tabs::-webkit-scrollbar { display: none; }
+            .av-cockpit-actions { width: 100%; margin-left: 0; }
+            .av-kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+            .av-kpi { padding: 13px 14px; }
+            .av-kpi-value { font-size: 24px; }
+            .av-cockpit-card { padding: 14px; }
+            .av-duo-grid { grid-template-columns: 1fr; gap: 12px; }
+            .av-persona-card { padding: 14px; }
+            .av-record-row { font-size: 12px; }
+            .social-badge { width: 40px; height: 40px; font-size: 16px; }
+            .lightbox-close { width: 40px; height: 40px; font-size: 16px; }
+            .subtitle-picker-close { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; }
+            .subtitle-picker-row { padding: 11px 9px; min-height: 40px; display: flex; align-items: center; }
+            .subtitle-picker { --ui-bg-opacity: .88; }
+            .av-fb-chip { min-height: 40px; padding: 7px 12px; }
+            .av-fb-chip.av-fb-hide { min-width: 40px; padding: 7px 0; justify-content: center; font-size: 15px; }
+            .quick-btn { min-height: 40px; }
+            .loop-menu { max-width: calc(100vw - 12px); max-height: 60dvh; overflow-y: auto; overscroll-behavior: contain; }
+            .loop-menu-btn { min-height: 40px; padding: 11px 14px; font-size: 13px; }
+            .subtitle-picker, .av-audio-win { left: 6px; right: 6px; width: auto; min-width: 0; max-width: none; max-height: 76vh; max-height: 76dvh; padding: 10px; }
+            .subtitle-picker-header { margin: -10px -10px 0; padding: 10px 10px 8px; top: -10px; }
+            .av-backup-close { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+            .av-audio-win .av-audio-actions button, .av-audio-win .av-audio-presets button, .av-audio-win .av-audio-device { min-height: 40px; }
+            .av-audio-win input[type="checkbox"], .av-audio-win input[type="radio"] { width: 20px; height: 20px; }
+            .av-audio-win select, .av-audio-win input[type="range"] { min-height: 40px; }
+            .av-backup-field { min-height: 40px; padding: 8px 10px; font-size: 13px; }
+            .av-backup-field input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 20px; }
+            .av-backup-line { flex-wrap: wrap; row-gap: 4px; margin: 8px 0; font-size: 13px; }
+            .av-backup-line input { min-height: 40px; font-size: 16px; }
+            .av-backup-line input[type="number"] { flex: 0 0 84px; }
+            .av-backup-actions button { min-height: 40px; }
+            .custom-control-panel .slider-group input[type="range"] { height: 34px; }
+            .custom-control-panel .av-text-row input[type="range"] { height: 34px; }
+            .custom-control-panel .av-check-row { min-height: 40px; padding: 5px 0; }
+            .custom-control-panel .av-text-row textarea { font-size: 16px; line-height: 1.5; min-height: 76px; padding: 8px 10px; }
+            .custom-control-panel button, .custom-control-panel select, .custom-control-panel .av-check-row,
+            .custom-quick-controls button, .custom-quick-controls .quick-btn,
+            .av-info-section button, .av-info-section a.av-list-action,
+            .av-backup-window button, .subtitle-picker button, .av-audio-win button,
+            .av-cockpit .av-btn, .av-cockpit .av-range-tab, .av-cockpit .av-icon-btn { touch-action: manipulation; }
+            .av-resume-toast { max-width: calc(100vw - 20px); padding: 9px 10px 9px 14px; gap: 8px; font-size: 12px; }
+            .av-resume-host { align-items: flex-end; padding: 0 8px; z-index: 2147483646; }
+            .av-resume-toast-text { white-space: normal; }
+            .av-resume-toast-btn { min-height: 40px; padding: 10px 14px; font-size: 13px; }
+            .av-resume-toast-close { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; padding: 0; }
+            @media (max-height: 480px) {
+                .custom-control-panel .panel-collapse-inner { max-height: calc(100dvh - 72px); }
+                .subtitle-picker, .av-audio-win { max-height: 88dvh; }
+                .custom-subtitle { bottom: 8%; font-size: 16px; }
+            }
+        `);
+    }
     function seek(seconds) {
         const video = state.video;
         if (!video) return;
@@ -1500,7 +1767,10 @@
     }
     const isPaused = () => !state.video || state.video.paused;
     function updatePlayPauseButton() {
-        if (state.playPauseBtn) state.playPauseBtn.textContent = isPaused() ? '▶ 播放' : '⏸ 暂停';
+        const button = state.playPauseBtn;
+        if (!button) return;
+        const text = isPaused() ? '▶ 播放' : '⏸ 暂停';
+        if (button.textContent !== text) button.textContent = text;
     }
     async function togglePlayPause() {
         const video = state.video;
@@ -1582,6 +1852,12 @@
             state.holdTimer = setTimeout(() => {
                 state.holdTimer = 0;
                 if (!state.video || state.video.paused) return;
+                if (event.pointerType === 'mouse') {
+                    try {
+                        container.setPointerCapture?.(event.pointerId);
+                    } catch (_) {
+                    }
+                }
                 state.holdingSpeed = true;
                 state.speedBeforeAccelerate = Number.isFinite(state.video.playbackRate) ? state.video.playbackRate : 1;
                 document.documentElement.dataset.avAccelerating = '1';
@@ -1595,8 +1871,19 @@
         }, { passive: true });
         container.addEventListener('pointerup', event => {
             if (event.pointerId === state.holdPointerId) cancelHold();
+            try {
+                container.releasePointerCapture?.(event.pointerId);
+            } catch (_) {
+            }
         });
         container.addEventListener('pointercancel', event => {
+            if (event.pointerId === state.holdPointerId) cancelHold();
+            try {
+                container.releasePointerCapture?.(event.pointerId);
+            } catch (_) {
+            }
+        });
+        container.addEventListener('pointerleave', event => {
             if (event.pointerId === state.holdPointerId) cancelHold();
         });
         container.addEventListener('click', event => {
@@ -1643,6 +1930,39 @@
         const divider = document.createElement('span');
         divider.className = 'quick-divider';
         return divider;
+    }
+    function setImportantStyle(node, map) {
+        if (!node?.style?.setProperty) return;
+        for (const prop of Object.keys(map)) {
+            const text = String(map[prop] ?? '');
+            if (node.style.getPropertyValue(prop) === text) continue;
+            node.style.setProperty(prop, text, 'important');
+        }
+    }
+    function buildSeekButton(seconds, direction, extraClass = '') {
+        const delta = direction === 'back' ? -seconds : seconds;
+        const button = createButton('', extraClass ? `quick-btn ${extraClass}` : 'quick-btn');
+        const glyph = Object.assign(document.createElement('span'), {
+            className: 'quick-btn-glyph',
+            textContent: direction === 'back' ? '⏪' : '⏩'
+        });
+        const text = Object.assign(document.createElement('span'), {
+            className: 'quick-btn-label',
+            textContent: formatSpan(seconds)
+        });
+        button.append(...(direction === 'back' ? [glyph, text] : [text, glyph]));
+        button.title = `${direction === 'back' ? '后退' : '前进'} ${seconds} 秒`;
+        button.addEventListener('click', () => {
+            seek(delta);
+            log(`${delta > 0 ? '⏩' : '⏪'} 跳转 ${Math.abs(delta)} 秒`);
+        });
+        return button;
+    }
+    function createQuickGroup(className) {
+        const group = document.createElement('div');
+        group.className = className ? `quick-jump-group ${className}` : 'quick-jump-group';
+        group.addEventListener('click', event => event.stopPropagation());
+        return group;
     }
     function createInputGroup(labelText, type, value, onInput, options = {}) {
         const group = document.createElement('div');
@@ -1692,13 +2012,30 @@
         state.uiLayer = layer;
         return layer;
     }
+    function viewportBox() {
+        const de = document.documentElement;
+        const innerW = window.innerWidth || 0;
+        const innerH = window.innerHeight || 0;
+        const layoutW = de?.clientWidth || 0;
+        const layoutH = de?.clientHeight || 0;
+        const pick = (inner, layout, fallback) => {
+            const values = [inner, layout].filter(v => Number.isFinite(v) && v > 0);
+            if (!values.length) return fallback;
+            return AV_PLATFORM.isMobile ? Math.min(...values) : inner || layout;
+        };
+        return {
+            w: Math.max(240, pick(innerW, layoutW, 360)),
+            h: Math.max(320, pick(innerH, layoutH, 640))
+        };
+    }
     function clampPanelPosition(panel = state.panel) {
         if (!panel) return;
+        const box = viewportBox();
         const width = panel.offsetWidth || PANEL_WIDTH;
-        const maxX = Math.max(0, window.innerWidth - width);
+        const maxX = Math.max(0, box.w - width);
         panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, 0, maxX)}px`;
         const height = panel.offsetHeight || 60;
-        const maxY = Math.max(0, window.innerHeight - height);
+        const maxY = Math.max(0, box.h - height);
         panel.style.top = `${clamp(panel.offsetTop || settings.panelY, 0, maxY)}px`;
     }
     function makeDraggable(element, handle, keys = { x: 'panelX', y: 'panelY' }, onEnd = null) {
@@ -1708,6 +2045,8 @@
         let startY = 0;
         let moved = false;
         let saveTimer = 0;
+        let suppressHandleClickUntil = 0;
+        const TOUCH_DRAG_THRESHOLD = 6;
 
 
         const flushPosition = () => {
@@ -1728,8 +2067,9 @@
                 return;
             }
             moved = true;
-            const maxX = Math.max(0, window.innerWidth - element.offsetWidth);
-            const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
+            const box = viewportBox();
+            const maxX = Math.max(0, box.w - element.offsetWidth);
+            const maxY = Math.max(0, box.h - element.offsetHeight);
             element.style.left = `${clamp(originX + event.clientX - startX, 0, maxX)}px`;
             element.style.top = `${clamp(originY + event.clientY - startY, 0, maxY)}px`;
             scheduleSave();
@@ -1760,34 +2100,52 @@
             document.addEventListener('mousemove', onMove, true);
             document.addEventListener('mouseup', onUp, true);
         });
+        element.addEventListener('click', event => {
+            if (performance.now() < suppressHandleClickUntil) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            }
+        }, true);
         handle.addEventListener('touchstart', event => {
             const touch = event.touches[0];
             if (!touch) return;
-            if (event.target.closest('.panel-gear')) return;
-            element.classList.add('panel-dragging');
             originX = element.offsetLeft;
             originY = element.offsetTop;
             startX = touch.clientX;
             startY = touch.clientY;
+            let armed = false;
             const onTouchMove = moveEvent => {
                 const point = moveEvent.touches[0];
                 if (!point) return;
+                const dx = point.clientX - startX;
+                const dy = point.clientY - startY;
+                if (!armed) {
+                    if (Math.hypot(dx, dy) < TOUCH_DRAG_THRESHOLD) return;
+                    armed = true;
+                    element.classList.add('panel-dragging');
+                }
                 moveEvent.preventDefault();
-                const maxX = Math.max(0, window.innerWidth - element.offsetWidth);
-                const maxY = Math.max(0, window.innerHeight - element.offsetHeight);
-                element.style.left = `${clamp(originX + point.clientX - startX, 0, maxX)}px`;
-                element.style.top = `${clamp(originY + point.clientY - startY, 0, maxY)}px`;
+                const box = viewportBox();
+                const maxX = Math.max(0, box.w - element.offsetWidth);
+                const maxY = Math.max(0, box.h - element.offsetHeight);
+                element.style.left = `${clamp(originX + dx, 0, maxX)}px`;
+                element.style.top = `${clamp(originY + dy, 0, maxY)}px`;
                 scheduleSave();
             };
             const onTouchEnd = () => {
                 document.removeEventListener('touchmove', onTouchMove);
                 document.removeEventListener('touchend', onTouchEnd);
-                flushPosition();
-                if (onEnd) onEnd();
+                document.removeEventListener('touchcancel', onTouchEnd);
+                if (armed) {
+                    suppressHandleClickUntil = performance.now() + 500;
+                    flushPosition();
+                    if (onEnd) onEnd();
+                }
                 element.classList.remove('panel-dragging');
             };
             document.addEventListener('touchmove', onTouchMove, { passive: false });
             document.addEventListener('touchend', onTouchEnd);
+            document.addEventListener('touchcancel', onTouchEnd);
         }, { passive: true });
     }
     function syncRangeFill(input) {
@@ -1803,11 +2161,13 @@
         for (const input of root.querySelectorAll('input[type="range"]')) syncRangeFill(input);
     }
     function applyUiStyles() {
+        const mobileSolid = AV_PLATFORM.isMobile ? Math.max(0.92, Number(settings.opacity) || 0) : null;
+        const mobileHoverSolid = AV_PLATFORM.isMobile ? Math.max(0.97, Number(settings.hoverOpacity) || 0) : null;
         for (const target of [state.panel, state.subtitlePicker, state.filterBar, state.audioWin]) {
             if (!target) continue;
-            target.style.setProperty('--ui-bg-opacity', settings.opacity);
+            target.style.setProperty('--ui-bg-opacity', mobileSolid === null ? settings.opacity : mobileSolid);
             target.style.setProperty('--ui-blur', `${settings.blur}px`);
-            target.style.setProperty('--ui-hover-opacity', settings.hoverOpacity);
+            target.style.setProperty('--ui-hover-opacity', mobileHoverSolid === null ? settings.hoverOpacity : mobileHoverSolid);
             target.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
         }
     }
@@ -1942,7 +2302,29 @@
         btnBackup.style.gridColumn = 'span 2';
         btnBackup.title = '把收藏的名称、缩略图、番号、女优、类型、发行商批量打包下载到本地';
         btnBackup.addEventListener('click', openFavoriteBackup);
-        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, openCockpit, btnClearLib, btnSave, btnBackup);
+        const btnPlatform = createButton('');
+        btnPlatform.classList.add('av-platform-btn');
+        btnPlatform.style.gridColumn = '1 / -1';
+        const platformLabel = () => {
+            const modeName = AV_PLATFORM.mode === 'mobile' ? '移动端' : '桌面端';
+            return AV_PLATFORM.forced === 'auto' ? `识别：${modeName}` : `强制：${modeName}`;
+        };
+        btnPlatform.textContent = platformLabel();
+        btnPlatform.title = '点击切换：自动识别 → 强制移动端 → 强制桌面端（切换后自动刷新页面）';
+        btnPlatform.addEventListener('click', () => {
+            const next = AV_PLATFORM.forced === 'auto' ? 'mobile' : AV_PLATFORM.forced === 'mobile' ? 'desktop' : 'auto';
+            const nextName = next === 'auto' ? '自动识别' : next === 'mobile' ? '强制移动端' : '强制桌面端';
+            try {
+                if (next === 'auto') localStorage.removeItem(PLATFORM_MODE_KEY);
+                else localStorage.setItem(PLATFORM_MODE_KEY, next);
+            } catch (_) {
+                log('⚠️ 当前环境无法写入本地存储，平台档位未保存');
+                return;
+            }
+            log(`🔄 平台档位已切换为「${nextName}」，正在刷新…`);
+            location.reload();
+        });
+        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, openCockpit, btnClearLib, btnPlatform, btnSave, btnBackup);
         return actionRow;
     }
     function buildPanelSliderRow() {
@@ -2023,10 +2405,17 @@
         collapsible.appendChild(collapsibleInner);
         if (settings.isMinimized) panel.classList.add('panel-collapsed');
         const layoutPanel = () => {
-            const anchor = clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60));
+            const box = viewportBox();
+            const panelWidth = panel.offsetWidth || PANEL_WIDTH;
+            const maxLeft = Math.max(0, box.w - panelWidth);
+            const currentLeft = Number.isFinite(panel.offsetLeft) ? panel.offsetLeft : Number(settings.panelX) || 0;
+            const left = clamp(currentLeft, 0, maxLeft);
+            panel.style.left = `${left}px`;
+            settings.panelX = left;
+            const anchor = clamp(settings.panelY, 0, Math.max(0, box.h - 60));
             const headerHeight = header.offsetHeight || 34;
             const contentHeight = settings.isMinimized ? 0 : collapsibleInner.scrollHeight;
-            const maxTop = Math.max(0, window.innerHeight - (headerHeight + contentHeight) - 4);
+            const maxTop = Math.max(0, box.h - (headerHeight + contentHeight) - 4);
             panel.style.bottom = 'auto';
             panel.style.top = `${clamp(anchor, 0, maxTop)}px`;
         };
@@ -2061,6 +2450,10 @@
         makeDraggable(panel, header, { x: 'panelX', y: 'panelY' }, persistAnchor);
         clampPanelPosition(panel);
         layoutPanel();
+        if (AV_PLATFORM.isMobile) {
+            window.addEventListener('resize', clampMobileInjectedWidth, { passive: true });
+            window.addEventListener('orientationchange', clampMobileInjectedWidth, { passive: true });
+        }
         if (typeof ResizeObserver === 'function') {
             let layoutFrame = 0;
             state.panelLayoutObserver = new ResizeObserver(() => {
@@ -2074,7 +2467,8 @@
             pageLifecycle.push(() => state.panelLayoutObserver?.disconnect());
         }
         window.addEventListener('resize', () => {
-            panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
+            const box = viewportBox();
+            panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, box.w - PANEL_WIDTH))}px`;
             layoutPanel();
         });
         panel.addEventListener('input', event => {
@@ -2082,10 +2476,10 @@
             if (target && target.type === 'range') syncRangeFill(target);
         });
         syncRangeFills(panel);
-        log('▶️ 系统初始化完成');
+        log(`▶️ 系统初始化完成（${AV_PLATFORM.mode === 'mobile' ? '移动端' : '桌面端'}档位 · ${AV_PLATFORM.forced === 'auto' ? `自动识别 评分${AV_PLATFORM.score}` : '手动强制'}）`);
         autoLogin();
     }
-    const isLoopMenuOpen = () => Boolean(state.loopMenu?.classList.contains('show'));
+    const isLoopMenuOpen = () => openQuickMenus().length > 0;
     let quickMetricsVideo = null;
     let quickMetricsAt = 0;
     let quickMetricsValue = false;
@@ -2095,6 +2489,21 @@
     let quickClickHold = false;
     let quickClickAt = 0;
     const QUICK_HOVER_MARGIN = 4;
+    let quickRectEpoch = 0;
+    const quickRectCache = new WeakMap();
+    const QUICK_RECT_TTL = 120;
+    function invalidateQuickRects() {
+        quickRectEpoch += 1;
+    }
+    function cachedQuickRect(node) {
+        if (!node?.isConnected) return null;
+        const now = Date.now();
+        const hit = quickRectCache.get(node);
+        if (hit && hit.epoch === quickRectEpoch && now - hit.at < QUICK_RECT_TTL) return hit.rect;
+        const rect = node.getBoundingClientRect?.() || null;
+        quickRectCache.set(node, { epoch: quickRectEpoch, at: now, rect });
+        return rect;
+    }
     function quickMetricsReady(video) {
         const now = Date.now();
         if (video !== quickMetricsVideo || now - quickMetricsAt > 400) {
@@ -2113,6 +2522,7 @@
     function applyQuickControlsHide() {
         const quick = state.quick;
         if (!quick || !quick.isConnected) return;
+        if (quick.classList.contains('quick-docked')) return;
         if (quickShouldStayOpen()) return;
         quickClickHold = false;
         quick.classList.remove('quick-visible');
@@ -2136,7 +2546,7 @@
     }
     function quickBoxAtPoint(node, x, y, margin = 0) {
         if (!node?.isConnected || !Number.isFinite(x) || !Number.isFinite(y)) return false;
-        const box = node.getBoundingClientRect?.();
+        const box = cachedQuickRect(node);
         if (!box || box.width <= 0 || box.height <= 0) return false;
         return x >= box.left - margin && x <= box.right + margin && y >= box.top - margin && y <= box.bottom + margin;
     }
@@ -2163,10 +2573,11 @@
         if (!quick?.isConnected) return 'none';
         if (quickPointerOnBar()) return 'cancel';
         if (isLoopMenuOpen()) return 'none';
-        // Pausing no longer pins the bar: it leaves with the pointer and it still idles out
-        // after QUICK_HIDE_DELAY when the pointer stays in the player without touching it.
-        // The pointer has already left the bar here. A bar the user clicked must hide as
-        // soon as the pointer moves off it, even though the clicked button keeps focus.
+        if (AV_PLATFORM.isMobile) {
+            if (quickBarHover || quick.contains(document.activeElement)) return 'cancel';
+            if (!quick.classList.contains('quick-visible')) return 'none';
+            return QUICK_HIDE_DELAY;
+        }
         if (quickClickHold && Date.now() - quickClickAt < 15000) return 'now';
         if (!quickPointerInsidePlayer()) return 'now';
         if (quickBarHover) return 'cancel';
@@ -2187,10 +2598,13 @@
     function paintQuickVisibility(visible) {
         const quick = state.quick;
         if (!quick?.style?.setProperty) return;
-        quick.style.setProperty('opacity', visible ? '1' : '0', 'important');
-        quick.style.setProperty('visibility', visible ? 'visible' : 'hidden', 'important');
-        quick.style.setProperty('pointer-events', visible ? 'auto' : 'none', 'important');
-        quick.style.setProperty('transition', 'none', 'important');
+        if (quick.classList.contains('quick-docked')) return;
+        setImportantStyle(quick, {
+            opacity: visible ? '1' : '0',
+            visibility: visible ? 'visible' : 'hidden',
+            'pointer-events': visible ? 'auto' : 'none',
+            transition: 'none'
+        });
     }
     function trackQuickPointer(event) {
         quickPointerX = event.clientX;
@@ -2201,30 +2615,35 @@
             return;
         }
         quickBarHover = false;
-        // Clicking a quick-bar button leaves DOM focus on it. Keyboard focus keeps the bar
-        // open, but a pointer that moved off the bar must release it so the bar can hide.
         releaseQuickFocus();
         reconcileQuickControls();
     }
-    function menuContains(target) {
-        const menu = state.loopMenu;
-        return Boolean(menu?.isConnected && menu.classList.contains('show') && target && menu.contains(target));
+    function openQuickMenus() {
+        return [state.loopMenu, state.moreMenu].filter(menu => menu?.isConnected && menu.classList.contains('show'));
     }
-    function quickBarButtonAtPoint(x, y) {
+    function menuContains(target) {
+        if (!target) return false;
+        return openQuickMenus().some(menu => menu.contains(target));
+    }
+    function quickBarButtonAtPoint(x, y, target) {
         const quick = state.quick;
         if (!quick?.isConnected || !quick.classList.contains('quick-visible')) return null;
-        const menu = state.loopMenu;
-        if (menu?.classList.contains('show')) {
-            const menuHit = quickButtonIn(menu, x, y);
+        for (const menu of openQuickMenus()) {
+            const menuHit = quickButtonIn(menu, x, y, target);
             if (menuHit) return menuHit;
         }
-        return quickButtonIn(quick, x, y);
+        return quickButtonIn(quick, x, y, target);
     }
-    function quickButtonIn(root, x, y) {
+    function quickButtonIn(root, x, y, target) {
         if (!root?.isConnected) return null;
+        const direct = target?.closest?.('.quick-btn, .loop-menu-btn');
+        if (direct && root.contains(direct)) return direct;
+        const rootRect = cachedQuickRect(root);
+        if (!rootRect || rootRect.width <= 0 || rootRect.height <= 0) return null;
+        if (x < rootRect.left || x > rootRect.right || y < rootRect.top || y > rootRect.bottom) return null;
         for (const button of root.querySelectorAll('.quick-btn, .loop-menu-btn')) {
-            const rect = button.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) continue;
+            const rect = cachedQuickRect(button);
+            if (!rect || rect.width <= 0 || rect.height <= 0) continue;
             if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return button;
         }
         return null;
@@ -2234,7 +2653,7 @@
         if (!quick?.isConnected) return;
         if (event.target === quick || quick.contains(event.target) || menuContains(event.target)) return;
         if (event.target.closest && event.target.closest('.av-analytics-page')) return;
-        const button = quickBarButtonAtPoint(event.clientX, event.clientY);
+        const button = quickBarButtonAtPoint(event.clientX, event.clientY, event.target);
         if (!button) return;
         event.preventDefault();
         event.stopPropagation();
@@ -2261,7 +2680,8 @@
     }
     function showQuickControls() {
         const video = state.video;
-        if (!video || !quickMetricsReady(video)) return;        if (state.quick && state.quick.isConnected && !quickControlsAlive()) {
+        if (!video || !quickMetricsReady(video)) return;
+        if (state.quick && state.quick.isConnected && !quickControlsAlive()) {
             const container = playerContainer(video);
             if (container) bindPlayer(video, container, true);
         }
@@ -2274,6 +2694,7 @@
     function hideQuickControls() {
         const quick = state.quick;
         if (!quick || isLoopMenuOpen()) return;
+        if (quick.classList.contains('quick-docked')) return;
         clearTimeout(state.quickHideTimer);
         quick.classList.remove('quick-visible');
         paintQuickVisibility(false);
@@ -2315,9 +2736,7 @@
         return quickPortalNode;
     }
     function quickPortalSync() {
-        try {
-            fitQuickControls();
-        } catch (_) {}
+        queueQuickFit();
     }
     function attachQuickElement(node, host) {
         if (!node || !host) return false;
@@ -2326,31 +2745,156 @@
     }
     function pinQuickElement(node, host, x, y, transform) {
         if (!attachQuickElement(node, host)) return;
-        node.style.setProperty('position', 'fixed', 'important');
-        node.style.setProperty('left', `${Math.round(x)}px`, 'important');
-        node.style.setProperty('top', `${Math.round(y)}px`, 'important');
-        node.style.setProperty('bottom', 'auto', 'important');
-        node.style.setProperty('right', 'auto', 'important');
-        node.style.setProperty('margin', '0', 'important');
-        node.style.setProperty('transform', transform, 'important');
+        setImportantStyle(node, {
+            position: 'fixed',
+            left: `${Math.round(x)}px`,
+            top: `${Math.round(y)}px`,
+            bottom: 'auto',
+            right: 'auto',
+            margin: '0',
+            transform
+        });
     }
     function freeQuickControls() {
         const quick = state.quick;
-        const portal = quickPortal();
-        if (!quick?.isConnected || !portal) return;
-        attachQuickElement(quick, portal);
-        if (state.loopMenu?.isConnected) attachQuickElement(state.loopMenu, portal);
-        quickPortalSync();
+        if (!quick?.isConnected) return;
+        fitQuickControls();
     }
     function quickBarCenterY(box) {
         return box.bottom - QUICK_BOTTOM_OFFSET;
     }
+    function quickDockParent() {
+        if (!AV_PLATFORM.isMobile) return null;
+        if (quickFullscreenRoot()) return null;
+        const video = state.video;
+        const container = state.container?.isConnected ? state.container : video ? playerContainer(video) : null;
+        if (!container?.isConnected) return null;
+        if (container.closest('.av-analytics-page')) return null;
+        let node = container;
+        for (let depth = 0; depth < 5; depth += 1) {
+            const parent = node.parentElement;
+            if (!parent || parent === document.body || parent === document.documentElement) return null;
+            if (typeof parent.matches !== 'function') return null;
+            if (!parent.matches(QUICK_DOCK_WRAPPER)) return { host: parent, after: node };
+            node = parent;
+        }
+        const host = node.parentElement;
+        if (!host || host === document.body || host === document.documentElement) return null;
+        return { host, after: node };
+    }
+    function releaseQuickDock() {
+        const quick = state.quick;
+        if (!quick?.classList.contains('quick-docked')) return;
+        quick.classList.remove('quick-docked');
+        quick.classList.add('quick-visible');
+        setImportantStyle(quick, {
+            position: '',
+            left: '',
+            top: '',
+            right: '',
+            bottom: '',
+            margin: '',
+            transform: '',
+            'max-width': '',
+            'min-width': '',
+            width: '',
+            height: '',
+            'min-height': '',
+            contain: '',
+            'box-sizing': '',
+            'z-index': '',
+            opacity: '',
+            visibility: '',
+            'pointer-events': ''
+        });
+        paintQuickVisibility(true);
+        showQuickControls();
+    }
+    function quickContentWidth(quick) {
+        if (!quick) return 0;
+        let total = 0;
+        let count = 0;
+        for (const child of quick.children) {
+            const box = child.getBoundingClientRect?.();
+            if (!box || box.width <= 0) continue;
+            total += Math.max(Math.round(box.width), child.scrollWidth || 0);
+            count += 1;
+        }
+        let gap = 0;
+        let padX = 0;
+        try {
+            const style = getComputedStyle(quick);
+            gap = Number.parseFloat(style.columnGap) || 0;
+            padX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+        } catch (_) {
+        }
+        const composed = Math.ceil(total + gap * Math.max(0, count - 1) + padX + 2);
+        return Math.max(composed, quick.scrollWidth || 0);
+    }
+    function autoNarrowQuick(quick, measure) {
+        if (!quick) return;
+        quick.classList.add('quick-single');
+        quick.classList.remove('quick-narrow-1', 'quick-narrow-2', 'quick-narrow-3');
+        for (const level of ['quick-narrow-1', 'quick-narrow-2', 'quick-narrow-3']) {
+            if (measure() <= quick.clientWidth) break;
+            quick.classList.add(level);
+        }
+    }
+    function dockQuickControls(target) {
+        const quick = state.quick;
+        if (!quick || !target?.host?.isConnected || !target.after?.isConnected) return false;
+        quick.classList.add('quick-docked', 'quick-visible');
+        quick.classList.remove('quick-compact');
+        if (state.loopMenu?.isConnected) attachQuickElement(state.loopMenu, quickPortal());
+        if (state.moreMenu?.isConnected) attachQuickElement(state.moreMenu, quickPortal());
+        const box = viewportBox();
+        const viewW = Math.max(160, Math.round(box.w));
+        const hostRect = target.host.getBoundingClientRect();
+        const hostW = Math.round(hostRect.width) || viewW;
+        const dockWidth = Math.max(160, Math.min(hostW, viewW) - 16);
+        if (quick.parentNode !== target.host || quick.previousElementSibling !== target.after) {
+            target.host.insertBefore(quick, target.after.nextSibling);
+        }
+        setImportantStyle(quick, {
+            position: 'static',
+            left: 'auto',
+            top: 'auto',
+            right: 'auto',
+            bottom: 'auto',
+            margin: '8px auto 0',
+            transform: 'none',
+            width: `${dockWidth}px`,
+            height: 'auto',
+            'min-height': '0',
+            'min-width': '0',
+            'max-width': `${dockWidth}px`,
+            contain: 'inline-size',
+            'box-sizing': 'border-box',
+            'z-index': 'auto',
+            transition: 'none',
+            opacity: '1',
+            visibility: 'visible',
+            'pointer-events': 'auto'
+        });
+        invalidateQuickRects();
+        autoNarrowQuick(quick, () => quickContentWidth(quick));
+        state.quickScale = '1';
+        setImportantStyle(quick, { '--quick-scale': '1' });
+        fitLoopMenu();
+        return true;
+    }
     function fitQuickControls() {
         const quick = state.quick;
+        if (!quick?.isConnected) return;
+        invalidateQuickRects();
+        const dockTarget = quickDockParent();
+        if (dockTarget && dockQuickControls(dockTarget)) return;
         const portal = quickPortal();
-        if (!quick?.isConnected || !portal) return;
+        if (!portal) return;
+        releaseQuickDock();
         attachQuickElement(quick, portal);
         if (state.loopMenu?.isConnected) attachQuickElement(state.loopMenu, portal);
+        if (state.moreMenu?.isConnected) attachQuickElement(state.moreMenu, portal);
         const player = quickAnchorPlayer();
         if (!player) return;
         const box = player.getBoundingClientRect?.();
@@ -2362,40 +2906,74 @@
             quickBarCenterY(box),
             'translate(-50%, -50%) scale(var(--quick-scale, 1))'
         );
-        quick.style.setProperty('width', 'max-content', 'important');
-        quick.style.setProperty('height', 'auto', 'important');
-        quick.style.setProperty('min-height', '0', 'important');
-        quick.style.setProperty('max-width', `${Math.max(120, Math.round(box.width) - 16)}px`, 'important');
-        quick.style.setProperty('box-sizing', 'border-box', 'important');
-        quick.style.setProperty('z-index', '2147483647', 'important');
+        const mobileWrap = AV_PLATFORM.isMobile;
+        const barLimit = mobileWrap
+            ? Math.max(200, Math.round(Math.min(window.innerWidth || 360, screen.width || 360)) - 12)
+            : Math.max(120, Math.round(box.width) - 16);
         const quickVisible = quick.classList.contains('quick-visible');
-        quick.style.setProperty('transition', 'none', 'important');
-        quick.style.setProperty('opacity', quickVisible ? '1' : '0', 'important');
-        quick.style.setProperty('pointer-events', quickVisible ? 'auto' : 'none', 'important');
-        quick.style.setProperty('visibility', quickVisible ? 'visible' : 'hidden', 'important');
+        setImportantStyle(quick, {
+            width: 'max-content',
+            height: 'auto',
+            'min-height': '0',
+            'max-width': `${barLimit}px`,
+            'box-sizing': 'border-box',
+            'z-index': '2147483647',
+            transition: 'none',
+            opacity: quickVisible ? '1' : '0',
+            'pointer-events': quickVisible ? 'auto' : 'none',
+            visibility: quickVisible ? 'visible' : 'hidden'
+        });
         quick.classList.remove('quick-compact');
-        const available = Math.max(120, box.width - 16);
-        const needed = quick.scrollWidth;
         let scale = '1';
-        if (needed > available) {
-            quick.classList.add('quick-compact');
-            const stillTooWide = quick.scrollWidth;
-            scale = stillTooWide > available && available > 120 ? (available / stillTooWide).toFixed(3) : '1';
+        if (mobileWrap) {
+            autoNarrowQuick(quick, () => quickContentWidth(quick));
+            state.quickScale = scale;
+            setImportantStyle(quick, { '--quick-scale': scale });
+        } else {
+            quick.classList.remove('quick-single', 'quick-narrow-1', 'quick-narrow-2', 'quick-narrow-3');
+            const available = Math.max(120, box.width - 16);
+            if (quick.scrollWidth > available) {
+                quick.classList.add('quick-compact');
+                const stillTooWide = quick.scrollWidth;
+                if (stillTooWide > available && available > 120) scale = (available / stillTooWide).toFixed(3);
+            }
+            state.quickScale = scale;
+            setImportantStyle(quick, { '--quick-scale': scale });
         }
-        state.quickScale = scale;
-        quick.style.setProperty('--quick-scale', scale);
+        clampQuickIntoViewport(box);
         fitLoopMenu();
     }
-    function fitLoopMenu() {
-        const menu = state.loopMenu;
+    function clampQuickIntoViewport(box) {
+        const quick = state.quick;
+        if (!quick || !AV_PLATFORM.isMobile) return;
+        const rect = quick.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return;
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (vw <= 0 || vh <= 0) return;
+        const padX = 6;
+        const padY = 8;
+        const halfW = rect.width / 2;
+        const halfH = rect.height / 2;
+        const desiredX = box.left + box.width / 2;
+        const desiredY = quickBarCenterY(box);
+        const minX = halfW + padX;
+        const maxX = vw - halfW - padX;
+        const minY = halfH + padY;
+        const maxY = vh - halfH - padY;
+        const x = maxX > minX ? Math.min(Math.max(desiredX, minX), maxX) : vw / 2;
+        const y = maxY > minY ? Math.min(Math.max(desiredY, minY), maxY) : vh / 2;
+        setImportantStyle(quick, { left: `${Math.round(x)}px`, top: `${Math.round(y)}px` });
+    }
+    function fitQuickMenu(menu, anchorButton) {
         const quick = state.quick;
         const portal = quickPortal();
         if (!menu?.isConnected || !quick?.isConnected || !portal) return;
+        invalidateQuickRects();
         attachQuickElement(menu, portal);
         const quickBox = quick.getBoundingClientRect();
         if (quickBox.width <= 0 || quickBox.height <= 0) return;
-        const button = state.loopBtn;
-        const buttonBox = button?.isConnected ? button.getBoundingClientRect() : null;
+        const buttonBox = anchorButton?.isConnected ? anchorButton.getBoundingClientRect() : null;
         const center = buttonBox && buttonBox.width > 0
             ? buttonBox.left + buttonBox.width / 2
             : quickBox.left + quickBox.width / 2;
@@ -2407,8 +2985,23 @@
             quickBox.top - 10 * scale,
             'translate(-50%, -100%)'
         );
-        menu.style.setProperty('z-index', '2147483647', 'important');
-        menu.style.setProperty('pointer-events', 'auto', 'important');
+        const box = viewportBox();
+        const measure = () => menu.getBoundingClientRect();
+        let menuBox = measure();
+        const half = menuBox.width / 2;
+        const clampedCenter = Math.min(Math.max(center, 6 + half), Math.max(6 + half, box.w - 6 - half));
+        if (Math.abs(clampedCenter - center) > 0.5) {
+            pinQuickElement(menu, portal, clampedCenter, quickBox.top - 10 * scale, 'translate(-50%, -100%)');
+            menuBox = measure();
+        }
+        if (menuBox.top < 6) {
+            pinQuickElement(menu, portal, clampedCenter, quickBox.bottom + 10 * scale, 'translate(-50%, 0)');
+        }
+        setImportantStyle(menu, { 'z-index': '2147483647', 'pointer-events': 'auto' });
+    }
+    function fitLoopMenu() {
+        if (state.loopMenu?.classList.contains('show')) fitQuickMenu(state.loopMenu, state.loopBtn);
+        if (state.moreMenu?.classList.contains('show')) fitQuickMenu(state.moreMenu, state.moreBtn);
     }
     function quickControlsAlive() {
         const quick = state.quick;
@@ -2421,6 +3014,13 @@
     let quickResizeHandler = null;
     let quickFullscreenHandler = null;
     let quickScrollFrame = 0;
+    function queueQuickFit() {
+        if (quickScrollFrame) return;
+        quickScrollFrame = requestAnimationFrame(() => {
+            quickScrollFrame = 0;
+            fitQuickControls();
+        });
+    }
     function bindQuickHost(container) {
         bindQuickPointer();
         bindQuickPlayback(state.video);
@@ -2432,6 +3032,20 @@
             reconcileQuickControls();
         });
         container.addEventListener('click', showQuickControls);
+        if (AV_PLATFORM.isMobile) {
+            const onTouchShow = event => {
+                const point = event.touches?.[0] || event.changedTouches?.[0] || event;
+                if (Number.isFinite(point?.clientX) && Number.isFinite(point?.clientY)) {
+                    quickPointerX = point.clientX;
+                    quickPointerY = point.clientY;
+                }
+                if (quickPointerOnBarEvent(event)) return;
+                quickBarHover = false;
+                showQuickControls();
+            };
+            container.addEventListener('touchstart', onTouchShow, { passive: true });
+            container.addEventListener('pointerdown', onTouchShow, { passive: true });
+        }
     }
     const quickPlaybackBound = new WeakSet();
     function bindQuickPlayback(video) {
@@ -2449,13 +3063,14 @@
     function bindQuickPointer() {
         if (quickPointerBound) return;
         quickPointerBound = true;
-        document.addEventListener('mousemove', trackQuickPointer, { passive: true });
-        document.addEventListener('mousedown', forwardQuickBarHit, true);
-        document.addEventListener('pointerdown', forwardQuickBarHit, true);
+        if (typeof window.PointerEvent === 'function') {
+            document.addEventListener('pointermove', trackQuickPointer, { passive: true });
+            document.addEventListener('pointerdown', forwardQuickBarHit, true);
+        } else {
+            document.addEventListener('mousemove', trackQuickPointer, { passive: true });
+            document.addEventListener('mousedown', forwardQuickBarHit, true);
+        }
         document.addEventListener('click', forwardQuickBarHit, true);
-        // When the pointer leaves the page without firing mouseleave on the player
-        // (first entry, tab switch, pointer over the bar), the cached coordinates and
-        // the hover flag must not keep the bar visible forever.
         const forgetQuickPointer = () => {
             quickPointerX = Number.NaN;
             quickPointerY = Number.NaN;
@@ -2485,7 +3100,7 @@
             cancelQuickControlsHide();
             quick.classList.add('quick-visible');
             paintQuickVisibility(true);
-            fitQuickControls();
+            queueQuickFit();
         });
         const bindQuickLeave = () => {
             quick.addEventListener('mouseleave', () => {
@@ -2493,13 +3108,40 @@
                 releaseQuickFocus();
                 reconcileQuickControls();
             });
-            state.loopMenu?.addEventListener('mouseleave', () => {
-                quickBarHover = false;
-                releaseQuickFocus();
-                reconcileQuickControls();
-            });
+            for (const menu of [state.loopMenu, state.moreMenu]) {
+                menu?.addEventListener('mouseleave', () => {
+                    quickBarHover = false;
+                    releaseQuickFocus();
+                    reconcileQuickControls();
+                });
+            }
         };
         bindQuickLeave();
+        if (AV_PLATFORM.isMobile) {
+            const holdBar = event => {
+                const point = event.touches?.[0] || event.changedTouches?.[0] || event;
+                if (Number.isFinite(point?.clientX) && Number.isFinite(point?.clientY)) {
+                    quickPointerX = point.clientX;
+                    quickPointerY = point.clientY;
+                }
+                quickBarHover = true;
+                cancelQuickControlsHide();
+                quick.classList.add('quick-visible');
+                paintQuickVisibility(true);
+            };
+            const releaseBar = () => {
+                quickBarHover = false;
+                quickClickHold = false;
+                reconcileQuickControls();
+            };
+            for (const target of [quick, state.loopMenu, state.moreMenu].filter(Boolean)) {
+                target.addEventListener('pointerdown', holdBar, { passive: true });
+                target.addEventListener('touchstart', holdBar, { passive: true });
+                target.addEventListener('pointerup', releaseBar, { passive: true });
+                target.addEventListener('touchend', releaseBar, { passive: true });
+                target.addEventListener('pointercancel', releaseBar, { passive: true });
+            }
+        }
         if (!quickGlobalBound) {
             quickGlobalBound = true;
             const onQuickPress = event => {
@@ -2520,15 +3162,11 @@
                 host.addEventListener('mouseleave', clearQuickHold, { passive: true });
             }
             quickResizeHandler = throttle(fitQuickControls, MUTATION_THROTTLE);
-            quickFullscreenHandler = () => setTimeout(fitQuickControls, 120);
-            // A capture listener on the window sees scrolls from every ancestor container (scroll
-            // does not bubble). One refit per frame keeps the bar anchored to the moving player.
-            const queueQuickFit = () => {
-                if (quickScrollFrame) return;
-                quickScrollFrame = requestAnimationFrame(() => {
-                    quickScrollFrame = 0;
-                    fitQuickControls();
-                });
+            quickFullscreenHandler = () => {
+                setTimeout(fitQuickControls, 120);
+                if (AV_PLATFORM.isMobile) {
+                    setTimeout(showQuickControls, 260);
+                }
             };
             window.addEventListener('resize', quickResizeHandler, { passive: true });
             window.addEventListener('scroll', queueQuickFit, PASSIVE_CAPTURE);
@@ -2566,14 +3204,23 @@
     }
     function toggleLoopMenu() {
         if (!state.loopMenu) return;
+        if (state.moreMenu) state.moreMenu.classList.remove('show');
         state.loopMenu.classList.toggle('show');
         if (state.loopMenu.classList.contains('show')) fitLoopMenu();
+    }
+    let quickMenuOutsideBound = false;
+    function bindQuickMenuOutsideClick() {
+        if (quickMenuOutsideBound) return;
+        quickMenuOutsideBound = true;
+        document.addEventListener('click', event => {
+            const target = event.target;
+            if (!state.loopBtn?.contains(target) && !state.loopMenu?.contains(target)) state.loopMenu?.classList.remove('show');
+            if (!state.moreBtn?.contains(target) && !state.moreMenu?.contains(target)) state.moreMenu?.classList.remove('show');
+        });
     }
     function watchQuickControls() {
         if (state.quickWatchTimer) return;
         state.quickWatchTimer = trackInterval(setInterval(() => {
-
-
             if (isPageHidden()) return;
             if (!state.bound || isAnalyticsRoute()) return;
             if (state.video?.isConnected && quickControlsAlive()) return;
@@ -2601,42 +3248,32 @@
         const quick = document.createElement('div');
         quick.className = 'custom-quick-controls';
         state.quick = quick;
-        const group = document.createElement('div');
-        group.className = 'quick-jump-group';
-        group.addEventListener('click', event => event.stopPropagation());
-        const appendJumpButton = (seconds, direction) => {
-            const delta = direction === 'back' ? -seconds : seconds;
-            const label = seconds >= 60 ? `${seconds / 60}m` : `${seconds}s`;
-            const button = createButton('', 'quick-btn');
-            const glyph = Object.assign(document.createElement('span'), {
-                className: 'quick-btn-glyph',
-                textContent: direction === 'back' ? '⏪' : '⏩'
-            });
-            const text = Object.assign(document.createElement('span'), {
-                className: 'quick-btn-label',
-                textContent: label
-            });
-            button.append(...(direction === 'back' ? [glyph, text] : [text, glyph]));
-            button.title = `${direction === 'back' ? '后退' : '前进'} ${seconds} 秒`;
-            button.addEventListener('click', () => {
-                seek(delta);
-                log(`${delta > 0 ? '⏩' : '⏪'} 跳转 ${Math.abs(delta)} 秒`);
-            });
-            group.appendChild(button);
-        };
-        JUMP_PRESETS.back.forEach(seconds => appendJumpButton(seconds, 'back'));
-        group.appendChild(createDivider());
+        const leftGroup = createQuickGroup('quick-group-left');
+        const midGroup = createQuickGroup('quick-group-mid');
+        const rightGroup = createQuickGroup('quick-group-right');
+        const outerBack = document.createElement('span');
+        outerBack.className = 'quick-outer quick-outer-back';
+        const outerForward = document.createElement('span');
+        outerForward.className = 'quick-outer quick-outer-forward';
+        const coreStep = JUMP_PRESETS.back.includes(10) ? 10 : JUMP_PRESETS.back[JUMP_PRESETS.back.length - 1];
+        const outerBackSteps = JUMP_PRESETS.back.filter(seconds => seconds !== coreStep);
+        const outerForwardSteps = JUMP_PRESETS.forward.filter(seconds => seconds !== coreStep);
+        for (const seconds of outerBackSteps) outerBack.appendChild(buildSeekButton(seconds, 'back', seconds > 60 ? 'quick-step-major' : 'quick-step-minor'));
+        for (const seconds of outerForwardSteps) outerForward.appendChild(buildSeekButton(seconds, 'forward', seconds > 60 ? 'quick-step-major' : 'quick-step-minor'));
+        midGroup.appendChild(outerBack);
+        midGroup.appendChild(createDivider());
+        midGroup.appendChild(buildSeekButton(coreStep, 'back'));
         state.playPauseBtn = createButton('▶ 播放', 'quick-btn quick-play-btn');
         state.playPauseBtn.addEventListener('click', togglePlayPause);
-        group.appendChild(state.playPauseBtn);
-        group.appendChild(createDivider());
-        JUMP_PRESETS.forward.forEach(seconds => appendJumpButton(seconds, 'forward'));
-        group.appendChild(createDivider());
+        midGroup.appendChild(state.playPauseBtn);
+        midGroup.appendChild(buildSeekButton(coreStep, 'forward'));
+        midGroup.appendChild(createDivider());
+        midGroup.appendChild(outerForward);
         state.pipBtn = createButton('⧉', 'quick-btn quick-pip-btn');
         state.pipBtn.title = '画中画 (P)';
         state.pipBtn.addEventListener('click', togglePictureInPicture);
-        group.appendChild(state.pipBtn);
-        group.appendChild(createDivider());
+        rightGroup.appendChild(state.pipBtn);
+        rightGroup.appendChild(createDivider());
         const loopWrapper = document.createElement('div');
         loopWrapper.className = 'quick-loop-wrapper';
         state.loopBtn = createButton('', 'quick-btn quick-loop-btn');
@@ -2652,7 +3289,10 @@
         state.loopMenu.className = 'loop-menu';
         const addMenuOption = (text, onClick) => {
             const option = createButton(text, 'loop-menu-btn');
-            option.addEventListener('click', () => onClick());
+            option.addEventListener('click', event => {
+                event.stopPropagation();
+                onClick();
+            });
             state.loopMenu.appendChild(option);
         };
         LOOP_PRESETS.forEach(seconds => addMenuOption(`${formatSeconds(seconds)}循环`, () => startLoop(seconds)));
@@ -2665,17 +3305,51 @@
         });
         addMenuOption('关闭循环', stopLoop);
         loopWrapper.append(state.loopBtn);
-        group.appendChild(loopWrapper);
-        quick.appendChild(group);
+        rightGroup.appendChild(loopWrapper);
+        state.moreBtn = createButton('⏱', 'quick-btn quick-more-btn');
+        state.moreBtn.title = '更多操作';
+        state.moreBtn.addEventListener('click', () => {
+            if (!state.moreMenu) return;
+            state.loopMenu?.classList.remove('show');
+            const open = state.moreMenu.classList.toggle('show');
+            if (open) fitLoopMenu();
+        });
+        leftGroup.appendChild(state.moreBtn);
+        state.moreMenu = document.createElement('div');
+        state.moreMenu.className = 'loop-menu more-menu';
+        const addMoreOption = (text, onClick) => {
+            const option = createButton(text, 'loop-menu-btn');
+            option.addEventListener('click', event => {
+                event.stopPropagation();
+                state.moreMenu.classList.remove('show');
+                onClick();
+            });
+            state.moreMenu.appendChild(option);
+        };
+        for (const seconds of outerBackSteps) {
+            addMoreOption(`⏪ 后退 ${formatSeconds(seconds)}`, () => {
+                seek(-seconds);
+                log(`⏪ 跳转 ${Math.abs(seconds)} 秒`);
+            });
+        }
+        for (const seconds of outerForwardSteps) {
+            addMoreOption(`⏩ 前进 ${formatSeconds(seconds)}`, () => {
+                seek(seconds);
+                log(`⏩ 跳转 ${Math.abs(seconds)} 秒`);
+            });
+        }
+        addMoreOption(`${pipSupported(state.video) ? '退出' : '进入'}画中画`, () => togglePictureInPicture());
+        addMoreOption('区段循环…', () => toggleLoopMenu());
+        quick.append(leftGroup, midGroup, rightGroup);
         container.appendChild(quick);
         container.appendChild(state.loopMenu);
+        container.appendChild(state.moreMenu);
         freeQuickControls();
-        document.addEventListener('click', event => {
-            if (!loopWrapper.contains(event.target)) state.loopMenu.classList.remove('show');
-        });
+        bindQuickMenuOutsideClick();
         setupQuickAutoHide();
-        hideQuickControls();
         fitQuickControls();
+        if (AV_PLATFORM.isMobile && quickMetricsReady(state.video)) showQuickControls();
+        else hideQuickControls();
     }
     function normalizeKey(value, fallback) {
         const key = String(value ?? '').trim().toLowerCase();
@@ -2902,8 +3576,18 @@
                 state.subtitleIdleTimer = setTimeout(tick, SUBTITLE_IDLE_DELAY);
                 return;
             }
+            if (isPageHidden()) {
+                state.subtitleRAF = 0;
+                state.subtitleIdleTimer = setTimeout(tick, SUBTITLE_IDLE_DELAY);
+                return;
+            }
+            if (video.paused && !state.loopActive) {
+                state.subtitleRAF = 0;
+                state.subtitleIdleTimer = setTimeout(tick, SUBTITLE_IDLE_DELAY);
+                renderSubtitle(false);
+                return;
+            }
             state.subtitleRAF = requestAnimationFrame(tick);
-            if (isPageHidden()) return;
             if (state.loopActive) {
                 const time = video.currentTime;
                 if (time >= state.loopStart + state.loopDuration || time < state.loopStart - 0.5) {
@@ -3268,31 +3952,50 @@
             list.addEventListener(type, event => event.stopPropagation());
         }
         getUiLayer(2147483647).appendChild(list);
-        if (!Number.isFinite(settings.pickerX) || !Number.isFinite(settings.pickerY)) {
+        const useSavedPlacement = !AV_PLATFORM.isMobile && Number.isFinite(settings.pickerX) && Number.isFinite(settings.pickerY);
+        if (!useSavedPlacement) {
             const rect = list.getBoundingClientRect?.() || { width: 0, height: 0 };
-            list.style.left = '15px';
+            if (AV_PLATFORM.isMobile) {
+                list.style.removeProperty('left');
+                list.style.removeProperty('right');
+                list.style.removeProperty('width');
+            } else {
+                list.style.left = '15px';
+            }
             list.style.top = `${Math.max(60, window.innerHeight - (rect.height || 280) - 175)}px`;
             list.style.bottom = 'auto';
         }
         applyUiStyles();
         makeDraggable(list, header, { x: 'pickerX', y: 'pickerY' });
-        if (Number.isFinite(settings.pickerX) && Number.isFinite(settings.pickerY)) {
+        if (useSavedPlacement) {
             list.style.left = `${settings.pickerX}px`;
             list.style.top = `${settings.pickerY}px`;
             list.style.bottom = 'auto';
         }
         clampPickerPosition(list);
     }
+    function clampFloatingWindowSize(node) {
+        if (!node || !AV_PLATFORM.isMobile) return;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (vh <= 0) return;
+        const limit = Math.max(220, vh - 16);
+        const measured = node.getBoundingClientRect?.() || { height: 0 };
+        if (measured.height > limit) node.style.setProperty('max-height', `${limit}px`, 'important');
+    }
     function clampPickerPosition(picker) {
         if (!picker) return;
+        clampFloatingWindowSize(picker);
         const rect = picker.getBoundingClientRect?.() || { width: 0, height: 0 };
         const maxX = Math.max(0, window.innerWidth - rect.width - 8);
         const maxY = Math.max(0, window.innerHeight - rect.height - 8);
+        const hasLeft = Boolean(picker.style.left);
         const x = clamp(Number.parseFloat(picker.style.left) || 0, 0, maxX);
         const y = clamp(Number.parseFloat(picker.style.top) || 0, 0, maxY);
         if (picker.style.top) {
-            picker.style.left = `${x}px`;
+            if (hasLeft) picker.style.left = `${x}px`;
             picker.style.top = `${y}px`;
+            if (AV_PLATFORM.isMobile) return;
+            if (!hasLeft) return;
             settings.pickerX = x;
             settings.pickerY = y;
             store.set('pickerX', x);
@@ -3930,16 +4633,19 @@
     }
     function clampAudioWinPosition(win) {
         if (!win) return;
+        clampFloatingWindowSize(win);
         const rect = win.getBoundingClientRect?.() || { width: 0, height: 0 };
         const maxX = Math.max(0, window.innerWidth - rect.width - 8);
         const maxY = Math.max(0, window.innerHeight - rect.height - 8);
         const keyX = siteAudioKey('WinX');
         const keyY = siteAudioKey('WinY');
+        const hasLeft = Boolean(win.style.left);
         const x = clamp(Number.parseFloat(win.style.left) || 0, 0, maxX);
         const y = clamp(Number.parseFloat(win.style.top) || 0, 0, maxY);
-        win.style.left = `${x}px`;
+        if (hasLeft) win.style.left = `${x}px`;
         win.style.top = `${y}px`;
         win.style.bottom = 'auto';
+        if (AV_PLATFORM.isMobile || !hasLeft) return;
         settings[keyX] = x;
         settings[keyY] = y;
         store.set(keyX, x);
@@ -4038,13 +4744,20 @@
         const keyY = siteAudioKey('WinY');
         const savedX = settings[keyX];
         const savedY = settings[keyY];
-        if (Number.isFinite(savedX) && Number.isFinite(savedY)) {
+        const useSavedAudioPlacement = !AV_PLATFORM.isMobile && Number.isFinite(savedX) && Number.isFinite(savedY);
+        if (useSavedAudioPlacement) {
             win.style.left = `${savedX}px`;
             win.style.top = `${savedY}px`;
         } else {
             const rect = win.getBoundingClientRect?.() || { width: 0, height: 0 };
-            win.style.left = '15px';
-            win.style.top = `${Math.max(60, window.innerHeight - (rect.height || 420) - 140)}px`;
+            if (AV_PLATFORM.isMobile) {
+                win.style.removeProperty('left');
+                win.style.removeProperty('right');
+                win.style.removeProperty('width');
+            } else {
+                win.style.left = '15px';
+            }
+            win.style.top = `${Math.max(8, window.innerHeight - (rect.height || 420) - 140)}px`;
         }
         applyUiStyles();
         makeDraggable(win, header, { x: keyX, y: keyY });
@@ -4059,7 +4772,7 @@
         { key: 'genre', label: '类型' },
         { key: 'maker', label: '发行商' }
     ];
-    const BACKUP_CARD_SELECTOR = 'div[class*="aspect-w-16"], .video-img-box, .thumbnail, article.video-card, .grid > div, .video-list > div, .col-6, .col-sm-4, .col-lg-3';
+    const BACKUP_CARD_SELECTOR = ACTIVE_SELECTORS.backupCard;
     const BACKUP_JUNK_PATH_RE = /\/(?:recent|latest|new|new-release|contact|contact-us|about|about-us|help|faq|dmca|terms|privacy|policy|login|signin|signup|register|search|my|account|profile|premium|vip|favorit|collection|playlist|bookmark)(?:\/|$)/i;
     const BACKUP_JUNK_NAME_RE = /^(?:最近更新|最新更新|聯絡我們|联系我们|關於我們|关于我们|首頁|首页|主頁|主页|登入|登录|註冊|注册|收藏|我的收藏|我的最愛|帳號|账号|服務條款|服务条款|隱私政策|隐私政策|DMCA|説明|帮助|幫助|回報|回报|意見|意见)$/i;
     const BACKUP_IMAGE_ATTRS = ['data-src', 'data-original', 'data-lazy', 'data-lazy-src', 'data-webp', 'data-cover', 'data-thumb', 'src'];
@@ -4481,6 +5194,19 @@
         }
         return jableList ? parseJableFavoriteCards(raw) : parseFavoriteCards(raw);
     }
+    function paginationCandidates(scope) {
+        const root = scope && scope.querySelectorAll ? scope : document;
+        const out = [];
+        const seen = new Set();
+        for (const tier of ACTIVE_SELECTORS.pagination) {
+            for (const element of root.querySelectorAll(tier)) {
+                if (seen.has(element)) continue;
+                seen.add(element);
+                out.push(element);
+            }
+        }
+        return out;
+    }
     function favoriteMaxPage(html) {
         const doc = parseHtmlDocument(html);
         if (!doc) return 0;
@@ -4491,7 +5217,7 @@
             if (match) max = Math.max(max, Number.parseInt(match[1], 10) || 0);
         }
         if (!max) {
-            for (const anchor of doc.querySelectorAll('.pagination .page-link, .pagination a[href*="#"], .page-item a, .pager a')) {
+            for (const anchor of paginationCandidates(doc)) {
                 const text = (anchor.textContent || '').replace(/\s+/g, '');
                 const match = /^(\d{1,3})$/.exec(text);
                 if (!match) continue;
@@ -4502,7 +5228,7 @@
     }
     function favoritePagerLink(doc, page) {
         if (!doc?.querySelectorAll) return null;
-        const links = Array.from(doc.querySelectorAll('ul.pagination a[href], .pagination a[href], .page-item a[href], nav.pagination a[href], a.page-link[href]'));
+        const links = paginationCandidates(doc).filter(link => link.hasAttribute('href'));
         if (!links.length) return null;
         const label = link => `${link.getAttribute('aria-label') || ''} ${link.getAttribute('title') || ''} ${(link.textContent || '').replace(/\s+/g, '')}`.trim();
         const rel = link => String(link.getAttribute('rel') || '');
@@ -4521,7 +5247,7 @@
     function favoriteLiveScope() {
         const marked = document.querySelector('#list_videos_my_favourite_videos, .list_videos_my_favourite_videos');
         if (marked) return marked;
-        const pager = document.querySelector('ul.pagination, .pagination');
+        const pager = paginationCandidates(document).find(node => node.closest('.pagination, [class*="pagination"], nav, .page-nav, .pager'));
         const link = document.querySelector('a[href*="/videos/"]');
         if (pager && link) {
             let node = link.parentElement;
@@ -4530,7 +5256,7 @@
                 node = node.parentElement;
             }
         }
-        return document.querySelector('div.row.gutter-20') || null;
+        return document.querySelector('div.row.gutter-20, .grid, .video-list, [id^="list_videos_"]') || null;
     }
     async function favoriteLivePagerCards(limit, ui, seen) {
         if (!document?.body || !/favourites?/i.test(location.pathname)) return [];
@@ -5535,10 +6261,7 @@
             link.after(container);
         }
     }
-    const INFO_ANCHOR_SELECTORS = [
-        'h1.text-base', 'h1.text-lg', '.video-title', '.video-detail-title',
-        '.video-detail h1', '.detail h1', 'h1', 'h4.h4', 'h4'
-    ];
+    const INFO_ANCHOR_SELECTORS = ACTIVE_SELECTORS.infoAnchor.slice();
     function infoAnchor() {
         const code = getPageVideoCode();
         const candidates = [];
@@ -5571,7 +6294,7 @@
         reviews: '暂无社区短评（该片较新或暂无影迷留言）',
         lists: '暂无收录该影片的精选影单'
     };
-    const INFO_BLOCK_SELECTORS = ['.video-detail', '.video-info', '.video-meta', '.detail', 'article', 'main'];
+    const INFO_BLOCK_SELECTORS = ACTIVE_SELECTORS.infoBlock.slice();
     let stillCode = '';
     const stillFailed = new Set();
     function beginStillSearch(code) {
@@ -5623,7 +6346,9 @@
                 }
             }
         }
-        if (!host || host === document.body) return null;
+        if (!host) return null;
+        if (host === document.body && !AV_PLATFORM.isMobile) return null;
+        if (host === document.body && node.parentElement !== host) return null;
         return { host, node };
     }
     function buildInfoSection() {
@@ -5700,6 +6425,7 @@
             head.addEventListener('click', () => setInfoExpanded(body.hidden));
             root.append(head, body);
             mount.host.insertBefore(root, mount.node);
+            clampMobileInjectedWidth();
             state.infoSection = {
                 root, head, body, meta, stats, chevron, tabs, panes,
                 grid, reviews, lists, loading, activeTab: 'stills'
@@ -5707,6 +6433,20 @@
             setInfoTab('stills');
         }
         return state.infoSection;
+    }
+    function clampMobileInjectedWidth() {
+        if (!AV_PLATFORM.isMobile) return;
+        const viewport = document.documentElement.clientWidth || window.innerWidth || 0;
+        if (!viewport) return;
+        for (const el of document.querySelectorAll('.av-info-section, .av-jable-meta')) {
+            el.style.maxWidth = '';
+            const rect = el.getBoundingClientRect();
+            if (!rect.width) continue;
+            const left = Math.max(0, rect.left);
+            const rightPadding = 6;
+            const room = Math.floor(viewport - left - rightPadding);
+            if (room >= 180 && rect.width > room) el.style.maxWidth = `${room}px`;
+        }
     }
     function setInfoTab(key) {
         const refs = state.infoSection;
@@ -5719,6 +6459,7 @@
             tab.setAttribute('aria-selected', on ? 'true' : 'false');
             tab.tabIndex = on ? 0 : -1;
         }
+        clampMobileInjectedWidth();
     }
     function setInfoExpanded(expanded) {
         const refs = state.infoSection;
@@ -6166,11 +6907,15 @@
         return found;
     }
     function jableCardHost() {
-        const tags = document.querySelector('.video-info h5.tags') || document.querySelector('h5.tags.h6-md') || document.querySelector('h5.tags');
-        if (tags?.parentElement) return { parent: tags.parentElement, before: tags };
-        const actionRow = document.querySelector('.video-info .text-center .my-3') || document.querySelector('.video-info .my-3');
-        if (actionRow?.parentElement) return { parent: actionRow.parentElement, before: actionRow.nextSibling };
-        const box = document.querySelector('.video-info .text-center') || document.querySelector('section.video-info');
+        for (const selector of ACTIVE_SELECTORS.jableCardHost) {
+            const tags = document.querySelector(selector);
+            if (tags?.parentElement) return { parent: tags.parentElement, before: tags };
+        }
+        for (const selector of ['.video-info .text-center .my-3', '.video-info .my-3']) {
+            const actionRow = document.querySelector(selector);
+            if (actionRow?.parentElement) return { parent: actionRow.parentElement, before: actionRow.nextSibling };
+        }
+        const box = document.querySelector('.video-info .text-center') || document.querySelector('section.video-info') || infoAnchor()?.parentElement;
         return box ? { parent: box, before: null } : null;
     }
     function jablePendingNode() {
@@ -6314,7 +7059,7 @@
         counter.className = 'lightbox-counter';
         const hint = document.createElement('span');
         hint.className = 'lightbox-hint';
-        hint.textContent = '← → 切换 · Esc 关闭';
+        hint.textContent = AV_PLATFORM.isMobile ? '点左右按钮切换 · 点空白关闭' : '← → 切换 · Esc 关闭';
         const close = createButton('✕', 'lightbox-close');
         close.addEventListener('click', closeLightbox);
         topbar.append(meta, counter, hint, close);
@@ -6331,6 +7076,33 @@
         layer.addEventListener('click', event => {
             if (event.target === layer || event.target === stage) closeLightbox();
         });
+        if (AV_PLATFORM.isMobile) {
+            let swipeX = 0;
+            let swipeY = 0;
+            let swipeAt = 0;
+            layer.addEventListener('touchstart', event => {
+                if (event.touches.length !== 1) {
+                    swipeAt = 0;
+                    return;
+                }
+                swipeX = event.touches[0].clientX;
+                swipeY = event.touches[0].clientY;
+                swipeAt = Date.now();
+            }, { passive: true });
+            layer.addEventListener('touchend', event => {
+                const touch = event.changedTouches && event.changedTouches[0];
+                if (!touch || !swipeAt) return;
+                const dx = touch.clientX - swipeX;
+                const dy = touch.clientY - swipeY;
+                swipeAt = 0;
+                if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+                    stepLightbox(dx < 0 ? 1 : -1);
+                    return;
+                }
+                if (dy > 80 && Math.abs(dy) > Math.abs(dx)) closeLightbox();
+            }, { passive: true });
+            layer.addEventListener('touchcancel', () => { swipeAt = 0; }, { passive: true });
+        }
         document.body.appendChild(layer);
         state.lightbox = { layer, img, counter };
         const keyHandler = event => {
@@ -6380,7 +7152,7 @@
         if (typeof video.id === 'string' && video.id.startsWith('preview-')) return true;
         if (video.hasAttribute && video.hasAttribute('data-src')) return true;
         if (video.closest(PREVIEW_HOST_SELECTOR)) return true;
-        if (video.closest('a')) return true;
+        if (video.closest('a') && !(AV_PLATFORM.isMobile && video.closest(PLAYER_HOST_SELECTOR))) return true;
         if (video.loop && video.muted && video.autoplay) return true;
         return false;
     }
@@ -6413,7 +7185,7 @@
     }
     function findMainVideo() {
         if (videoProbeEl && videoProbeEl.isConnected && Date.now() - videoProbeAt < VIDEO_PROBE_TTL) return videoProbeEl;
-        const explicit = document.querySelector('.plyr__video-wrapper video, .plyr video, .video-js video, .artplayer video, .dplayer video, #player video');
+        const explicit = document.querySelector(ACTIVE_SELECTORS.videoDirect);
         if (playerMetricsOk(explicit)) {
             videoProbeAt = Date.now();
             videoProbeEl = explicit;
@@ -6459,12 +7231,13 @@
             stopPlayerPoll();
             bindPlayer(video, container);
         }, POLL_INTERVAL));
-        state.pollTimeout = setTimeout(stopPlayerPoll, POLL_TIMEOUT);
+        state.pollTimeout = trackTimeout(setTimeout(stopPlayerPoll, POLL_TIMEOUT));
     }
     function sweepUiOrphans(container) {
         for (const selector of ['.custom-subtitle', '.speed-hud-host', '.custom-quick-controls']) {
             for (const node of document.querySelectorAll(selector)) {
                 if (container.contains(node)) continue;
+                if (node.parentElement?.contains(container)) continue;
                 node.remove();
             }
         }
@@ -6836,6 +7609,13 @@
         .av-heatmap-weekdays { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; font-size: 9px; color: #64748b; }
         .av-heatmap-weekdays span { line-height: 12px; }
         .av-heatmap-boxes { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+        @media (min-width: 1280px) {
+            .av-heatmap-boxes { flex: 1 1 auto; min-width: 0; grid-template-rows: repeat(7, auto); grid-auto-columns: minmax(12px, 1fr); gap: 4px; }
+            .av-heatmap-box { width: 100%; height: auto; aspect-ratio: 1; max-height: 26px; }
+            .av-heatmap-weekdays { grid-template-rows: repeat(7, 1fr); gap: 0; align-self: stretch; font-size: 10px; }
+            .av-heatmap-weekdays span { line-height: 1; align-self: center; }
+            .av-persona-narrative { max-width: 78ch; }
+        }
         .av-heatmap-box { width: 12px; height: 12px; border-radius: 3px; background: rgba(148, 163, 184, .12); }
         .av-heatmap-box.level-0 { background: rgba(148, 163, 184, .12); }
         .av-heatmap-box.level-1 { background: rgba(16, 185, 129, .3); }
@@ -6949,7 +7729,69 @@
         .av-icon-btn.is-danger:hover { background: rgba(248, 113, 113, .24); color: #fee2e2; }
         .av-records-empty { padding: 34px 16px; text-align: center; font-size: 12px; color: #64748b; }
         .av-records-more { display: flex; justify-content: center; padding-top: 14px; }
-        @media (max-width: 720px) {
+        .av-touch-hint { display: none; }
+        @media (pointer: coarse) and (min-width: 1101px) {
+            .av-btn, .av-cockpit .av-btn { min-height: 40px; padding: 10px 14px; font-size: 13px; }
+            .av-range-tab { min-height: 40px; padding: 11px 16px; font-size: 13px; }
+            .av-stat-toggle button { min-height: 40px; padding: 11px 18px; font-size: 12px; }
+            .av-search-input { height: 40px; font-size: 16px; padding-right: 34px; }
+            .av-search-clear { width: 40px; height: 40px; right: 0; }
+            .av-icon-btn { width: 40px; height: 40px; }
+            .av-icon-btn svg { width: 18px; height: 18px; }
+            .av-record-row { grid-template-columns: 92px minmax(0, 1fr) 168px 92px 96px; }
+            .av-record-actions { flex: 0 0 auto; }
+            .av-actress-link, .av-record-code { display: inline-flex; align-items: center; min-height: 34px; }
+            .av-records-more .av-btn { min-height: 40px; }
+        }
+        @media (max-width: 720px), (max-width: 1100px) and (pointer: coarse) {
+            .av-analytics-page { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+            .av-cockpit { min-height: 100dvh; padding: 14px 12px calc(24px + env(safe-area-inset-bottom, 0px)); overflow-x: clip; }
+            .av-cockpit-header { position: sticky; top: 0; z-index: 6; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: -14px -12px 14px; padding: 8px 12px; background: rgba(9, 10, 15, .96); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-bottom: 1px solid rgba(148, 163, 184, .16); }
+            .av-brand-badge { display: none; }
+            .av-brand-logo svg { width: 18px; height: 18px; }
+            .av-brand-text h1 { font-size: 13px; }
+            .av-cockpit-actions { display: flex; flex-wrap: nowrap; width: auto; max-width: 100%; margin-left: auto; gap: 5px; }
+            .av-cockpit-actions .av-btn { flex: 0 0 auto; min-width: 40px; min-height: 40px; padding: 9px 8px; justify-content: center; }
+            .av-cockpit-actions .av-btn > span:not(.av-svg) { display: none; }
+            .av-cockpit-actions .av-btn svg { width: 18px; height: 18px; }
+            .av-cockpit-actions .av-btn-close { grid-column: auto; min-width: 40px; }
+            .av-range-tabs { order: 3; flex: 1 1 100%; }
+            .av-kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: stretch; }
+            .av-duo-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 12px; }
+            .av-kpi, .av-cockpit-card, .av-persona-card { padding: 14px; }
+            .av-kpi { display: flex; flex-direction: column; container-type: inline-size; }
+            .av-kpi-footer { margin-top: auto; }
+            .av-kpi-value { font-size: clamp(17px, 16cqw, 26px); letter-spacing: -.2px; word-break: keep-all; overflow-wrap: anywhere; }
+            .av-kpi-value small { font-size: 12px; margin-left: 3px; }
+            .av-heatmap-wrap, .av-heatmap-boxes, .av-heatmap-weekdays, .av-hourmap, .av-hourmap-grid, .av-bar-chart { min-width: 0; max-width: 100%; }
+            .av-heatmap-boxes { grid-template-rows: repeat(7, 15px); gap: 2px; }
+            .av-heatmap-box { width: 15px; height: 15px; }
+            .av-heatmap-weekdays { flex: 0 0 auto; width: 14px; grid-template-rows: repeat(7, 15px); }
+            .av-hourmap { overflow-x: hidden; }
+            .av-hourmap-grid { grid-template-columns: 18px repeat(24, minmax(0, 1fr)); gap: 1px; }
+            .av-hourmap-cell { height: 22px; }
+            .av-hourmap-head { font-size: 9px; height: 10px; overflow: hidden; }
+            .av-bar-chart { height: 132px; }
+            .av-bar-label { font-size: 11px; }
+            .av-genre-name { flex: 0 0 92px; }
+            .av-search-box, .av-search-input { width: 100%; height: 40px; font-size: 16px; }
+            .av-search-clear { width: 40px; height: 40px; right: 0; }
+            .av-cockpit .av-btn { min-height: 40px; padding: 10px 12px; }
+            .av-cockpit .av-btn-close { min-width: 40px; justify-content: center; padding: 10px 0; }
+            .av-range-tab { padding: 12px 14px; font-size: 13px; }
+            .av-stat-toggle button { min-height: 40px; padding: 11px 16px; font-size: 12px; }
+            .av-actress-link, .av-record-code { display: inline-flex; align-items: center; min-height: 34px; }
+            .av-icon-btn { width: 40px; height: 40px; }
+            .av-icon-btn svg { width: 18px; height: 18px; }
+            .av-fb-chip.av-fb-cockpit { min-height: 40px; }
+            .btn-group .av-open-cockpit, .av-filter-actions .av-open-cockpit { min-height: 40px; }
+            .av-card-subtitle, .av-kpi-footer, .av-records-subtitle, .av-record-tag, .av-record-date,
+            .av-record-progress-head, .av-persona-kicker, .av-persona-tag, .av-trait-label, .av-trait-sub,
+            .av-mini-empty, .av-records-empty { font-size: 12px; }
+            .av-heatmap-legend, .av-hourmap-day, .av-brand-badge { font-size: 11px; }
+            .av-touch-hint { display: block; margin: 6px 0 10px; padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, .32); background: rgba(59, 130, 246, .14); font-size: 12px; line-height: 1.5; color: #bfdbfe; word-break: break-word; }
+            .av-heatmap-box, .av-hourmap-cell { cursor: pointer; }
+            .av-bar-col { cursor: pointer; }
             .av-persona-card { padding: 16px; }
             .av-persona-head { flex-direction: column; align-items: flex-start; gap: 8px; }
             .av-persona-archetype { font-size: 18px; }
@@ -6963,6 +7805,43 @@
             .av-record-date { order: 3; margin-left: auto; }
             .av-record-actions { order: 4; flex: 0 0 auto; }
             .av-record-progress { order: 5; flex: 1 1 100%; }
+        }
+        @media (min-width: 481px) and (max-width: 720px), (min-width: 481px) and (max-width: 1100px) and (pointer: coarse) {
+            .av-record-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "code main date actions" "progress progress progress progress"; align-items: center; gap: 6px 10px; }
+            .av-record-code { grid-area: code; order: 0; }
+            .av-record-main { grid-area: main; order: 0; }
+            .av-record-date { grid-area: date; order: 0; margin-left: 0; }
+            .av-record-actions { grid-area: actions; order: 0; }
+            .av-record-progress { grid-area: progress; order: 0; }
+        }
+        @media (max-width: 379px) {
+            .av-cockpit .av-brand-text { display: none; }
+        }
+        @media (max-width: 760px) {
+            .av-cockpit-header { gap: 6px; }
+            .av-cockpit .av-brand-text h1 { font-size: 12px; letter-spacing: 0; }
+        }
+        @media (pointer: coarse) and (min-width: 721px) {
+            .av-cockpit-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; width: auto; max-width: 100%; margin-left: auto; gap: 6px; }
+            .av-cockpit-actions .av-btn { flex: 0 0 auto; justify-content: center; }
+            .av-cockpit-actions .av-btn-close { grid-column: auto; min-width: 40px; }
+        }
+        @media (max-height: 520px) and (min-width: 600px) and (pointer: coarse) {
+            .av-cockpit { padding: 10px 10px calc(16px + env(safe-area-inset-bottom, 0px)); overflow-x: clip; }
+            .av-cockpit-header { position: sticky; top: 0; z-index: 6; flex-wrap: wrap; gap: 6px 10px; margin: -10px -10px 12px; padding: 8px 10px; background: rgba(9, 10, 15, .96); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+            .av-brand-text h1 { font-size: 15px; }
+            .av-brand-text { display: none; }
+            .av-brand-logo { width: 18px; height: 18px; }
+            .av-brand-badge { display: none; }
+            .av-range-tabs { flex: 0 0 auto; gap: 2px; padding: 2px; }
+            .av-range-tab { min-height: 40px; padding: 8px 10px; font-size: 12px; }
+            .av-cockpit-actions { display: flex; flex-wrap: nowrap; width: auto; margin-left: auto; gap: 5px; }
+            .av-cockpit-actions .av-btn { flex: 0 0 auto; min-width: 0; min-height: 40px; padding: 8px 9px; font-size: 12px; }
+            .av-cockpit-actions .av-btn-close { grid-column: auto; min-width: 40px; padding: 8px 10px; }
+            .av-duo-grid { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)) !important; gap: 10px; }
+            .av-heatmap-boxes { grid-template-rows: repeat(7, 13px); }
+            .av-heatmap-box { width: 13px; height: 13px; }
+            .av-heatmap-weekdays { grid-template-rows: repeat(7, 13px); }
         }
     `);
     const WATCHED_KEY_BASE = 'watchedList';
@@ -6990,9 +7869,9 @@
     const ANALYTICS_SAVE_INTERVAL = 25000;
     const HISTORY_MIGRATION_KEY = 'historyMigration_v2';
     const HISTORY_SCHEMA_VERSION = 2;
-    const CARD_SELECTOR = '.video-img-box, .thumbnail, .video-item, .list-item, .video-list-item, article.video-card, .grid > div, .row > div[class*="col-"], .video-list > div';
-    const CARD_INNER_SELECTOR = '.thumbnail, .video-img-box, .video-item, .list-item, .video-list-item, article.video-card';
-    const CARD_CHROME_SELECTOR = 'header, nav, footer, .site-header, .app-nav, .site-footer, .pagination, .breadcrumb, .custom-ui-layer, .av-analytics-page';
+    const CARD_SELECTOR = ACTIVE_SELECTORS.card;
+    const CARD_INNER_SELECTOR = ACTIVE_SELECTORS.cardInner;
+    const CARD_CHROME_SELECTOR = ACTIVE_SELECTORS.cardChrome;
     const DURATION_OPTIONS = [[0, '全部时长'], [300, '≥ 5 分钟'], [600, '≥ 10 分钟'], [1200, '≥ 20 分钟'], [1800, '≥ 30 分钟'], [3600, '≥ 60 分钟']];
     let watchedCache = null;
     let historyStorageReady = false;
@@ -7394,6 +8273,11 @@
     function hideResumeToast() {
         clearTimeout(state.resumeToastTimer);
         state.resumeToastTimer = 0;
+        if (state.resumeToastReposition) {
+            window.removeEventListener('resize', state.resumeToastReposition);
+            window.removeEventListener('orientationchange', state.resumeToastReposition);
+            state.resumeToastReposition = null;
+        }
         if (state.resumeToast) state.resumeToast.remove();
         state.resumeToast = null;
         if (state.resumeHost) {
@@ -7401,11 +8285,69 @@
             state.resumeHost = null;
         }
     }
+    function resumeToastBlockers() {
+        const blockers = [];
+        const panel = document.querySelector('.custom-control-panel');
+        if (panel && panel.isConnected) {
+            const cs = getComputedStyle(panel);
+            if (cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) !== 0) {
+                const rect = panel.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) blockers.push(rect);
+            }
+        }
+        const menu = state.loopMenu;
+        if (menu && menu.isConnected && menu.classList.contains('show')) {
+            const rect = menu.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) blockers.push(rect);
+        }
+        return blockers;
+    }
+    function resumeToastFits(box, top, height, blockers) {
+        if (top < 6 || top + height > box.h - 6) return false;
+        for (const rect of blockers) {
+            if (top < rect.bottom + 4 && top + height > rect.top - 4) return false;
+        }
+        return true;
+    }
+    function placeResumeToast(host, toast) {
+        if (!AV_PLATFORM.isMobile || !host || !toast || !host.isConnected) return;
+        const box = viewportBox();
+        const height = Math.round(toast.getBoundingClientRect().height) || 0;
+        const blockers = resumeToastBlockers();
+        const candidates = [];
+        const quick = state.quick;
+        const quickRect = quick && quick.isConnected && quick.classList.contains('quick-visible') && !quick.classList.contains('quick-docked')
+            ? quick.getBoundingClientRect()
+            : null;
+        if (quickRect && quickRect.height) {
+            const above = Math.round(box.h - quickRect.top + 8);
+            if (above >= 6) candidates.push(above);
+            const below = Math.round(box.h - quickRect.bottom - 8);
+            if (below >= 6) candidates.push(below);
+        }
+        for (const rect of blockers) {
+            const above = Math.round(box.h - rect.top + 8);
+            if (above >= 6) candidates.push(above);
+            const below = Math.round(box.h - rect.bottom - 8);
+            if (below >= 6) candidates.push(below);
+        }
+        candidates.push(92, 6);
+        let chosen = candidates[candidates.length - 1];
+        for (const bottom of candidates) {
+            const top = Math.round(box.h - bottom - height);
+            if (resumeToastFits(box, top, height, blockers)) {
+                chosen = bottom;
+                break;
+            }
+        }
+        const maxBottom = Math.max(6, box.h - height - 6);
+        host.style.bottom = `${Math.min(Math.max(chosen, 6), maxBottom)}px`;
+    }
     function showResumeToast(container, seconds, onUndo) {
         hideResumeToast();
         if (!container?.isConnected) return;
         const host = document.createElement('div');
-        host.className = 'speed-hud-host';
+        host.className = AV_PLATFORM.isMobile ? 'speed-hud-host av-resume-host' : 'speed-hud-host';
         const toast = document.createElement('div');
         toast.className = 'av-resume-toast';
         const text = document.createElement('span');
@@ -7435,7 +8377,23 @@
         close.addEventListener('click', hideResumeToast);
         toast.append(text, pos, undo, close);
         host.appendChild(toast);
-        container.appendChild(host);
+        if (AV_PLATFORM.isMobile) {
+            host.style.position = 'fixed';
+            host.style.inset = 'auto 0 auto 0';
+            host.style.top = 'auto';
+            host.style.bottom = '92px';
+            host.style.height = 'auto';
+            host.style.padding = '0 8px';
+            host.style.zIndex = '2147483646';
+            document.body.appendChild(host);
+            placeResumeToast(host, toast);
+            const reposition = () => placeResumeToast(host, toast);
+            window.addEventListener('resize', reposition);
+            window.addEventListener('orientationchange', reposition);
+            state.resumeToastReposition = reposition;
+        } else {
+            container.appendChild(host);
+        }
         state.resumeHost = host;
         state.resumeToast = toast;
         state.resumeToastTimer = setTimeout(hideResumeToast, RESUME_TOAST_MS);
@@ -7859,11 +8817,11 @@
             if (parts.selectWrap) parts.selectWrap.classList.toggle('is-on', settings.filterEnabled && settings.filterMinDuration > 0);
         }
     }
-    const FILTER_HEADER_SELECTOR = '.title-with-more, .title-with-avatar, .content-header, .flex.items-center.justify-between, .flex.justify-between, .d-flex.justify-content-between, .section-header, .section-title, .page-header, .list-header, .video-list-header';
+    const FILTER_HEADER_SELECTOR = ACTIVE_SELECTORS.filterHeader;
     const FILTER_ROW_SKIP = 'header, footer, .site-header, .app-nav, .site-footer, .custom-ui-layer, .av-analytics-page';
-    const SECTION_TITLE_SELECTOR = '.title-with-more, .title-with-avatar, .content-header, .section-title, .section-header, .list-header, .video-list-header, .page-header';
+    const SECTION_TITLE_SELECTOR = ACTIVE_SELECTORS.sectionTitle;
     function filterInlineRow() {
-        for (const row of document.querySelectorAll('nav.profile-nav, .profile-nav')) {
+        for (const row of document.querySelectorAll(ACTIVE_SELECTORS.profileNav)) {
             if (row.closest && row.closest(FILTER_ROW_SKIP)) continue;
             return row;
         }
@@ -7924,7 +8882,7 @@
         firstCardCache.card = found;
         return found;
     }
-    const FILTER_GRID_SELECTORS = ['.grid', '.video-list', '[id^="list_videos_"]', '.row.gutter-20', '.row'];
+    const FILTER_GRID_SELECTORS = ACTIVE_SELECTORS.filterGrid.slice();
     function filterGridScope(card) {
         if (!card) return null;
         if (card.closest) {
@@ -8046,7 +9004,7 @@
             }
         }
         let grid = null;
-        for (const selector of ['.grid', '.video-list', '[id^="list_videos_"]', '.row.gutter-20', '.row']) {
+        for (const selector of ACTIVE_SELECTORS.filterGrid) {
             const found = firstCard.closest ? firstCard.closest(selector) : null;
             if (found) {
                 grid = found;
@@ -8331,7 +9289,7 @@
             for (const node of document.getElementsByTagName('script')) {
                 if (/userId:\s*'\d+'/.test(node.textContent || '')) return true;
             }
-            return Boolean(document.querySelector('a[href*="logout"], .user-info, .user-avatar, [data-user-id]'));
+            return Boolean(document.querySelector(ACTIVE_SELECTORS.loginMark));
         }
         try {
             const response = await fetch(`https://${location.hostname}/api/actresses/1016525/view`, { credentials: 'same-origin', cache: 'no-store' });
@@ -8340,7 +9298,7 @@
             if (data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, 'user')) return Boolean(data.user);
             return Boolean(data && data.user);
         } catch (_) {
-            return Boolean(document.querySelector('a[href*="logout"], .user-avatar, [data-user-id]'));
+            return Boolean(document.querySelector(ACTIVE_SELECTORS.loginMarkStrict));
         }
     }
     function loginErrorText(data) {
@@ -9449,6 +10407,23 @@
         card.append(head, valueEl, footerEl);
         return card;
     }
+    function showCockpitTouchHint(node, text) {
+        const card = node && node.closest ? node.closest('.av-cockpit-card') : null;
+        if (!card || !text) return;
+        let hint = card.querySelector('.av-touch-hint');
+        if (!hint) {
+            hint = document.createElement('div');
+            hint.className = 'av-touch-hint';
+            const head = card.querySelector('.av-card-head');
+            if (head && head.parentElement === card) head.insertAdjacentElement('afterend', hint);
+            else card.insertBefore(hint, card.firstChild);
+        }
+        hint.textContent = text;
+    }
+    function bindCockpitTouchHint(node) {
+        if (!AV_PLATFORM.isMobile || !node) return;
+        node.addEventListener('click', () => showCockpitTouchHint(node, node.title));
+    }
     function buildCardTitle(iconPaths, text, subtitle, crown) {
         const wrap = document.createElement('div');
         wrap.className = 'av-card-head';
@@ -9917,6 +10892,7 @@
             if (!tilePool[tileIndex]) {
                 const fresh = document.createElement('div');
                 fresh.className = 'av-heatmap-box';
+                bindCockpitTouchHint(fresh);
                 tilePool[tileIndex] = fresh;
             }
             const box = tilePool[tileIndex];
@@ -9927,6 +10903,11 @@
             boxes.appendChild(box);
         }
         heatWrap.appendChild(boxes);
+        if (AV_PLATFORM.isMobile) {
+            const pinRecentDays = () => { boxes.scrollLeft = boxes.scrollWidth; };
+            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(pinRecentDays);
+            else setTimeout(pinRecentDays, 0);
+        }
         heat.appendChild(heatWrap);
         const legend = document.createElement('div');
         legend.className = 'av-heatmap-legend';
@@ -9955,13 +10936,14 @@
             state.analyticsHourmapMetric = metric;
             const peak = Math.max(1, ...data.hourWeekdayHeat.flatMap(row => row.map(cell => (metric === 'seconds' ? cell.seconds : cell.count))));
             hourmapGrid.replaceChildren();
+            const hourLabelStep = AV_PLATFORM.isMobile ? 6 : 3;
             const corner = document.createElement('span');
             corner.className = 'av-hourmap-day';
             hourmapGrid.appendChild(corner);
             for (let hour = 0; hour < 24; hour++) {
                 const head = document.createElement('span');
                 head.className = 'av-hourmap-head';
-                head.textContent = hour % 3 === 0 ? String(hour) : '';
+                head.textContent = hour % hourLabelStep === 0 ? String(hour) : '';
                 hourmapGrid.appendChild(head);
             }
             for (let weekday = 0; weekday < 7; weekday++) {
@@ -9976,6 +10958,7 @@
                     const box = document.createElement('div');
                     box.className = `av-hourmap-cell level-${level}`;
                     box.title = `周${weekdayNames[weekday]} ${String(hour).padStart(2, '0')}:00 - ${String(hour).padStart(2, '0')}:59：${cell.count} 部 · ${formatDuration(cell.seconds)}`;
+                    bindCockpitTouchHint(box);
                     hourmapGrid.appendChild(box);
                 }
             }
@@ -10008,6 +10991,7 @@
                 const col = document.createElement('div');
                 col.className = 'av-bar-col';
                 col.title = `${item.hour}:00 - ${item.hour}:59：观看 ${item.count} 次 · ${formatDuration(item.seconds)}`;
+                bindCockpitTouchHint(col);
                 const track = document.createElement('div');
                 track.className = 'av-bar-track';
                 const fill = document.createElement('div');
@@ -10016,7 +11000,7 @@
                 track.appendChild(fill);
                 const label = document.createElement('span');
                 label.className = 'av-bar-label';
-                label.textContent = item.hour % 3 === 0 ? `${item.hour}h` : '';
+                label.textContent = item.hour % (AV_PLATFORM.isMobile ? 6 : 3) === 0 ? `${item.hour}h` : '';
                 col.append(track, label);
                 bars.appendChild(col);
             }
@@ -10232,6 +11216,12 @@
         const settle = () => syncMetricToggle(group, group.dataset.metric);
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settle);
         else setTimeout(settle, 0);
+        if (typeof ResizeObserver === 'function') {
+            const metricObserver = new ResizeObserver(() => settle());
+            metricObserver.observe(group);
+        } else {
+            window.addEventListener('resize', settle, { passive: true });
+        }
         wrap.appendChild(group);
         return wrap;
     }
@@ -10623,7 +11613,11 @@
             tab.tabIndex = value === state.analyticsRange ? 0 : -1;
             tab.textContent = label;
             tab.addEventListener('click', () => {
-                if (state.analyticsRange !== value) window.scrollTo(0, 0);
+                if (state.analyticsRange !== value) {
+                    const scroller = state.analyticsPage || document.querySelector('.av-analytics-page');
+                    if (scroller && typeof scroller.scrollTo === 'function') scroller.scrollTo({ top: 0, behavior: 'auto' });
+                    else window.scrollTo(0, 0);
+                }
                 state.analyticsRange = value;
                 renderAnalytics();
             });
@@ -10646,7 +11640,7 @@
         const exportBtn = buildCockpitAction('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>', '导出 JSON', 'av-btn av-btn-secondary', '导出 JSON 格式数据备份', exportAnalyticsJson);
         const importBtn = buildCockpitAction('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>', '导入 JSON', 'av-btn av-btn-secondary', '导入历史与播放进度备份', importAnalyticsJson);
         const clearBtn = buildCockpitAction('<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', '清空', 'av-btn av-btn-danger', '清空全部行为记录', handleClearAnalytics);
-        const close = buildCockpitAction('<path d="M18 6 6 18M6 6l12 12"/>', '', 'av-btn av-btn-close', '关闭大屏', closeCockpit);
+        const close = buildCockpitAction('<path d="M18 6 6 18M6 6l12 12"/>', AV_PLATFORM.isMobile ? '关闭' : '', 'av-btn av-btn-close', '关闭大屏', closeCockpit);
         actions.append(refresh, exportBtn, importBtn, clearBtn, close);
         header.append(brand, tabs, actions);
         const main = document.createElement('main');
@@ -10806,7 +11800,7 @@
                 else location.assign(url);
                 return;
             }
-            const cockpitAnchor = (type === 'click' || type === 'auxclick') && state.analyticsPage && target.closest('.av-analytics-page') && target.closest('a[href]');
+            const cockpitAnchor = (type === 'click' || type === 'auxclick') && state.analyticsPage && target.closest('.av-analytics-page') && target.closest('a[href]:not([target="_blank"])');
             if (cockpitAnchor) quitCockpitMode();
         }, true);
     }
