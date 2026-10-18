@@ -1,6 +1,6 @@
 # 🚀 MissAV & Jable 综合增强助手
 
-![Version](https://img.shields.io/badge/version-12.11-blue.svg)
+![Version](https://img.shields.io/badge/version-13.15-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-PC%20(Desktop)-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -8,7 +8,8 @@
 
 支持 MissAV 与 Jable 
 
-PC端专用、广告清理、字幕加载/偏移/字号高度、音量增强0-600%与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志
+
 
 ## 安装
 
