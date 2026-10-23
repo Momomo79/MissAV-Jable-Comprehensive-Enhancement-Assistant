@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      13.20
+// @version      13.21
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -63,6 +63,42 @@
     try {
     const STORAGE_PREFIX = 'avSub:';
     const IS_JABLE = location.hostname.includes('jable');
+    const DEBUG_KEY = `${STORAGE_PREFIX}debugLog`;
+    const DEBUG_ENABLED = (() => {
+        try {
+            return localStorage.getItem(DEBUG_KEY) === '1';
+        } catch (_) {
+            return false;
+        }
+    })();
+    const debugSeen = new Set();
+    function debugLog(error, label) {
+        if (!DEBUG_ENABLED) return;
+        let where = label ? String(label) : '';
+        if (!where && error && typeof error.stack === 'string') {
+            const frame = error.stack.split('\n')[1];
+            if (frame) where = frame.trim().replace(/^at\s+/, '');
+        }
+        const detail = error && (error.name || error.message)
+            ? `${error.name || 'Error'}: ${error.message || ''}`
+            : String(error ?? '');
+        const line = `[av-helper] ${where ? `${where} · ` : ''}${detail}`;
+        if (debugSeen.has(line)) return;
+        if (debugSeen.size > 240) debugSeen.clear();
+        debugSeen.add(line);
+        try {
+            console.warn(line, error);
+        } catch (_) {
+        }
+    }
+    function safeRun(fn, label) {
+        try {
+            return fn();
+        } catch (error) {
+            debugLog(error, label);
+            return undefined;
+        }
+    }
 
     const PLATFORM_MODE_KEY = `${STORAGE_PREFIX}platformMode`;
     const PLATFORM_MODES = ['auto', 'mobile', 'desktop'];
@@ -176,7 +212,8 @@
         const scope = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
         scope.__avPlatform = AV_PLATFORM;
         scope.__avSelectors = ACTIVE_SELECTORS;
-    } catch (_) {
+    } catch (error) {
+        debugLog(error);
     }
     function playerMinMetrics() {
         if (!AV_PLATFORM.isMobile) return { width: 480, height: 260 };
@@ -495,11 +532,80 @@
             return null;
         }
     }
-    function writeCache(key, data, ttl = INFO_CACHE_TTL) {
+    const CACHE_INDEX_KEY = 'cacheIndex_v1';
+    const CACHE_MAX_ENTRIES = 48;
+    const CACHE_MAX_BYTES = 1400000;
+    function cacheIndexRead() {
         try {
-            localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify({ data, expires: Date.now() + ttl }));
-        } catch (_) {
+            const raw = localStorage.getItem(STORAGE_PREFIX + CACHE_INDEX_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (error) {
+            debugLog(error, 'cache-index-read');
+            return {};
         }
+    }
+    function cacheIndexSave(index) {
+        try {
+            localStorage.setItem(STORAGE_PREFIX + CACHE_INDEX_KEY, JSON.stringify(index));
+        } catch (error) {
+            debugLog(error, 'cache-index-save');
+        }
+    }
+    function cacheSweep(minDrop = 0) {
+        const index = cacheIndexRead();
+        const keys = Object.keys(index);
+        if (!keys.length) return 0;
+        const entries = keys.map(key => {
+            const meta = index[key] && typeof index[key] === 'object' ? index[key] : {};
+            return { key, at: Number(meta.at) || 0, size: Number(meta.size) || 0 };
+        }).sort((a, b) => a.at - b.at);
+        let remaining = entries.length;
+        let bytes = entries.reduce((sum, item) => sum + item.size, 0);
+        let dropped = 0;
+        for (const item of entries) {
+            const over = remaining > CACHE_MAX_ENTRIES || bytes > CACHE_MAX_BYTES;
+            if (!over && dropped >= minDrop) break;
+            try {
+                localStorage.removeItem(STORAGE_PREFIX + item.key);
+            } catch (error) {
+                debugLog(error, 'cache-drop');
+            }
+            delete index[item.key];
+            remaining -= 1;
+            bytes -= item.size;
+            dropped += 1;
+        }
+        if (dropped) cacheIndexSave(index);
+        return dropped;
+    }
+    function writeCache(key, data, ttl = INFO_CACHE_TTL) {
+        let payload = '';
+        try {
+            payload = JSON.stringify({ data, expires: Date.now() + ttl });
+        } catch (error) {
+            debugLog(error, 'cache-encode');
+            return false;
+        }
+        try {
+            localStorage.setItem(STORAGE_PREFIX + key, payload);
+        } catch (error) {
+            debugLog(error, 'cache-write');
+            const count = Object.keys(cacheIndexRead()).length;
+            cacheSweep(Math.max(6, Math.ceil(count / 3)));
+            try {
+                localStorage.setItem(STORAGE_PREFIX + key, payload);
+            } catch (retryError) {
+                debugLog(retryError, 'cache-write-retry');
+                return false;
+            }
+        }
+        const index = cacheIndexRead();
+        index[key] = { at: Date.now(), size: payload.length };
+        cacheIndexSave(index);
+        if (Object.keys(index).length > CACHE_MAX_ENTRIES) cacheSweep(0);
+        return true;
     }
     function stripTags(html) {
         return String(html ?? '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
@@ -515,7 +621,8 @@
         set(key, value) {
             try {
                 localStorage.setItem(STORAGE_PREFIX + key, String(value));
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         },
         getNumber(key, fallback, min, max) {
@@ -533,7 +640,8 @@
         remove(key) {
             try {
                 localStorage.removeItem(STORAGE_PREFIX + key);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
     };
@@ -581,7 +689,8 @@
                 try {
                     const value = GM_getValue(this.key(name), '');
                     if (value !== undefined && value !== null && value !== '') return String(value);
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }
             const encoded = store.get(this.key(name));
@@ -597,7 +706,8 @@
                 if (this.gmReady()) {
                     try {
                         GM_deleteValue(this.key(name));
-                    } catch (_) {
+                    } catch (error) {
+                        debugLog(error);
                     }
                 }
                 return;
@@ -606,7 +716,8 @@
                 try {
                     GM_setValue(this.key(name), text);
                     return;
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }
             store.set(this.key(name), credentialEncode(text));
@@ -617,7 +728,8 @@
             if (typeof GM_deleteValue === 'function') {
                 try {
                     GM_deleteValue(this.key(name));
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }
         },
@@ -864,7 +976,8 @@
             guard.id = 'av-cockpit-guard';
             guard.textContent = COCKPIT_GUARD_CSS;
             (document.head || document.documentElement).appendChild(guard);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function releaseCockpitGuard() {
@@ -872,7 +985,8 @@
             document.documentElement.classList.remove('av-cockpit-mode');
             const guard = document.getElementById('av-cockpit-guard');
             if (guard) guard.remove();
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     let cockpitMediaKiller = null;
@@ -908,13 +1022,15 @@
     function cockpitFlagSet() {
         try {
             sessionStorage.setItem(COCKPIT_FLAG_KEY, '1');
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function cockpitFlagClear() {
         try {
             sessionStorage.removeItem(COCKPIT_FLAG_KEY);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     if (ANALYTICS_ENTRY) {
@@ -954,12 +1070,14 @@
         const desc = ORIG_DOC_DESCRIPTORS.hidden;
         try {
             if (desc) return typeof desc.get === 'function' ? Boolean(desc.get.call(document)) : Boolean(desc.value);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             const fallback = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
             if (fallback && typeof fallback.get === 'function') return Boolean(fallback.get.call(document));
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         return false;
     };
@@ -1012,7 +1130,8 @@
         if (protectInstance.hasFocus) {
             try {
                 target.hasFocus = protectInstance.hasFocus;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             protectInstance.hasFocus = null;
             return true;
@@ -1035,7 +1154,8 @@
                     try {
                         target[key] = stub;
                         changed = true;
-                    } catch (_) {
+                    } catch (error) {
+                        debugLog(error);
                     }
                 }
             } else if (current && current[VISIBILITY_PATCHED] === true) {
@@ -1046,7 +1166,8 @@
                     try {
                         target[key] = null;
                         changed = true;
-                    } catch (_) {
+                    } catch (error) {
+                        debugLog(error);
                     }
                 }
                 protectInstance[key] = null;
@@ -1088,7 +1209,8 @@
     visibilityGuardTimer = window.setInterval(() => {
         try {
             ensureVisibilityGuard(false);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }, 3000);
     const WINDOW_OPEN_PATCHED = Symbol.for('av-helper.windowOpenPatched');
@@ -1125,7 +1247,8 @@
                 return null;
             };
             Object.defineProperty(target, WINDOW_OPEN_PATCHED, { value: true, configurable: true });
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
@@ -1142,7 +1265,8 @@
             if (isProtectedFrame(frame)) continue;
             try {
                 patchWindowOpen(frame.contentWindow, true);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
     }
@@ -1240,7 +1364,8 @@
         pageLifecycle.push(() => {
             try {
                 cancelAnimationFrame(read());
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
     };
@@ -1252,7 +1377,8 @@
         pageLifecycle.push(() => {
             try {
                 observer.disconnect();
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
         return observer;
@@ -1262,25 +1388,62 @@
             const dispose = pageLifecycle.pop();
             try {
                 dispose();
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
     };
-    function log(message) {
-        const logEl = state.logEl;
-        if (!logEl) return;
+    const pendingLogs = [];
+    let logScrollFrame = 0;
+    function logTimeStamp(at) {
+        return `[${pad2(at.getHours())}:${pad2(at.getMinutes())}:${pad2(at.getSeconds())}]`;
+    }
+    function appendLogEntry(logEl, message, at) {
         while (logEl.childElementCount >= LOG_LIMIT) logEl.firstElementChild.remove();
-        const now = new Date();
         const entry = document.createElement('div');
         entry.className = 'log-entry';
         const timeEl = document.createElement('span');
         timeEl.className = 'log-time';
-        timeEl.textContent = `[${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}]`;
+        timeEl.textContent = logTimeStamp(at);
         const textEl = document.createElement('span');
         textEl.textContent = message;
         entry.append(timeEl, textEl);
         logEl.appendChild(entry);
-        logEl.scrollTop = logEl.scrollHeight;
+    }
+    function flushLogScroll(logEl) {
+        if (!logEl || logScrollFrame) return;
+        logScrollFrame = requestAnimationFrame(() => {
+            logScrollFrame = 0;
+            try {
+                if (logEl.isConnected) logEl.scrollTop = logEl.scrollHeight;
+            } catch (error) {
+                debugLog(error, 'log-scroll');
+            }
+        });
+    }
+    function flushPendingLogs(logEl) {
+        if (!logEl || !pendingLogs.length) return;
+        for (const item of pendingLogs.splice(0)) appendLogEntry(logEl, item.message, item.at);
+        flushLogScroll(logEl);
+    }
+    function log(message) {
+        const logEl = state.logEl;
+        const text = String(message ?? '');
+        if (DEBUG_ENABLED) {
+            try {
+                console.log('[av-helper]', text);
+            } catch (error) {
+                debugLog(error);
+            }
+        }
+        if (!logEl) {
+            pendingLogs.push({ at: new Date(), message: text });
+            if (pendingLogs.length > LOG_LIMIT) pendingLogs.shift();
+            return;
+        }
+        flushPendingLogs(logEl);
+        appendLogEntry(logEl, text, new Date());
+        flushLogScroll(logEl);
     }
     GM_addStyle(`
         .custom-ui-layer {
@@ -1882,7 +2045,8 @@
                 if (event.pointerType === 'mouse') {
                     try {
                         container.setPointerCapture?.(event.pointerId);
-                    } catch (_) {
+                    } catch (error) {
+                        debugLog(error);
                     }
                 }
                 state.holdingSpeed = true;
@@ -1900,14 +2064,16 @@
             if (event.pointerId === state.holdPointerId) cancelHold();
             try {
                 container.releasePointerCapture?.(event.pointerId);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
         container.addEventListener('pointercancel', event => {
             if (event.pointerId === state.holdPointerId) cancelHold();
             try {
                 container.releasePointerCapture?.(event.pointerId);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
         container.addEventListener('pointerleave', event => {
@@ -1935,7 +2101,8 @@
         try {
             const result = sentinel.release();
             if (result && typeof result.catch === 'function') result.catch(() => { });
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     async function acquireWakeLock() {
@@ -1954,7 +2121,8 @@
                 sentinel.addEventListener('release', () => {
                     if (state.wakeSentinel === sentinel) state.wakeSentinel = null;
                 });
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             log(`${WAKE_LOCK_LOG}已开启`);
             return true;
@@ -1990,7 +2158,8 @@
     function setMediaAction(action, handler) {
         try {
             navigator.mediaSession.setActionHandler(action, handler);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function syncMediaSession() {
@@ -1998,7 +2167,8 @@
         if (!settings.mediaSession) {
             try {
                 navigator.mediaSession.metadata = null;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             for (const action of ['play', 'pause', 'seekbackward', 'seekforward', 'seekto']) setMediaAction(action, null);
             state.mediaSignature = '';
@@ -2026,7 +2196,8 @@
                         artwork: poster ? [{ src: poster, sizes: '512x512', type: 'image/jpeg' }] : []
                     });
                 }
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         if (state.mediaHandlersBound) return;
@@ -2037,7 +2208,8 @@
             try {
                 const result = target.play();
                 if (result && typeof result.catch === 'function') result.catch(() => { });
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
         setMediaAction('pause', () => {
@@ -2045,7 +2217,8 @@
             if (!target) return;
             try {
                 target.pause();
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
         setMediaAction('seekbackward', details => {
@@ -2059,7 +2232,8 @@
             if (!target || !details || !Number.isFinite(details.seekTime)) return;
             try {
                 target.currentTime = details.seekTime;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         });
     }
@@ -2077,7 +2251,8 @@
         const rate = Number.isFinite(video.playbackRate) && video.playbackRate > 0 ? video.playbackRate : 1;
         try {
             navigator.mediaSession.setPositionState({ duration, position, playbackRate: rate });
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function setupMediaSession(video) {
@@ -2741,6 +2916,7 @@
         state.logEl = document.createElement('div');
         state.logEl.className = 'panel-status-log';
         footer.appendChild(state.logEl);
+        flushPendingLogs(state.logEl);
         body.append(keysRow, audioRow, actionRow, loginToggleBtn, loginPanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
         if (AV_PLATFORM.isMobile) body.append(mobileToggleBtn, mobilePanel);
         collapsibleInner.append(body, footer);
@@ -3131,7 +3307,8 @@
             const style = getComputedStyle(quick);
             gap = Number.parseFloat(style.columnGap) || 0;
             padX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const composed = Math.ceil(total + gap * Math.max(0, count - 1) + padX + 2);
         return Math.max(composed, quick.scrollWidth || 0);
@@ -3853,7 +4030,8 @@
         if (!key) return;
         try {
             store.remove(key);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function clearSubtitles() {
@@ -3961,22 +4139,45 @@
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
     };
+    const INFO_FETCH_BUDGET = 6000;
+    function firstFulfilled(promises) {
+        if (typeof Promise.any === 'function') return Promise.any(promises);
+        return new Promise((resolve, reject) => {
+            let failed = 0;
+            let lastError = null;
+            for (const promise of promises) {
+                promise.then(resolve, error => {
+                    failed += 1;
+                    lastError = error;
+                    if (failed === promises.length) reject(lastError);
+                });
+            }
+        });
+    }
     async function fetchHtml(url, { headers = null, timeout = 4500, skipProxy = false } = {}) {
         const merged = headers || PAGE_HEADERS;
+        const startedAt = Date.now();
+        const budgetLeft = () => INFO_FETCH_BUDGET - (Date.now() - startedAt);
         try {
-            const response = await gmRaw(url, { headers: merged, timeout });
-            if (response.status >= 200 && response.status < 300 && response.responseText) return response.responseText;
-        } catch (_) {
+            const direct = await gmRaw(url, { headers: merged, timeout: Math.max(600, Math.min(timeout, budgetLeft())) });
+            if (direct.status >= 200 && direct.status < 300 && direct.responseText) return direct.responseText;
+        } catch (error) {
+            debugLog(error, 'fetch-direct');
         }
         if (skipProxy) return '';
-        for (const proxy of CORS_PROXIES) {
-            try {
-                const response = await gmRaw(proxy + encodeURIComponent(url), { timeout: 3500 });
-                if (response.status >= 200 && response.status < 300 && response.responseText) return response.responseText;
-            } catch (_) {
-            }
+        const remaining = budgetLeft();
+        if (remaining < 900) return '';
+        const perProxy = Math.max(800, Math.min(3500, remaining));
+        const attempts = CORS_PROXIES.map(proxy => gmRaw(proxy + encodeURIComponent(url), { timeout: perProxy }).then(response => {
+            if (response.status >= 200 && response.status < 300 && response.responseText) return response.responseText;
+            throw new Error(`proxy HTTP ${response.status}`);
+        }));
+        try {
+            return await firstFulfilled(attempts);
+        } catch (error) {
+            debugLog(error, 'fetch-proxy');
+            return '';
         }
-        return '';
     }
     let jdSigCache = null;
     function jdSignature() {
@@ -4045,7 +4246,8 @@
             try {
                 const parts = id.split('?')[0].split('#')[0].split('/').filter(Boolean);
                 if (parts.length) id = decodeURIComponent(parts[parts.length - 1] ?? id);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         id = id.replace(/[-_](?:uncensored|leak|chinese|english|subtitle|hd|fhd|4k)$/i, '');
@@ -4069,7 +4271,8 @@
                     if (value && /^[a-z0-9]/i.test(value)) return normalizeVideoCode(value);
                 }
             }
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const parts = location.pathname.split('/').filter(Boolean);
         const slug = decodeURIComponent(parts[parts.length - 1] ?? '').split('#')[0].trim();
@@ -4110,18 +4313,21 @@
         if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
             try {
                 return new TextDecoder('utf-16le').decode(bytes.subarray(2));
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
             try {
                 return new TextDecoder('utf-16be').decode(bytes.subarray(2));
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         try {
             return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             return new TextDecoder('gb18030').decode(bytes);
@@ -4182,18 +4388,21 @@
         try {
             const payload = await gmRequest(url, { timeout: 20000, binary: true });
             if (typeof payload === 'string' ? payload.trim() : payload && payload.byteLength) return payload;
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             const text = await gmRequest(url, { timeout: 20000 });
             if (text?.trim()) return text;
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         for (const proxy of CORS_PROXIES) {
             try {
                 const text = await gmRequest(proxy + encodeURIComponent(url), { timeout: 12000 });
                 if (text?.trim()) return text;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         return null;
@@ -4344,7 +4553,8 @@
         try {
             const result = ctx.resume();
             if (result && typeof result.catch === 'function') result.catch(() => {});
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function audioGraphReady(video) {
@@ -4358,13 +4568,15 @@
             if (audioEngine.source) {
                 try {
                     audioEngine.source.disconnect();
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }
             if (audioEngine.gain) {
                 try {
                     audioEngine.gain.disconnect();
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }
             const source = ctx.createMediaElementSource(video);
@@ -4407,12 +4619,14 @@
         if (!ready && gain > 1) return false;
         try {
             target.volume = Math.min(1, gain);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         if (ready) {
             try {
                 audioEngine.gain.gain.value = gain > 1 ? gain : 1;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             audioResumeContext();
             audioApplySink(target, { silent: true });
@@ -4458,18 +4672,21 @@
             restored = true;
             try {
                 if (snapshot.time > 0) video.currentTime = snapshot.time;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             try {
                 video.volume = snapshot.volume;
                 video.muted = snapshot.muted;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             if (!snapshot.paused) {
                 try {
                     const result = video.play();
                     if (result && typeof result.catch === 'function') result.catch(() => {});
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }
         };
@@ -4521,17 +4738,20 @@
         }
         try {
             video.load();
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const loaded = await waitMediaReload(video);
         if (!loaded) {
             try {
                 video.removeAttribute('crossOrigin');
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             try {
                 video.load();
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             mediaRestore(video, snapshot);
             audioEngine.error = 'CorsBlocked';
@@ -4548,13 +4768,15 @@
         const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
         try {
             target.volume = Math.min(1, gain);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         if (gain <= 1) {
             if (audioEngine.gain) {
                 try {
                     audioEngine.gain.gain.value = 1;
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
                 audioResumeContext();
                 audioApplySink(target, { silent: true });
@@ -4565,7 +4787,8 @@
         if (!node) {
             try {
                 target.volume = 1;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             if (!audioContextCtor()) return { ok: false, reason: 'unsupported' };
             const error = audioGraphError(target);
@@ -4575,7 +4798,8 @@
         }
         try {
             node.gain.value = gain;
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         audioResumeContext();
         audioApplySink(target, { silent: true });
@@ -4596,7 +4820,8 @@
                 const result = target.setSinkId(sinkId);
                 if (result && typeof result.catch === 'function') result.catch(() => {});
                 applied = true;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         if (ctx && typeof ctx.setSinkId === 'function') {
@@ -4604,7 +4829,8 @@
                 const result = ctx.setSinkId(sinkId);
                 if (result && typeof result.catch === 'function') result.catch(() => {});
                 applied = true;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         if (!options.silent) {
@@ -4639,7 +4865,8 @@
         const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
         try {
             video.volume = Math.min(1, gain);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         if (gain > 1) audioApplyGain(video, { silent: true });
         if (settings.audioRoute) audioApplySink(video, { silent: true });
@@ -4918,7 +5145,8 @@
                     osc.stop();
                     osc.disconnect();
                     gain.disconnect();
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
             }, 700);
             if (sinkId && typeof ctx.setSinkId === 'function') {
@@ -5171,7 +5399,8 @@
                 const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
                 const ext = backupImageFormat(bytes);
                 if (ext) return { bytes, ext };
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         return null;
@@ -5253,7 +5482,8 @@
         let slug = match[1];
         try {
             slug = decodeURIComponent(slug);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const head = slug.toLowerCase();
         if (!slug || BACKUP_ENTITY_SLUG_JUNK.has(head)) return '';
@@ -5269,7 +5499,8 @@
         let slug = parts.length ? parts[parts.length - 1] : '';
         try {
             slug = decodeURIComponent(slug);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const slugMatch = slug.match(/((?:fc2(?:-ppv)?|[a-z]{2,10})-\d{2,})/i);
         const fromSlug = normalizeVideoCode(slugMatch?.[1] || slug);
@@ -5313,7 +5544,8 @@
         if (!raw) return false;
         try {
             if (/favourites?/i.test(new URL(raw, location.origin).pathname)) return true;
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         return /favourites?/i.test(raw);
     }
@@ -5681,7 +5913,8 @@
                 try {
                     const html = await gmRequest(url, { timeout: 15000 });
                     if (parseJableFavoriteCards(html).length) return url;
-                } catch (_) {
+                } catch (error) {
+                    debugLog(error);
                 }
                 await backupSleep(160);
             }
@@ -5703,7 +5936,8 @@
             try {
                 const html = await gmRequest(url, { timeout: 15000 });
                 if (parseFavoriteCards(html).length) return url;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             await backupSleep(160);
         }
@@ -6340,7 +6574,8 @@
                 }
                 if (!stills.length) push(detail.cover_url || detail.thumb_url);
             }
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             const body = JSON.parse(reviewsRaw);
@@ -6355,7 +6590,8 @@
                     score: Number.isFinite(Number(item?.score)) ? Number(item.score) : undefined
                 });
             }
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             const body = JSON.parse(listsRaw);
@@ -6371,7 +6607,8 @@
                     shareUrl: `https://javdb.com/lists/${encodeURIComponent(item.id)}`
                 });
             }
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const partial = { rating, stills, reviews, lists, credits, javDbMovieId: String(movie.id) };
         onPartial?.(partial);
@@ -6904,7 +7141,8 @@
         try {
             const body = JSON.parse(raw);
             list = Array.isArray(body?.data?.reviews) ? body.data.reviews : [];
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         const before = info.reviews.length;
         const merged = [...info.reviews];
@@ -7465,7 +7703,8 @@
         if (!container || typeof getComputedStyle !== 'function') return;
         try {
             if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function playerContainer(video) {
@@ -7585,7 +7824,8 @@
 
         try {
             restoreSubtitleSnapshot();
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         setupHoldAccelerate(container);
         setupDoubleTapSeek(container);
@@ -8207,7 +8447,8 @@
         if (!historyHasGmStorage()) return;
         try {
             GM_setValue(STORAGE_PREFIX + key, String(value));
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function historyLocalGet(key) {
@@ -8220,7 +8461,8 @@
     function historyLocalSet(key, value) {
         try {
             localStorage.setItem(STORAGE_PREFIX + key, String(value));
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     function historyParseJson(raw, fallback) {
@@ -8434,21 +8676,30 @@
         historyGmSet(HISTORY_MIGRATION_KEY, '1');
         historyLocalSet(markerKey, '1');
     }
+    const historyReadCache = new Map();
+    const HISTORY_READ_TTL = 250;
     function historyStorageGet(key) {
         initializeHistoryStorage();
+        const now = Date.now();
+        const cached = historyReadCache.get(key);
+        if (cached && now - cached.at < HISTORY_READ_TTL) return cached.value;
         const gmValue = historyGmGet(key);
         const localValue = historyLocalGet(key);
+        let value = gmValue;
         if (gmValue !== null) {
             if (localValue !== gmValue) historyLocalSet(key, gmValue);
-            return gmValue;
+        } else if (localValue !== null) {
+            historyGmSet(key, localValue);
+            value = localValue;
         }
-        if (localValue !== null) historyGmSet(key, localValue);
-        return localValue;
+        historyReadCache.set(key, { at: now, value });
+        return value;
     }
     function historyStorageSet(key, value) {
         initializeHistoryStorage();
         historyGmSet(key, value);
         historyLocalSet(key, value);
+        historyReadCache.set(key, { at: Date.now(), value });
     }
     function resetHistoryCaches() {
         watchedCache = null;
@@ -8675,7 +8926,8 @@
         undo.addEventListener('click', () => {
             try {
                 if (state.video?.isConnected) state.video.currentTime = 0;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
             if (typeof onUndo === 'function') onUndo();
             hideResumeToast();
@@ -10237,7 +10489,8 @@
             try {
                 state.analyticsVideo.removeEventListener('pause', state.analyticsPauseHandler);
                 state.analyticsVideo.removeEventListener('ended', state.analyticsEndedHandler);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         video.addEventListener('pause', onAnalyticsPause, { passive: true });
@@ -10310,7 +10563,8 @@
             try {
                 state.analyticsVideo.removeEventListener('pause', state.analyticsPauseHandler);
                 state.analyticsVideo.removeEventListener('ended', state.analyticsEndedHandler);
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         state.analyticsVideo = null;
@@ -11602,14 +11856,43 @@
         empty.textContent = text;
         return empty;
     }
+    function analyticsStamp() {
+        try {
+            const records = historyStorageGet(ANALYTICS_KEY) || '[]';
+            const resume = historyStorageGet(RESUME_KEY) || '{}';
+            const recordsTail = records.length ? records.charCodeAt(records.length - 1) : 0;
+            const resumeTail = resume.length ? resume.charCodeAt(resume.length - 1) : 0;
+            return `${records.length}:${recordsTail}:${resume.length}:${resumeTail}`;
+        } catch (error) {
+            debugLog(error, 'analytics-stamp');
+            return '';
+        }
+    }
+    function restoreAnalyticsScroll(page, scrollTop) {
+        if (!scrollTop) return;
+        requestAnimationFrame(() => {
+            try {
+                if (page.isConnected) page.scrollTop = scrollTop;
+            } catch (error) {
+                debugLog(error, 'analytics-scroll');
+            }
+        });
+    }
     function renderAnalytics() {
         const page = state.analyticsPage;
         if (!page) return;
-        state.analyticsSignature = `${historyStorageGet(ANALYTICS_KEY) || '[]'}|${historyStorageGet(RESUME_KEY) || '{}'}`;
+        state.analyticsSignature = analyticsStamp();
         const range = state.analyticsRange;
+        let scrollTop = 0;
+        try {
+            scrollTop = page.scrollTop || 0;
+        } catch (error) {
+            debugLog(error, 'analytics-scroll-read');
+        }
         const data = aggregateAnalytics(range);
         const main = page.querySelector('.av-cockpit-main');
         if (main) main.replaceWith(buildAnalyticsBody(data, range));
+        restoreAnalyticsScroll(page, scrollTop);
         for (const tab of page.querySelectorAll('.av-range-tab')) {
             const active = tab.dataset.range === range;
             tab.classList.toggle('active', active);
@@ -11716,9 +11999,7 @@
     }
     function syncCockpit() {
         if (!state.analyticsPage || isPageHidden()) return;
-        const recordsRaw = historyStorageGet(ANALYTICS_KEY) || '[]';
-        const resumeRaw = historyStorageGet(RESUME_KEY) || '{}';
-        if (`${recordsRaw}|${resumeRaw}` === state.analyticsSignature) return;
+        if (analyticsStamp() === state.analyticsSignature) return;
         state.analyticsRecords = null;
         resumeCache = null;
         bumpAnalyticsVersion();
@@ -11773,7 +12054,8 @@
         }
         try {
             history.replaceState(null, '', target.href);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         location.reload();
     }
@@ -11832,16 +12114,19 @@
                 GM_openInTab(target, { active: true, insert: true });
                 return;
             }
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             const opened = window.open(target, '_blank');
             if (opened) return;
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
         try {
             location.assign(target);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error);
         }
     }
     const ANALYTICS_TITLE = '观影行为数据 — 增强助手';
@@ -11885,7 +12170,8 @@
             cockpitPinGuard = location.href;
             try {
                 if (typeof history.replaceState === 'function') history.replaceState(null, '', analyticsUrl());
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         const live = document.querySelector('.av-analytics-page');
@@ -11900,7 +12186,8 @@
                 if (media.paused && media.muted) continue;
                 media.pause();
                 media.muted = true;
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
     }
@@ -11995,7 +12282,8 @@
         if (!/^#av-analytics\b/.test(location.hash)) {
             try {
                 if (typeof history.replaceState === 'function') history.replaceState(null, '', analyticsUrl());
-            } catch (_) {
+            } catch (error) {
+                debugLog(error);
             }
         }
         const boot = () => {
