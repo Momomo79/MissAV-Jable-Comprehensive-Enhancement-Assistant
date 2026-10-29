@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      13.24
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      14.03
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -39,6 +39,8 @@
 // @connect      javdb.com
 // @connect      api.allorigins.win
 // @connect      api.codetabs.com
+// @connect      whos.tv
+// @connect      f.hersav.me
 // @connect      jable.tv
 // @connect      www.jable.tv
 // @connect      missav.ai
@@ -231,6 +233,7 @@
     const MIN_PLAYER_WIDTH = AV_PLATFORM.isMobile ? playerMinMetrics().width : 480;
     const MIN_PLAYER_HEIGHT = AV_PLATFORM.isMobile ? playerMinMetrics().height : 260;
     const QUICK_BOTTOM_OFFSET = 90;
+    const QUICK_POS_KEY = 'quickPos';
     const QUICK_PORTAL_ID = 'av-helper-quick-portal';
     const QUICK_DOCK_WRAPPER = [
         '.plyr__video-wrapper', '.plyr', '.video-js', '.vjs-tech', '.artplayer', '.dplayer', '.jwplayer',
@@ -280,12 +283,17 @@
     const JC_ENDPOINT = 'https://www.javlibrary.com/cn/vl_searchbyid.php?keyword=';
     const JB_ENDPOINT = 'https://www.javbus.com/';
     const JD_SEARCH = 'https://javdb.com/search?q=';
-    const JAVDB_ICON_URL = 'https://javdb580.com/favicon-32x32.png';
     const JAVBUS_ICON_DATA = 'data:image/x-icon;base64,AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAABILAAASCwAAAAAAAAAAAAAAAMxWAADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMxWAADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADL/wAAzP8BAcz/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/BATN/0VF2v+Jief/kZHp/15e3/8PD8//AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADL/0hI2v/q6vv//Pz+//b2/f/6+v7/iIjn/wUFzf8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wEBzP+YmOr//////4uL6P9LS9v/4eH5/9zc+P8dHdL/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8CAsz/Skrb/39/5v8oKNT/DAzO/7+/8v/t7fv/Li7V/wAAy/8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAy/8AAMz/AADM/w0Nz/++vvL/7e38/zAw1v8AAMv/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8NDc//vr7y/+3t+/8wMNb/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/DQ3P/76+8v/t7fv/MDDW/wAAy/8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/w0Nz/++vvL/7e37/zAw1v8AAMv/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8NDc//urrx/+jo+v8vL9X/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/BATN/0BA2f9QUNz/EBDP/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMv/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMxWAADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMxWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
     const AUTO_QUALITY_KEY = 'autoMaxQuality';
-    const AUTO_QUALITY_ATTEMPTS = 20;
+    const AUTO_QUALITY_ATTEMPTS = 12;
     const AUTO_QUALITY_INTERVAL = 300;
     const AUTO_QUALITY_EVENTS = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'];
+    const WHOS_BASE = 'https://whos.tv/videos/';
+    const WHOS_FRAMES_KEY = 'whosFrames_v1';
+    const WHOS_FRAMES_LIMIT = 120;
+    const WHOS_FETCH_TIMEOUT = 7000;
+    const WHOS_SEARCH = 'https://whos.tv/result?search=';
+    const FRAME_TICK_HIT = 7;
     const IMAGE_EXT_RE = /\.(?:jpe?g|png|webp)(?:$|[?#])/i;
     const NOW_PRINTING_RE = /\/now_printing(?:\/|\.|$)/i;
     const COMMENT_BLOCK_RE = /<div[^>]+class=["'][^"']*(?:comment-content|comment-body|bubble-content)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
@@ -355,6 +363,19 @@
         'iframe[src*="hilltopads" i]',
         'iframe[src*="clickadu" i]',
         'ins[data-ad-slot]',
+        'div.plyr__ads',
+        '[class*="plyr__ad"]',
+        'iframe[src*="imasdk.googleapis.com" i]',
+        'iframe[src*="labadena" i]',
+        'iframe[src*="adxadserv" i]',
+        'iframe[src*="api/spots" i]',
+        'iframe[src*="spotid=" i]',
+        'iframe[src*="greentrafsa" i]',
+        'iframe[src*="fluxtrck" i]',
+        'iframe[src*="javhd-trk" i]',
+        'iframe[src*="magsrv" i]',
+        'iframe[src*="rallytrck" i]',
+        'a.text-sponsor',
     ].join(',');
     const PLAY_ENTRY_SELECTORS = ACTIVE_SELECTORS.playEntry.slice();
     const clamp = (value, min, max) => (value < min ? min : value > max ? max : value);
@@ -1318,6 +1339,38 @@
         if (!container) return false;
         return element === container || element.contains(container) || container.contains(element);
     }
+    function hideAdNode(element) {
+        if (!element || !element.style) return;
+        if (element.style.getPropertyValue('display') === 'none') return;
+        element.style.setProperty('display', 'none', 'important');
+    }
+    const LIVE_WIDGET_SEL = '[class*="playerThumbWrapper"], [class*="layoutWrapper"], [class*="modelWrapper"]';
+    const LIVE_WIDGET_ROOT_SEL = '[class*="slideAnimation"], [class*="rootContent"], [class*="bottomRight"]';
+    function pruneLiveWidgets() {
+        for (const element of document.querySelectorAll(LIVE_WIDGET_SEL)) {
+            if (isProtectedNode(element)) continue;
+            const root = (element.closest && element.closest(LIVE_WIDGET_ROOT_SEL)) || element;
+            if (isProtectedNode(root)) continue;
+            hideAdNode(root);
+        }
+    }
+    const PROMO_HREF_RE = /(?:bit\.ly|mycomic\.com|myavlive\.com|mayzaent\.com|fluxtrck\.|javhd-trk\.|zline0\.com|theporndude\.com|141jj\.com|huu29\.com|fuu78\.com|greentrafsa\.com|snaptrckr\.|labadena\.com|adxadserv\.com)/i;
+    const PROMO_BOX_SEL = 'li, div.py-1, h6, div.text-center, p, dt, dd';
+    function prunePromoLinks() {
+        for (const link of document.querySelectorAll('a[href]')) {
+            const href = link.getAttribute('href') || '';
+            if (!href || href.charAt(0) === '#') continue;
+            if (!PROMO_HREF_RE.test(href)) continue;
+            if (isProtectedNode(link)) continue;
+            if (link.closest('.plyr, .av-info-section, .av-panel, .av-cockpit, .av-quick')) continue;
+            const box = link.closest && link.closest(PROMO_BOX_SEL);
+            const label = (link.textContent || '').trim();
+            const boxText = box ? (box.textContent || '').trim() : '';
+            const target = box && boxText.length <= label.length + 12 ? box : link;
+            if (isProtectedNode(target)) continue;
+            hideAdNode(target);
+        }
+    }
     function cleanAds() {
         patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
         patchAllIframeWindows();
@@ -1326,11 +1379,13 @@
             if (element.tagName === 'IFRAME') {
                 if (isProtectedFrame(element)) continue;
                 element.remove();
-            } else if (element.style.display !== 'none') {
-                element.style.display = 'none';
+            } else {
+                hideAdNode(element);
             }
         }
         sweepFloatingAds();
+        pruneLiveWidgets();
+        prunePromoLinks();
     }
     function sweepAdNodes(root) {
         if (!root || root.nodeType !== 1) return;
@@ -1339,8 +1394,8 @@
             if (element.tagName === 'IFRAME') {
                 if (isProtectedFrame(element)) continue;
                 element.remove();
-            } else if (element.style.display !== 'none') {
-                element.style.display = 'none';
+            } else {
+                hideAdNode(element);
             }
         }
         if (isProtectedNode(root)) return;
@@ -1348,7 +1403,7 @@
             if (!isProtectedFrame(root)) root.remove();
             return;
         }
-        if (root.matches && root.matches(AD_SELECTORS) && root.style.display !== 'none') root.style.display = 'none';
+        if (root.matches && root.matches(AD_SELECTORS)) hideAdNode(root);
     }
     const AD_SIGNATURE_RE = /(?:^|[\s_-])(?:ad|ads|adv|advert|adserver|popup|popunder|sponsor|traffic|campaign)/i;
     const AD_SAFE_CLOSEST = '.plyr, .av-info-section, .av-panel, .av-quick, .av-cockpit, .av-ext-links, .av-hub-tabs';
@@ -1420,10 +1475,18 @@
             if (patchFrames) patchAllIframeWindows(true);
             for (const node of nodes) sweepAdNodes(node);
             sweepFloatingAds();
+            pruneLiveWidgets();
+            prunePromoLinks();
             if (!state.bound) initPlayer();
         }, MUTATION_THROTTLE);
         state.adObserver = new MutationObserver(records => {
             for (const record of records) {
+                if (record.type === 'attributes') {
+                    if (record.target && record.target.tagName === 'A') {
+                        pending.push(record.target);
+                    }
+                    continue;
+                }
                 for (const node of record.addedNodes) {
                     if (node.nodeType !== 1) continue;
                     pending.push(node);
@@ -1432,7 +1495,7 @@
             }
             if (pending.length) sweep();
         });
-        trackObserver(state.adObserver, document.body, { childList: true, subtree: true });
+        trackObserver(state.adObserver, document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
     }
     const LOG_LIMIT = 80;
     const pageLifecycle = [];
@@ -1653,6 +1716,10 @@
         .log-entry { display: flex; align-items: flex-start; word-break: break-all; flex: 0 0 auto; }
         .log-time { color: #94a3b8; margin-right: 6px; font-family: ui-monospace,Consolas,monospace; flex-shrink: 0; }
         .custom-quick-controls { position: fixed !important; left: 50% !important; right: auto !important; top: auto !important; bottom: ${QUICK_BOTTOM_OFFSET}px !important; transform: translateX(-50%) scale(var(--quick-scale, 1)) !important; transform-origin: center center; z-index: 2147483647 !important; isolation: isolate; display: flex; flex-wrap: nowrap; align-items: center; justify-content: center; gap: 4px; width: max-content !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 6px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(14,17,24,.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 16px rgba(0,0,0,.28); white-space: nowrap; max-width: calc(100% - 16px) !important; opacity: 0; visibility: hidden; pointer-events: none; transition: none !important; box-sizing: border-box !important; user-select: none; }
+        .quick-grip { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 28px; flex: 0 0 auto; color: rgba(226,232,240,.55); font-size: 13px; line-height: 1; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 6px; }
+        .quick-grip:hover { color: rgba(226,232,240,.92); background: rgba(148,163,184,.16); }
+        .custom-quick-controls.quick-dragging .quick-grip { cursor: grabbing; color: rgba(226,232,240,.95); }
+        .custom-quick-controls.quick-docked .quick-grip { display: none; }
         #av-helper-quick-portal { position: fixed !important; inset: 0 !important; width: 0 !important; height: 0 !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; overflow: visible !important; pointer-events: none !important; z-index: 2147483647 !important; }
         .custom-quick-controls.quick-visible { opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; }
         .custom-quick-controls .quick-btn { position: relative; z-index: 1; pointer-events: auto !important; }
@@ -1817,6 +1884,21 @@
         .av-ext-link:hover { opacity: 1; transform: translateY(-1px); }
         .av-ext-link.is-text { width: auto; padding: 0 4px; font-size: 9px; font-weight: 700; letter-spacing: .3px; line-height: 1; color: #d8c4ff; background: rgba(139,92,246,.26); border: 1px solid rgba(139,92,246,.5); }
         .av-ext-link.is-busy { opacity: .5; }
+        .av-frame-marks { position: absolute; left: 0; width: 100%; height: 14px; pointer-events: none; z-index: 3; }
+        .av-frame-ticks { position: absolute; inset: 0; pointer-events: none; }
+        .av-frame-tick { position: absolute; top: 0; width: 13px; height: 100%; margin: 0 0 0 -6.5px; padding: 0; border: 0; background: transparent; pointer-events: auto; cursor: pointer; }
+        .av-frame-tick::before { content: ''; position: absolute; top: 4px; left: 50%; width: 3px; height: calc(100% - 8px); margin-left: -1.5px; border-radius: 1px; background: #f59e0b; box-shadow: 0 0 0 1px rgba(2, 6, 23, .55); transition: background .12s ease, transform .12s ease; }
+        .av-frame-tick:hover::before, .av-frame-tick:focus-visible::before { background: #fbbf24; transform: scaleY(1.7); }
+        .av-frame-tick:focus-visible { outline: none; }
+        .av-frame-tip { position: absolute; bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 3px; opacity: 0; transform: translateX(-50%); transition: opacity .12s ease; pointer-events: none; z-index: 4; }
+        .av-frame-marks.is-on .av-frame-tip { opacity: 1; }
+        .av-frame-img { display: block; width: 160px; height: 90px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(148, 163, 184, .55); background: #0f172a; box-shadow: 0 6px 18px rgba(2, 6, 23, .55); }
+        .av-frame-time { padding: 1px 6px; border-radius: 4px; background: rgba(2, 6, 23, .86); color: #e2e8f0; font-size: 10px; line-height: 1.4; white-space: nowrap; }
+        @media (max-width: 480px) {
+            .av-frame-img { width: 118px; height: 66px; }
+            .av-frame-tick { width: 15px; margin-left: -7.5px; }
+            .av-frame-tick::before { width: 2px; margin-left: -1px; }
+        }
         .av-page-ext { display: inline-flex; margin: 2px 0 0 2px; }
         .av-info-chevron { flex: 0 0 6px; width: 6px; height: 6px; border-right: 1.5px solid #94a3b8; border-bottom: 1.5px solid #94a3b8; transform: rotate(45deg); transition: transform .15s; }
         .av-info-section.open .av-info-chevron { transform: rotate(225deg); }
@@ -3343,7 +3425,6 @@
         return box.bottom - QUICK_BOTTOM_OFFSET;
     }
     function quickDockParent() {
-        if (!AV_PLATFORM.isMobile) return null;
         if (quickFullscreenRoot()) return null;
         const video = state.video;
         const container = state.container?.isConnected ? state.container : video ? playerContainer(video) : null;
@@ -3364,6 +3445,7 @@
     function releaseQuickDock() {
         const quick = state.quick;
         if (!quick?.classList.contains('quick-docked')) return;
+        restoreDockPadding();
         quick.classList.remove('quick-docked');
         quick.classList.add('quick-visible');
         setImportantStyle(quick, {
@@ -3420,6 +3502,29 @@
             quick.classList.add(level);
         }
     }
+    function clearDockPadding(host) {
+        const record = [];
+        let node = host;
+        for (let depth = 0; depth < 4 && node && node !== document.body && node !== document.documentElement; depth += 1) {
+            const pad = Number.parseFloat(getComputedStyle(node).paddingBottom) || 0;
+            if (pad > 0) {
+                record.push([node, node.style.getPropertyValue('padding-bottom'), node.style.getPropertyPriority('padding-bottom')]);
+                node.style.setProperty('padding-bottom', '0px', 'important');
+            }
+            node = node.parentElement;
+        }
+        return record;
+    }
+    function restoreDockPadding() {
+        const record = state.dockPadRestore;
+        state.dockPadRestore = null;
+        if (!Array.isArray(record)) return;
+        for (const [node, value, priority] of record) {
+            if (!node || !node.style) continue;
+            if (value) node.style.setProperty('padding-bottom', value, priority);
+            else node.style.removeProperty('padding-bottom');
+        }
+    }
     function dockQuickControls(target) {
         const quick = state.quick;
         if (!quick || !target?.host?.isConnected || !target.after?.isConnected) return false;
@@ -3432,23 +3537,27 @@
         const hostRect = target.host.getBoundingClientRect();
         const hostW = Math.round(hostRect.width) || viewW;
         const dockWidth = Math.max(160, Math.min(hostW, viewW) - 16);
+        const desktopDock = !AV_PLATFORM.isMobile;
         if (quick.parentNode !== target.host || quick.previousElementSibling !== target.after) {
             target.host.insertBefore(quick, target.after.nextSibling);
         }
+        const dockGap = desktopDock ? 10 : 8;
+        restoreDockPadding();
+        state.dockPadRestore = clearDockPadding(target.host);
         setImportantStyle(quick, {
             position: 'static',
             left: 'auto',
             top: 'auto',
             right: 'auto',
             bottom: 'auto',
-            margin: '8px auto 0',
+            margin: `${dockGap}px auto`,
             transform: 'none',
-            width: `${dockWidth}px`,
+            width: desktopDock ? 'fit-content' : `${dockWidth}px`,
             height: 'auto',
             'min-height': '0',
             'min-width': '0',
             'max-width': `${dockWidth}px`,
-            contain: 'inline-size',
+            contain: desktopDock ? 'none' : 'inline-size',
             'box-sizing': 'border-box',
             'z-index': 'auto',
             transition: 'none',
@@ -3457,7 +3566,7 @@
             'pointer-events': 'auto'
         });
         invalidateQuickRects();
-        autoNarrowQuick(quick, () => quickContentWidth(quick));
+        if (!desktopDock) autoNarrowQuick(quick, () => quickContentWidth(quick));
         state.quickScale = '1';
         setImportantStyle(quick, { '--quick-scale': '1' });
         fitLoopMenu();
@@ -3479,11 +3588,12 @@
         if (!player) return;
         const box = player.getBoundingClientRect?.();
         if (!box || box.width <= 0 || box.height <= 0) return;
+        const center = quickTargetCenter(box);
         pinQuickElement(
             quick,
             portal,
-            box.left + box.width / 2,
-            quickBarCenterY(box),
+            center.x,
+            center.y,
             'translate(-50%, -50%) scale(var(--quick-scale, 1))'
         );
         const mobileWrap = AV_PLATFORM.isMobile;
@@ -3520,12 +3630,48 @@
             state.quickScale = scale;
             setImportantStyle(quick, { '--quick-scale': scale });
         }
-        clampQuickIntoViewport(box);
+        clampQuickIntoViewport();
         fitLoopMenu();
     }
-    function clampQuickIntoViewport(box) {
+    let quickPosLoaded = false;
+    function ensureQuickPosLoaded() {
+        if (quickPosLoaded) return;
+        quickPosLoaded = true;
+        const raw = store.get(QUICK_POS_KEY);
+        if (!raw) return;
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || !Number.isFinite(parsed.rx) || !Number.isFinite(parsed.ry)) return;
+            state.quickPos = { rx: clamp(parsed.rx, 0, 1), ry: clamp(parsed.ry, 0, 1) };
+        } catch (error) {
+            debugLog(error, 'quick-pos-load');
+        }
+    }
+    function persistQuickPos(x, y) {
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (!(vw > 0 && vh > 0)) return;
+        state.quickPos = { rx: clamp(x / vw, 0, 1), ry: clamp(y / vh, 0, 1) };
+        store.set(QUICK_POS_KEY, JSON.stringify(state.quickPos));
+    }
+    function resetQuickPos() {
+        state.quickPos = null;
+        store.set(QUICK_POS_KEY, '');
+        fitQuickControls();
+        log('↩️ 快捷条位置已复位');
+    }
+    function quickTargetCenter(box) {
+        ensureQuickPosLoaded();
+        if (state.quickPos) {
+            const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+            const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+            if (vw > 0 && vh > 0) return { x: state.quickPos.rx * vw, y: state.quickPos.ry * vh };
+        }
+        return { x: box.left + box.width / 2, y: quickBarCenterY(box) };
+    }
+    function clampQuickIntoViewport() {
         const quick = state.quick;
-        if (!quick || !AV_PLATFORM.isMobile) return;
+        if (!quick) return;
         const rect = quick.getBoundingClientRect?.();
         if (!rect || rect.width <= 0 || rect.height <= 0) return;
         const vw = window.innerWidth || document.documentElement.clientWidth || 0;
@@ -3535,15 +3681,78 @@
         const padY = 8;
         const halfW = rect.width / 2;
         const halfH = rect.height / 2;
-        const desiredX = box.left + box.width / 2;
-        const desiredY = quickBarCenterY(box);
         const minX = halfW + padX;
         const maxX = vw - halfW - padX;
         const minY = halfH + padY;
         const maxY = vh - halfH - padY;
-        const x = maxX > minX ? Math.min(Math.max(desiredX, minX), maxX) : vw / 2;
-        const y = maxY > minY ? Math.min(Math.max(desiredY, minY), maxY) : vh / 2;
+        const currentX = rect.left + halfW;
+        const currentY = rect.top + halfH;
+        const x = maxX > minX ? clamp(currentX, minX, maxX) : vw / 2;
+        const y = maxY > minY ? clamp(currentY, minY, maxY) : vh / 2;
+        if (Math.abs(x - currentX) < 0.5 && Math.abs(y - currentY) < 0.5) return;
         setImportantStyle(quick, { left: `${Math.round(x)}px`, top: `${Math.round(y)}px` });
+        if (state.quickPos) persistQuickPos(x, y);
+    }
+    function setupQuickDrag(quick, grip) {
+        if (!quick || !grip || grip.dataset.avDragBound === '1') return;
+        grip.dataset.avDragBound = '1';
+        let drag = null;
+        const onDown = event => {
+            if (quick.classList.contains('quick-docked')) return;
+            if (event.pointerType === 'mouse' && event.button !== 0) return;
+            const rect = quick.getBoundingClientRect();
+            if (!rect.width) return;
+            drag = {
+                pointerId: event.pointerId,
+                offsetX: event.clientX - (rect.left + rect.width / 2),
+                offsetY: event.clientY - (rect.top + rect.height / 2)
+            };
+            quick.classList.add('quick-dragging');
+            if (event.pointerType === 'mouse') {
+                try {
+                    grip.setPointerCapture(event.pointerId);
+                } catch (error) {
+                    debugLog(error, 'quick-drag-capture');
+                }
+            }
+            event.preventDefault();
+            event.stopPropagation();
+        };
+        const onMove = event => {
+            if (!drag || event.pointerId !== drag.pointerId) return;
+            const rect = quick.getBoundingClientRect();
+            const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+            const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+            if (!(vw > 0 && vh > 0) || !rect.width) return;
+            const padX = 6;
+            const padY = 8;
+            const minX = rect.width / 2 + padX;
+            const maxX = vw - rect.width / 2 - padX;
+            const minY = rect.height / 2 + padY;
+            const maxY = vh - rect.height / 2 - padY;
+            const x = maxX > minX ? clamp(event.clientX - drag.offsetX, minX, maxX) : vw / 2;
+            const y = maxY > minY ? clamp(event.clientY - drag.offsetY, minY, maxY) : vh / 2;
+            setImportantStyle(quick, { left: `${Math.round(x)}px`, top: `${Math.round(y)}px` });
+            if (event.cancelable) event.preventDefault();
+        };
+        const onUp = event => {
+            if (!drag) return;
+            if (event && event.pointerId !== undefined && event.pointerId !== drag.pointerId) return;
+            drag = null;
+            quick.classList.remove('quick-dragging');
+            const rect = quick.getBoundingClientRect();
+            if (rect.width) persistQuickPos(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            invalidateQuickRects();
+        };
+        grip.addEventListener('pointerdown', onDown, { passive: false });
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', onUp, { passive: true });
+        window.addEventListener('pointercancel', onUp, { passive: true });
+        grip.addEventListener('dblclick', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            resetQuickPos();
+        });
     }
     function fitQuickMenu(menu, anchorButton) {
         const quick = state.quick;
@@ -3920,7 +4129,13 @@
         }
         addMoreOption(`${pipSupported(state.video) ? '退出' : '进入'}画中画`, () => togglePictureInPicture());
         addMoreOption('区段循环…', () => toggleLoopMenu());
-        quick.append(leftGroup, midGroup, rightGroup);
+        const grip = document.createElement('span');
+        grip.className = 'quick-grip';
+        grip.textContent = '⠿';
+        grip.title = '拖动调整位置（双击复位）';
+        grip.setAttribute('aria-hidden', 'true');
+        quick.append(grip, leftGroup, midGroup, rightGroup);
+        setupQuickDrag(quick, grip);
         container.appendChild(quick);
         container.appendChild(state.loopMenu);
         container.appendChild(state.moreMenu);
@@ -5120,11 +5335,9 @@
         row.append(buttons, box);
         state.audioGainBtn = gainBtn;
         state.audioGainLabel = gainLabel;
-        state.audioCaret = caret;
         state.audioSliderWrap = box;
         state.audioSlider = slider;
         state.audioSliderValue = sliderValue;
-        state.audioRouteBtn = routeBtn;
         state.audioStateEl = stateLine;
         box.classList.toggle('av-collapsed', !settings.audioSliderOpen);
         audioPaintPanel();
@@ -6962,7 +7175,7 @@
         }
     }
     const INFO_ANCHOR_SELECTORS = ACTIVE_SELECTORS.infoAnchor.slice();
-    function infoAnchor() {
+    function computeInfoAnchor() {
         const code = getPageVideoCode();
         const candidates = [];
         const seen = new Set();
@@ -6987,6 +7200,16 @@
             if (withCode) return withCode;
         }
         return usable[0];
+    }
+    let infoAnchorAt = 0;
+    let infoAnchorEl = null;
+    function infoAnchor() {
+        const now = Date.now();
+        if (infoAnchorEl && infoAnchorEl.isConnected && now - infoAnchorAt < 400) return infoAnchorEl;
+        const result = computeInfoAnchor();
+        infoAnchorAt = now;
+        infoAnchorEl = result;
+        return result;
     }
     const HUB_TABS = [['stills', '官方剧照'], ['reviews', '社区短评'], ['lists', '精选影单']];
     const HUB_EMPTY = {
@@ -7925,17 +8148,32 @@
     function initPlayer() {
         if (state.bound || state.pollTimer) return;
         if (!findMainVideo()) createPanel();
-        state.pollTimer = trackInterval(setInterval(() => {
+        const deadline = Date.now() + POLL_TIMEOUT;
+        let attempt = 0;
+        const pollTick = () => {
+            state.pollTimer = 0;
+            if (state.bound) return;
             const video = findMainVideo();
-            if (!video) return;
-            const container = playerContainer(video);
-            if (!container) return;
-            stopPlayerPoll();
-            bindPlayer(video, container);
-        }, POLL_INTERVAL));
-        state.pollTimeout = trackTimeout(setTimeout(stopPlayerPoll, POLL_TIMEOUT));
+            if (video) {
+                const container = playerContainer(video);
+                if (container) {
+                    stopPlayerPoll();
+                    bindPlayer(video, container);
+                    return;
+                }
+            }
+            if (Date.now() >= deadline) return;
+            attempt += 1;
+            const delay = clamp(Math.round(POLL_INTERVAL * Math.pow(1.45, Math.min(attempt, 7))), POLL_INTERVAL, 1600);
+            state.pollTimer = trackTimeout(setTimeout(pollTick, delay));
+        };
+        state.pollTimer = trackTimeout(setTimeout(pollTick, POLL_INTERVAL));
     }
+    let sweepOrphanAt = 0;
     function sweepUiOrphans(container) {
+        const sweepNow = Date.now();
+        if (sweepNow - sweepOrphanAt < 800) return;
+        sweepOrphanAt = sweepNow;
         for (const selector of ['.custom-subtitle', '.speed-hud-host', '.tap-hud-host', '.custom-quick-controls']) {
             for (const node of document.querySelectorAll(selector)) {
                 if (container.contains(node)) continue;
@@ -7990,6 +8228,7 @@
         setupWakeLock(video);
         setupMediaSession(video);
         setupAutoMaxQuality(video);
+        setupFramePreview(video);
         ensurePageExternalLinks();
         setupResumePlayback(video, container);
         setupAudioControl(video);
@@ -8085,6 +8324,7 @@
         }
         .av-fb-chip {
             display: inline-flex;
+            flex: 0 0 auto;
             align-items: center;
             gap: 5px;
             height: 30px;
@@ -8110,7 +8350,7 @@
         .av-fb-chip.is-on { background: rgba(56, 189, 248, .3); border-color: rgba(56, 189, 248, .55); color: #fff; }
         .av-fb-chip.is-on .av-svg svg { stroke: #fff; }
         .av-fb-chip.av-fb-cockpit { background: rgba(16, 185, 129, .22); border-color: rgba(16, 185, 129, .45); }
-        .av-fb-chip.av-fb-stat { color: #ff7c96; background: rgba(255, 90, 120, .12); border-color: rgba(255, 90, 120, .28); cursor: default; gap: 4px; padding: 0 8px; }
+        .av-fb-chip.av-fb-stat { color: #ff7c96; background: rgba(255, 90, 120, .12); border-color: rgba(255, 90, 120, .28); cursor: default; gap: 5px; padding: 0 9px; }
         .av-fb-chip.av-fb-stat:hover { background: rgba(255, 90, 120, .12); border-color: rgba(255, 90, 120, .28); }
         .av-fb-chip.av-fb-stat[hidden] { display: none; }
         .av-fb-chip.av-fb-hide { padding: 4px 7px; opacity: .6; }
@@ -8127,11 +8367,13 @@
             border: none;
             background: none;
             cursor: pointer;
+            color-scheme: dark;
         }
         .av-fb-select:disabled { cursor: not-allowed; }
+        .av-fb-select option { color: #d8dee9; background-color: #1b1b21; font-size: 13px; }
         .av-fb-arrow svg { width: 9px; height: 9px; stroke-width: 1.5; }
-        .av-fb-count { font-variant-numeric: tabular-nums; font-weight: 700; }
-        .av-fb-stat-label { opacity: .85; font-size: 11px; }
+        .av-fb-count { flex: 0 0 auto; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; line-height: 1; letter-spacing: -.2px; }
+        .av-fb-stat-label { flex: 0 0 auto; opacity: .78; font-size: 11px; line-height: 1; letter-spacing: .4px; }
         .av-fb-fab { position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: #50e3c2; box-shadow: 0 0 5px #50e3c2; }
         .av-fb-fab[hidden] { display: none; }
         .av-filter-bar .av-fb-blacklist { position: relative; }
@@ -10288,7 +10530,6 @@
         const wrap = document.createElement('div');
         wrap.className = 'av-mobile-panel av-filter-panel av-collapse';
         setCollapsed(wrap, !settings.mobilePanelOpen);
-        state.mobilePanel = wrap;
         const strip = document.createElement('div');
         strip.className = 'av-filter-strip';
         strip.append(
@@ -11336,6 +11577,8 @@
         }
         return false;
     }
+    let qualityDomAt = 0;
+    let qualityDomCache = [];
     function availableQualities(root = document) {
         const scope = playerScope();
         const set = new Set();
@@ -11348,9 +11591,17 @@
         if (hls && Array.isArray(hls.levels)) {
             for (const level of hls.levels) if (level && typeof level.height === 'number' && level.height > 0) set.add(level.height);
         }
-        for (const button of root.querySelectorAll('button[data-plyr="quality"]')) {
-            const value = Number(button.value);
-            if (!Number.isNaN(value) && value > 0) set.add(value);
+        if (!set.size) {
+            const now = Date.now();
+            if (!qualityDomAt || now - qualityDomAt > 600) {
+                qualityDomAt = now;
+                qualityDomCache = [];
+                for (const button of root.querySelectorAll('button[data-plyr="quality"]')) {
+                    const value = Number(button.value);
+                    if (!Number.isNaN(value) && value > 0) qualityDomCache.push(value);
+                }
+            }
+            for (const value of qualityDomCache) set.add(value);
         }
         const list = Array.from(set).sort((a, b) => b - a);
         return { highest: list.length ? list[0] : null, list };
@@ -11396,6 +11647,341 @@
             if (!video.dataset.avQualityApplied) tryApply();
         };
         for (const type of AUTO_QUALITY_EVENTS) video.addEventListener(type, onReady, { passive: true });
+    }
+    let whosFrameMemo = null;
+    const whosFrameInflight = new Map();
+    function framesPreviewEnabled() {
+        return store.get('whosFrames') !== '0';
+    }
+    function loadWhosFrameCache() {
+        if (whosFrameMemo) return whosFrameMemo;
+        whosFrameMemo = new Map();
+        try {
+            const raw = store.get(WHOS_FRAMES_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    for (const key of Object.keys(parsed)) {
+                        const value = parsed[key];
+                        if (!value || !Array.isArray(value.frames) || !value.frames.length) continue;
+                        whosFrameMemo.set(key.toLowerCase(), value);
+                    }
+                }
+            }
+        } catch (error) {
+            debugLog(error, 'whos-cache');
+        }
+        return whosFrameMemo;
+    }
+    function saveWhosFrameCache() {
+        if (!whosFrameMemo) return;
+        const entries = Array.from(whosFrameMemo.entries()).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, WHOS_FRAMES_LIMIT);
+        whosFrameMemo = new Map(entries);
+        const out = {};
+        for (const entry of entries) out[entry[0]] = entry[1];
+        try {
+            store.set(WHOS_FRAMES_KEY, JSON.stringify(out));
+        } catch (error) {
+            debugLog(error, 'whos-cache-save');
+        }
+    }
+    function parseWhosFrames(html) {
+        if (!html) return [];
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(html, 'text/html');
+        } catch (error) {
+            debugLog(error, 'whos-parse');
+            return [];
+        }
+        const out = [];
+        const seen = new Set();
+        for (const card of doc.querySelectorAll('a.frame-card[data-frame-time]')) {
+            const time = Number(card.getAttribute('data-frame-time'));
+            const img = card.querySelector('img');
+            const src = img ? img.getAttribute('src') || img.getAttribute('data-src') || '' : '';
+            if (!Number.isFinite(time) || time < 0) continue;
+            if (!/^https:\/\//.test(src)) continue;
+            if (seen.has(time)) continue;
+            seen.add(time);
+            out.push({ t: Math.round(time), src, id: card.getAttribute('data-frame-id') || '' });
+        }
+        out.sort((a, b) => a.t - b.t);
+        return out;
+    }
+    function parseWhosFirstVideo(html) {
+        if (!html) return '';
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(html, 'text/html');
+        } catch (error) {
+            debugLog(error, 'whos-search');
+            return '';
+        }
+        for (const link of doc.querySelectorAll('a[href*="/videos/"]')) {
+            const href = link.getAttribute('href') || '';
+            if (!href) continue;
+            try {
+                const url = new URL(href, 'https://whos.tv/');
+                if (url.hostname !== 'whos.tv') continue;
+                const matched = url.pathname.match(/^\/videos\/([a-zA-Z0-9_-]+)\/?$/);
+                if (!matched) continue;
+                return `${WHOS_BASE}${matched[1]}`;
+            } catch (error) {
+                debugLog(error, 'whos-search-link');
+            }
+        }
+        return '';
+    }
+    function fetchWhosFrames(code) {
+        const norm = normalizeVideoCode(code);
+        if (!norm) return Promise.resolve([]);
+        const key = norm.toLowerCase();
+        if (whosFrameInflight.has(key)) return whosFrameInflight.get(key);
+        const cache = loadWhosFrameCache();
+        const hit = cache.get(key);
+        if (hit && Array.isArray(hit.frames) && hit.frames.length) return Promise.resolve(hit.frames);
+        const job = fetchHtml(`${WHOS_BASE}${encodeURIComponent(key)}`, { skipProxy: true, timeout: WHOS_FETCH_TIMEOUT })
+            .then(html => {
+                const direct = parseWhosFrames(html);
+                if (direct.length) return direct;
+                return fetchHtml(`${WHOS_SEARCH}${encodeURIComponent(norm)}`, { skipProxy: true, timeout: WHOS_FETCH_TIMEOUT })
+                    .then(searchHtml => {
+                        const first = parseWhosFirstVideo(searchHtml);
+                        if (!first) return [];
+                        return fetchHtml(first, { skipProxy: true, timeout: WHOS_FETCH_TIMEOUT }).then(parseWhosFrames);
+                    })
+                    .catch(error => {
+                        debugLog(error, 'whos-search-fetch');
+                        return [];
+                    });
+            })
+            .then(frames => {
+                whosFrameInflight.delete(key);
+                if (!frames.length) {
+                    log(`🎞 whos.tv 未找到关键帧 · ${norm}`);
+                    return [];
+                }
+                cache.set(key, { at: Date.now(), frames });
+                saveWhosFrameCache();
+                log(`🎞 whos.tv 关键帧 ${frames.length} 张 · ${norm}`);
+                return frames;
+            })
+            .catch(error => {
+                debugLog(error, 'whos-fetch');
+                whosFrameInflight.delete(key);
+                log(`🎞 whos.tv 关键帧查询失败 · ${norm}`);
+                return [];
+            });
+        whosFrameInflight.set(key, job);
+        return job;
+    }
+    function frameScaleFor(frames, duration) {
+        const last = frames.length ? frames[frames.length - 1].t : 0;
+        if (!(duration > 0) || !last) return 1;
+        return last > duration * 1.05 ? duration / last : 1;
+    }
+    function buildFrameLayer(target) {
+        const host = document.createElement('div');
+        host.className = 'av-frame-marks';
+        const ticks = document.createElement('div');
+        ticks.className = 'av-frame-ticks';
+        const tip = document.createElement('div');
+        tip.className = 'av-frame-tip';
+        const img = document.createElement('img');
+        img.className = 'av-frame-img';
+        img.decoding = 'async';
+        img.alt = '';
+        const label = document.createElement('span');
+        label.className = 'av-frame-time';
+        tip.append(img, label);
+        host.append(ticks, tip);
+        target.append(host);
+        return { host, ticks, tip, img, label };
+    }
+    function installFramePreview(video, frames) {
+        if (!video || !frames || !frames.length) return;
+        const attach = () => {
+            const scope = video.closest('.plyr') || document;
+            const progress = scope.querySelector('.plyr__progress, .plyr__progress__container input[type="range"], input[type="range"]');
+            if (!(progress instanceof HTMLElement) || !progress.isConnected) return false;
+            if (progress.dataset.avFramesReady === '1') return true;
+            progress.dataset.avFramesReady = '1';
+            let layerTarget = progress;
+            if (progress.tagName === 'INPUT') {
+                layerTarget = progress.parentElement;
+                if (!layerTarget) return false;
+            }
+            if (getComputedStyle(layerTarget).position === 'static') layerTarget.style.position = 'relative';
+            const { host, ticks, tip, img, label } = buildFrameLayer(layerTarget);
+            const railOf = () => layerTarget.querySelector('input[type="range"]') || layerTarget;
+            const syncLayer = () => {
+                const rail = railOf();
+                if (!rail || !rail.isConnected) return;
+                const rr = rail.getBoundingClientRect();
+                const cr = layerTarget.getBoundingClientRect();
+                if (!rr.width) return;
+                host.style.left = `${rr.left - cr.left}px`;
+                host.style.width = `${rr.width}px`;
+                host.style.top = `${rr.top - cr.top + (rr.height - 14) / 2}px`;
+            };
+            syncLayer();
+            window.addEventListener('resize', syncLayer, { passive: true });
+            video.addEventListener('loadedmetadata', syncLayer, { passive: true });
+            video.addEventListener('durationchange', syncLayer, { passive: true });
+            const scale = () => frameScaleFor(frames, video.duration || 0);
+            const seekOf = frame => frame.t / scale();
+            const ratioOf = frame => {
+                const duration = video.duration || 0;
+                if (!(duration > 0)) return 0;
+                return clamp(seekOf(frame) / duration, 0, 1);
+            };
+            const renderTicks = () => {
+                ticks.replaceChildren();
+                if (!(video.duration > 0)) return;
+                for (const frame of frames) {
+                    const mark = document.createElement('button');
+                    mark.type = 'button';
+                    mark.className = 'av-frame-tick';
+                    mark.style.left = `${(ratioOf(frame) * 100).toFixed(3)}%`;
+                    mark.dataset.time = String(Number(seekOf(frame).toFixed(2)));
+                    mark.title = formatDuration(Math.round(seekOf(frame)));
+                    mark.setAttribute('aria-label', `跳到 ${formatDuration(Math.round(seekOf(frame)))}`);
+                    ticks.append(mark);
+                }
+            };
+            let hideTimer = 0;
+            const hide = () => {
+                host.classList.remove('is-on');
+            };
+            const scheduleHide = () => {
+                if (hideTimer) clearTimeout(hideTimer);
+                hideTimer = trackTimeout(setTimeout(hide, 1400));
+            };
+            const frameByTime = value => frames.find(frame => String(Number(seekOf(frame).toFixed(2))) === value) || null;
+            const showFrame = frame => {
+                if (!frame) return;
+                const seek = seekOf(frame);
+                if (img.getAttribute('src') !== frame.src) img.setAttribute('src', frame.src);
+                const remain = Math.max(0, (video.duration || 0) - seek);
+                label.textContent = `${formatDuration(Math.round(seek))} · 剩 ${formatDuration(remain)}`;
+                tip.style.left = `${(clamp(ratioOf(frame), 0.08, 0.92) * 100).toFixed(2)}%`;
+                host.classList.add('is-on');
+                if (hideTimer) clearTimeout(hideTimer);
+            };
+            const nearestTick = clientX => {
+                if (!(video.duration > 0)) return null;
+                const box = ticks.getBoundingClientRect();
+                if (!box.width) return null;
+                let best = null;
+                let bestDelta = Infinity;
+                for (const frame of frames) {
+                    const delta = Math.abs(box.left + ratioOf(frame) * box.width - clientX);
+                    if (delta < bestDelta) {
+                        bestDelta = delta;
+                        best = frame;
+                    }
+                }
+                return best && bestDelta <= FRAME_TICK_HIT ? best : null;
+            };
+            const applySeek = input => {
+                const seconds = Number(input);
+                if (!Number.isFinite(seconds)) return;
+                const limit = video.duration > 0 ? Math.max(0, video.duration - 0.1) : seconds;
+                const target = Math.max(0, Math.min(seconds, limit));
+                try {
+                    video.currentTime = target;
+                } catch (error) {
+                    debugLog(error, 'frame-seek');
+                    return;
+                }
+                const settle = () => {
+                    if (!video.isConnected) return;
+                    if (Math.abs(video.currentTime - target) <= 0.4) return;
+                    try {
+                        video.currentTime = target;
+                    } catch (error) {
+                        debugLog(error, 'frame-seek-retry');
+                    }
+                };
+                if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settle);
+            };
+            const onMove = event => {
+                if (event.pointerType === 'touch') return;
+                const frame = nearestTick(event.clientX);
+                if (frame) showFrame(frame);
+                else hide();
+            };
+            const onDown = event => {
+                const hit = event.target instanceof Element ? event.target.closest('.av-frame-tick') : null;
+                if (!hit) return;
+                showFrame(frameByTime(hit.dataset.time));
+            };
+            const onLeave = () => {
+                if (hideTimer) clearTimeout(hideTimer);
+                hide();
+            };
+            let pendingTick = null;
+            let lastSeekStamp = 0;
+            const runTick = target => {
+                if (!target) return;
+                const stamp = Date.now();
+                if (stamp - lastSeekStamp < 180) return;
+                lastSeekStamp = stamp;
+                showFrame(frameByTime(target.dataset.time));
+                applySeek(target.dataset.time);
+            };
+            ticks.addEventListener('pointerdown', event => {
+                const target = event.target instanceof Element ? event.target.closest('.av-frame-tick') : null;
+                pendingTick = target ? { node: target, x: event.clientX, y: event.clientY } : null;
+            }, { passive: true });
+            ticks.addEventListener('pointerup', event => {
+                if (!pendingTick) return;
+                const node = pendingTick.node;
+                const dx = Math.abs(event.clientX - pendingTick.x);
+                const dy = Math.abs(event.clientY - pendingTick.y);
+                pendingTick = null;
+                if (dx > 12 || dy > 12) return;
+                runTick(node);
+                if (event.cancelable) event.preventDefault();
+                event.stopPropagation();
+            });
+            ticks.addEventListener('pointercancel', () => { pendingTick = null; }, { passive: true });
+            ticks.addEventListener('click', event => {
+                const target = event.target instanceof Element ? event.target.closest('.av-frame-tick') : null;
+                if (!target) return;
+                event.preventDefault();
+                event.stopPropagation();
+                runTick(target);
+            });
+            progress.addEventListener('pointermove', onMove, { passive: true });
+            progress.addEventListener('pointerdown', onDown, { passive: true });
+            progress.addEventListener('pointerup', scheduleHide, { passive: true });
+            progress.addEventListener('pointercancel', scheduleHide, { passive: true });
+            progress.addEventListener('pointerleave', onLeave, { passive: true });
+            const onMeta = () => renderTicks();
+            video.addEventListener('loadedmetadata', onMeta, { passive: true });
+            video.addEventListener('durationchange', onMeta, { passive: true });
+            renderTicks();
+            return true;
+        };
+        if (attach()) return;
+        let tries = 0;
+        const timer = trackInterval(setInterval(() => {
+            tries += 1;
+            if (attach() || tries >= 40 || !video.isConnected) clearInterval(timer);
+        }, 250));
+    }
+    function setupFramePreview(video) {
+        if (!video || video.dataset.avFramesBound === '1') return;
+        video.dataset.avFramesBound = '1';
+        if (!framesPreviewEnabled()) return;
+        const code = getPageVideoCode();
+        if (!code) return;
+        fetchWhosFrames(code).then(frames => {
+            if (!frames.length || !video.isConnected) return;
+            installFramePreview(video, frames);
+        });
     }
     function iconSvg(paths, viewBox = '0 0 24 24') {
         const span = document.createElement('span');
