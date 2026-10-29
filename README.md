@@ -152,7 +152,3 @@
 - 「清空已看库」只影响当前站点，不会波及其它站点。
 
 ---
-
-> 脚本通过 `@updateURL` 自动检查更新。若站点改版导致选择器失效，欢迎到 Issues 反馈并附上页面地址与截图。
-
-**项目地址：** <https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant>
