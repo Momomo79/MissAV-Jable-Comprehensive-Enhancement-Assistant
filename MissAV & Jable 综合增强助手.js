@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      13.21
+// @version      13.23
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -280,6 +280,12 @@
     const JC_ENDPOINT = 'https://www.javlibrary.com/cn/vl_searchbyid.php?keyword=';
     const JB_ENDPOINT = 'https://www.javbus.com/';
     const JD_SEARCH = 'https://javdb.com/search?q=';
+    const JAVDB_ICON_URL = 'https://javdb580.com/favicon-32x32.png';
+    const JAVBUS_ICON_DATA = 'data:image/x-icon;base64,AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAABILAAASCwAAAAAAAAAAAAAAAMxWAADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMxWAADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADL/wAAzP8BAcz/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/BATN/0VF2v+Jief/kZHp/15e3/8PD8//AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADL/0hI2v/q6vv//Pz+//b2/f/6+v7/iIjn/wUFzf8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wEBzP+YmOr//////4uL6P9LS9v/4eH5/9zc+P8dHdL/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8CAsz/Skrb/39/5v8oKNT/DAzO/7+/8v/t7fv/Li7V/wAAy/8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAy/8AAMz/AADM/w0Nz/++vvL/7e38/zAw1v8AAMv/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8NDc//vr7y/+3t+/8wMNb/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/DQ3P/76+8v/t7fv/MDDW/wAAy/8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/w0Nz/++vvL/7e37/zAw1v8AAMv/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8NDc//urrx/+jo+v8vL9X/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/BATN/0BA2f9QUNz/EBDP/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMv/AADL/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMxWAADM2wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzP8AAMz/AADM/wAAzNsAAMxWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+    const AUTO_QUALITY_KEY = 'autoMaxQuality';
+    const AUTO_QUALITY_ATTEMPTS = 20;
+    const AUTO_QUALITY_INTERVAL = 300;
+    const AUTO_QUALITY_EVENTS = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'];
     const IMAGE_EXT_RE = /\.(?:jpe?g|png|webp)(?:$|[?#])/i;
     const NOW_PRINTING_RE = /\/now_printing(?:\/|\.|$)/i;
     const COMMENT_BLOCK_RE = /<div[^>]+class=["'][^"']*(?:comment-content|comment-body|bubble-content)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
@@ -1683,8 +1689,11 @@
         .info-rating-badge { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; padding: 2px 8px; border-radius: 9999px; background: rgba(245,158,11,.16); border: 1px solid rgba(245,158,11,.45); color: #fbbf24; font: 600 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; white-space: nowrap; vertical-align: middle; }
         .info-rating-badge small { color: #94a3b8; font-weight: 500; font-size: 10px; }
         .social-badges { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
-        .social-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.1); color: #e2e8f0; font-size: 11px; text-decoration: none; transition: background .15s ease; }
+        .social-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.1); color: #e2e8f0; font-size: 11px; text-decoration: none; overflow: hidden; transition: background .15s ease; }
         .social-badge:hover { background: rgba(96,165,250,.4); }
+        .social-badge img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .social-x img { transform: scale(1.25); }
+        .social-ig img { transform: scale(1.02); }
         .lightbox-layer { position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.94); display: flex; flex-direction: column; touch-action: none; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; }
         .lightbox-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; color: #e2e8f0; }
         .lightbox-meta { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1720,6 +1729,13 @@
         .av-info-title svg { flex: 0 0 16px; width: 16px; height: 16px; fill: none; stroke: #94a3b8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
         .av-info-meta { display: flex; align-items: center; gap: 8px; margin-left: auto; color: #94a3b8; font-size: 12px; white-space: nowrap; }
         .av-info-stats { display: flex; gap: 8px; }
+        .av-ext-links { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; vertical-align: middle; }
+        .av-ext-link { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 3px; text-decoration: none; opacity: .9; transition: opacity .15s ease, transform .15s ease; }
+        .av-ext-link img { display: block; width: 16px; height: 16px; border-radius: 3px; }
+        .av-ext-link:hover { opacity: 1; transform: translateY(-1px); }
+        .av-ext-link.is-text { width: auto; padding: 0 4px; font-size: 9px; font-weight: 700; letter-spacing: .3px; line-height: 1; color: #d8c4ff; background: rgba(139,92,246,.26); border: 1px solid rgba(139,92,246,.5); }
+        .av-ext-link.is-busy { opacity: .5; }
+        .av-page-ext { display: inline-flex; margin: 2px 0 0 2px; }
         .av-info-chevron { flex: 0 0 6px; width: 6px; height: 6px; border-right: 1.5px solid #94a3b8; border-bottom: 1.5px solid #94a3b8; transform: rotate(45deg); transition: transform .15s; }
         .av-info-section.open .av-info-chevron { transform: rotate(225deg); }
         .av-info-body { border-top: 1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.22); padding: 14px 16px; }
@@ -4261,7 +4277,20 @@
         codeNormCache.set(raw, result);
         return result;
     }
+    let pageCodeCacheHref = '';
+    let pageCodeCacheValue = '';
+    let pageCodeCacheAt = 0;
     function getPageVideoCode() {
+        const href = location.href;
+        const now = Date.now();
+        if (pageCodeCacheHref === href && (pageCodeCacheValue || now - pageCodeCacheAt < 1200)) return pageCodeCacheValue;
+        const value = resolvePageVideoCode();
+        pageCodeCacheHref = href;
+        pageCodeCacheValue = value;
+        pageCodeCacheAt = now;
+        return value;
+    }
+    function resolvePageVideoCode() {
         try {
             const rows = document.querySelectorAll('.text-secondary, .video-info-row, .info-row, li');
             for (const row of rows) {
@@ -6767,6 +6796,69 @@
         badge.title = title;
         titleEl.insertBefore(badge, titleEl.firstChild);
     }
+    const SOCIAL_ICON_X = 'https://x.com/apple-touch-icon.png';
+    const SOCIAL_ICON_IG = 'https://static.cdninstagram.com/rsrc.php/yw/r/icwX0xAk0pz.webp';
+    const SOCIAL_ICON_X_STORE = 'socialIconX_v1';
+    let socialIconXPromise = null;
+    function arrayBufferToDataUrl(buffer) {
+        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let index = 0; index < bytes.length; index += chunkSize) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunkSize));
+        }
+        return `data:image/png;base64,${btoa(binary)}`;
+    }
+    function socialIconXDataUrl() {
+        if (socialIconXPromise) return socialIconXPromise;
+        socialIconXPromise = (async () => {
+            const cached = store.get(SOCIAL_ICON_X_STORE);
+            if (typeof cached === 'string' && cached.startsWith('data:image/')) return cached;
+            try {
+                const buffer = await gmRequest(SOCIAL_ICON_X, { binary: true, timeout: 8000 });
+                if (!(buffer instanceof ArrayBuffer) && !(buffer instanceof Uint8Array)) return '';
+                if (!buffer.byteLength) return '';
+                const dataUrl = arrayBufferToDataUrl(buffer);
+                store.set(SOCIAL_ICON_X_STORE, dataUrl);
+                return dataUrl;
+            } catch (error) {
+                debugLog(error, 'social-icon-x');
+                return '';
+            }
+        })();
+        return socialIconXPromise;
+    }
+    function makeSocialIcon(href, className, title, loadIcon, fallbackText) {
+        const link = document.createElement('a');
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.className = className;
+        link.title = title;
+        link.textContent = fallbackText;
+        const icon = document.createElement('img');
+        icon.alt = '';
+        icon.decoding = 'async';
+        icon.loading = 'eager';
+        icon.referrerPolicy = 'no-referrer';
+        icon.addEventListener('load', () => {
+            link.textContent = '';
+            link.appendChild(icon);
+        });
+        icon.addEventListener('error', () => {
+            icon.remove();
+            link.textContent = fallbackText;
+        });
+        Promise.resolve()
+            .then(loadIcon)
+            .then(src => {
+                if (typeof src !== 'string' || !src) return;
+                icon.src = src;
+            })
+            .catch(error => debugLog(error, 'social-icon'));
+        link.addEventListener('click', event => event.stopPropagation());
+        return link;
+    }
     function injectSocialBadges(social, name) {
         if (!social || (!social.twitter && !social.instagram)) return;
         const links = document.querySelectorAll('a[href*="/actresses/"], a[href*="/actress/"]');
@@ -6779,26 +6871,10 @@
             const container = document.createElement('span');
             container.className = 'social-badges';
             if (social.twitter) {
-                const xLink = document.createElement('a');
-                xLink.href = social.twitter;
-                xLink.target = '_blank';
-                xLink.rel = 'noopener noreferrer';
-                xLink.className = 'social-badge social-x';
-                xLink.title = `Twitter / X: ${name}`;
-                xLink.textContent = '𝕏';
-                xLink.addEventListener('click', event => event.stopPropagation());
-                container.appendChild(xLink);
+                container.appendChild(makeSocialIcon(social.twitter, 'social-badge social-x', `Twitter / X: ${name}`, socialIconXDataUrl, '𝕏'));
             }
             if (social.instagram) {
-                const igLink = document.createElement('a');
-                igLink.href = social.instagram;
-                igLink.target = '_blank';
-                igLink.rel = 'noopener noreferrer';
-                igLink.className = 'social-badge social-ig';
-                igLink.title = `Instagram: ${name}`;
-                igLink.textContent = '📷';
-                igLink.addEventListener('click', event => event.stopPropagation());
-                container.appendChild(igLink);
+                container.appendChild(makeSocialIcon(social.instagram, 'social-badge social-ig', `Instagram: ${name}`, () => SOCIAL_ICON_IG, '📷'));
             }
             link.after(container);
         }
@@ -7831,6 +7907,8 @@
         setupDoubleTapSeek(container);
         setupWakeLock(video);
         setupMediaSession(video);
+        setupAutoMaxQuality(video);
+        ensurePageExternalLinks();
         setupResumePlayback(video, container);
         setupAudioControl(video);
         syncFilterBar();
@@ -8255,10 +8333,12 @@
         .av-search-clear svg { width: 12px; height: 12px; }
         .av-records-count { font-size: 12px; color: #94a3b8; }
         .av-records-list { display: flex; flex-direction: column; }
-        .av-record-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 168px 92px 72px; align-items: center; gap: 12px; padding: 10px 8px; border-top: 1px solid rgba(148, 163, 184, .1); font-size: 12px; }
+        .av-record-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 168px 92px 72px; align-items: center; gap: 12px; padding: 10px 8px; border-top: 1px solid rgba(148, 163, 184, .1); font-size: 12px; }
         .av-record-row:first-child { border-top: 0; }
         .av-record-row:hover { background: rgba(148, 163, 184, .05); }
         .av-record-code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #7dd3fc; text-decoration: none; }
+        .av-record-code-cell { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 150px; }
+        .av-record-code-cell .av-record-code { min-width: 0; }
         .av-record-code:hover { text-decoration: underline; }
         .av-record-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
         .av-record-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e2e8f0; }
@@ -8290,7 +8370,7 @@
             .av-search-clear { width: 40px; height: 40px; right: 0; }
             .av-icon-btn { width: 40px; height: 40px; }
             .av-icon-btn svg { width: 18px; height: 18px; }
-            .av-record-row { grid-template-columns: 92px minmax(0, 1fr) 168px 92px 96px; }
+            .av-record-row { grid-template-columns: 150px minmax(0, 1fr) 168px 92px 96px; }
             .av-record-actions { flex: 0 0 auto; }
             .av-actress-link, .av-record-code { display: inline-flex; align-items: center; min-height: 34px; }
             .av-records-more .av-btn { min-height: 40px; }
@@ -8352,6 +8432,7 @@
             .av-search-box { width: 100%; }
             .av-search-input { width: 100%; }
             .av-record-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+            .av-record-code-cell { order: 1; min-width: 0; }
             .av-record-code { order: 1; }
             .av-record-main { order: 2; flex: 1 1 100%; }
             .av-record-date { order: 3; margin-left: auto; }
@@ -8360,6 +8441,7 @@
         }
         @media (min-width: 481px) and (max-width: 720px), (min-width: 481px) and (max-width: 1100px) and (pointer: coarse) {
             .av-record-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "code main date actions" "progress progress progress progress"; align-items: center; gap: 6px 10px; }
+            .av-record-code-cell { grid-area: code; order: 0; }
             .av-record-code { grid-area: code; order: 0; }
             .av-record-main { grid-area: main; order: 0; }
             .av-record-date { grid-area: date; order: 0; margin-left: 0; }
@@ -10962,6 +11044,277 @@
         state.analyticsRecords = analyticsRecords().filter(item => String(item && item.code ? item.code : '').toUpperCase() !== key);
         saveAnalyticsRecords();
     }
+    const JAVDB_DETAIL_CACHE_KEY = 'javdbDetail_v1';
+    const JAVDB_DETAIL_LIMIT = 240;
+    const JAVDB_RESOLVE_CONCURRENCY = 2;
+    const JAVDB_RESOLVE_BUDGET = 6;
+    const javdbDetailMemo = new Map();
+    const javdbResolveQueue = [];
+    let javdbResolveActive = 0;
+    let javdbResolveIssued = 0;
+    let javdbDetailLoaded = false;
+    function loadJavdbDetailCache() {
+        if (javdbDetailLoaded) return;
+        javdbDetailLoaded = true;
+        const raw = store.get(JAVDB_DETAIL_CACHE_KEY);
+        if (!raw) return;
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return;
+            for (const code of Object.keys(parsed)) {
+                const url = parsed[code];
+                if (typeof url === 'string' && /^https:\/\/javdb\.com\/v\/[a-zA-Z0-9_-]+$/.test(url)) javdbDetailMemo.set(code, url);
+            }
+        } catch (error) {
+            debugLog(error, 'javdbDetailCache');
+        }
+    }
+    function saveJavdbDetailCache() {
+        try {
+            const entries = Array.from(javdbDetailMemo.entries()).slice(-JAVDB_DETAIL_LIMIT);
+            const payload = {};
+            for (const [code, url] of entries) payload[code] = url;
+            store.set(JAVDB_DETAIL_CACHE_KEY, JSON.stringify(payload));
+        } catch (error) {
+            debugLog(error, 'javdbDetailSave');
+        }
+    }
+    function javdbSearchUrl(code) {
+        return `${JD_SEARCH}${encodeURIComponent(code)}`;
+    }
+    function javbusDetailUrl(code) {
+        return `${JB_ENDPOINT}${encodeURIComponent(code)}`;
+    }
+    function parseJavdbDetail(html, code) {
+        if (!html) return '';
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const needle = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!needle) return '';
+        const links = doc.querySelectorAll('a[href^="/v/"]');
+        let fallback = '';
+        for (const link of links) {
+            const href = link.getAttribute('href') || '';
+            if (!/^\/v\/[a-zA-Z0-9_-]+$/.test(href)) continue;
+            const strong = link.querySelector('.video-title strong')?.textContent || '';
+            const text = `${strong} ${link.textContent || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (!fallback) fallback = `https://javdb.com${href}`;
+            if (strong && strong.toUpperCase().replace(/[^A-Z0-9]/g, '') === needle) return `https://javdb.com${href}`;
+            if (text.includes(needle)) return `https://javdb.com${href}`;
+        }
+        return fallback;
+    }
+    function applyJavdbDetail(code, url) {
+        if (!url) return;
+        javdbDetailMemo.set(code, url);
+        saveJavdbDetailCache();
+        for (const node of document.querySelectorAll('.av-ext-link.javdb')) {
+            if (node.dataset.code !== code) continue;
+            node.href = url;
+            node.title = `JavDB 详情：${code}`;
+            node.classList.remove('is-busy');
+        }
+    }
+    function pumpJavdbQueue() {
+        while (javdbResolveActive < JAVDB_RESOLVE_CONCURRENCY && javdbResolveQueue.length) {
+            const job = javdbResolveQueue.shift();
+            javdbResolveActive += 1;
+            fetchHtml(javdbSearchUrl(job.code), { timeout: 3500, skipProxy: true })
+                .then(html => {
+                    const url = parseJavdbDetail(html, job.code);
+                    if (url) applyJavdbDetail(job.code, url);
+                })
+                .catch(error => debugLog(error, 'javdbResolve'))
+                .then(() => {
+                    javdbResolveActive -= 1;
+                    pumpJavdbQueue();
+                });
+        }
+    }
+    function queueJavdbDetail(code, link) {
+        if (!code) return;
+        loadJavdbDetailCache();
+        const cached = javdbDetailMemo.get(code);
+        if (cached) {
+            link.href = cached;
+            link.title = `JavDB 详情：${code}`;
+            return;
+        }
+        if (javdbResolveIssued >= JAVDB_RESOLVE_BUDGET) return;
+        if (javdbResolveQueue.some(job => job.code === code)) return;
+        javdbResolveIssued += 1;
+        link.classList.add('is-busy');
+        javdbResolveQueue.push({ code });
+        pumpJavdbQueue();
+    }
+    function faviconImg(link, src, fallbackText) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.width = 16;
+        img.height = 16;
+        img.loading = 'eager';
+        img.decoding = 'async';
+        img.referrerPolicy = 'no-referrer';
+        img.addEventListener('error', () => {
+            img.remove();
+            link.classList.add('is-text');
+            link.textContent = fallbackText;
+        }, { once: true });
+        img.src = src;
+        return img;
+    }
+    function buildExternalLinks(code) {
+        const wrap = document.createElement('span');
+        wrap.className = 'av-ext-links';
+        const db = document.createElement('a');
+        db.className = 'av-ext-link javdb';
+        db.href = javdbSearchUrl(code);
+        db.target = '_blank';
+        db.rel = 'noopener noreferrer';
+        db.title = `JavDB 搜索：${code}`;
+        db.setAttribute('aria-label', `JavDB：${code}`);
+        db.dataset.code = code;
+        db.append(faviconImg(db, 'https://javdb580.com/favicon-32x32.png', 'DB'));
+        const bus = document.createElement('a');
+        bus.className = 'av-ext-link javbus';
+        bus.href = javbusDetailUrl(code);
+        bus.target = '_blank';
+        bus.rel = 'noopener noreferrer';
+        bus.title = `JavBus 详情：${code}`;
+        bus.setAttribute('aria-label', `JavBus：${code}`);
+        bus.append(faviconImg(bus, JAVBUS_ICON_DATA, 'BUS'));
+        for (const node of [db, bus]) node.addEventListener('click', event => event.stopPropagation());
+        wrap.append(db, bus);
+        queueJavdbDetail(code, db);
+        return wrap;
+    }
+    function ensurePageExternalLinks() {
+        const code = getPageVideoCode();
+        if (!code) return null;
+        const existing = document.querySelector('.av-page-ext');
+        if (existing) {
+            if (existing.dataset.code === code) return existing;
+            existing.remove();
+        }
+        const anchor = infoAnchor();
+        if (!anchor || !anchor.parentElement) return null;
+        const wrap = buildExternalLinks(code);
+        wrap.classList.add('av-page-ext');
+        wrap.dataset.code = code;
+        anchor.insertAdjacentElement('afterend', wrap);
+        return wrap;
+    }
+    function isWifiOrBroadband() {
+        const nav = typeof navigator !== 'undefined' ? navigator : null;
+        const conn = nav && nav.connection;
+        if (conn) {
+            if (conn.saveData) return false;
+            if (conn.type === 'cellular') return false;
+            if (conn.type === 'wifi' || conn.type === 'ethernet') return true;
+            if (conn.effectiveType === '2g' || conn.effectiveType === 'slow-2g') return false;
+        }
+        return true;
+    }
+    function autoMaxQualityEnabled() {
+        return store.get(AUTO_QUALITY_KEY) !== '0';
+    }
+    function playerScope() {
+        return typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+    }
+    function applyVideoQuality(target, root = document) {
+        const scope = playerScope();
+        try {
+            const player = state.player || scope.player;
+            if (player && typeof player.quality !== 'undefined') {
+                player.quality = target;
+                return true;
+            }
+        } catch (error) {
+            debugLog(error, 'quality-player');
+        }
+        try {
+            const hls = scope.hls;
+            if (hls && Array.isArray(hls.levels) && hls.levels.length) {
+                if (target === 0) {
+                    if (hls.currentLevel !== -1) hls.currentLevel = -1;
+                    return true;
+                }
+                const idx = hls.levels.findIndex(level => level && level.height === target);
+                if (idx !== -1) {
+                    if (hls.currentLevel !== idx) hls.currentLevel = idx;
+                    return true;
+                }
+            }
+        } catch (error) {
+            debugLog(error, 'quality-hls');
+        }
+        const button = root.querySelector(`button[data-plyr="quality"][value="${target}"]`);
+        if (button) {
+            button.click();
+            return true;
+        }
+        return false;
+    }
+    function availableQualities(root = document) {
+        const scope = playerScope();
+        const set = new Set();
+        const player = state.player || scope.player;
+        const options = player && player.options && player.options.quality && player.options.quality.options;
+        if (Array.isArray(options)) {
+            for (const value of options) if (typeof value === 'number' && value > 0) set.add(value);
+        }
+        const hls = scope.hls;
+        if (hls && Array.isArray(hls.levels)) {
+            for (const level of hls.levels) if (level && typeof level.height === 'number' && level.height > 0) set.add(level.height);
+        }
+        for (const button of root.querySelectorAll('button[data-plyr="quality"]')) {
+            const value = Number(button.value);
+            if (!Number.isNaN(value) && value > 0) set.add(value);
+        }
+        const list = Array.from(set).sort((a, b) => b - a);
+        return { highest: list.length ? list[0] : null, list };
+    }
+    function setupAutoMaxQuality(video) {
+        if (!video || !video.dataset || video.dataset.avQualityBound === '1') return;
+        video.dataset.avQualityBound = '1';
+        if (!autoMaxQualityEnabled()) return;
+        let attempts = 0;
+        let timer = 0;
+        const stop = () => {
+            if (timer) {
+                clearInterval(timer);
+                timer = 0;
+            }
+        };
+        const tryApply = () => {
+            if (!video.isConnected || !autoMaxQualityEnabled()) {
+                stop();
+                return;
+            }
+            if (video.readyState < 2) return;
+            if (video.playbackRate > 1) return;
+            if (!isWifiOrBroadband()) {
+                applyVideoQuality(0);
+                video.dataset.avQualityApplied = 'default';
+                stop();
+                return;
+            }
+            const { highest } = availableQualities();
+            if (highest !== null && applyVideoQuality(highest)) {
+                video.dataset.avQualityApplied = 'highest';
+                video.dataset.avQualityAppliedValue = String(highest);
+                stop();
+                return;
+            }
+            attempts += 1;
+            if (attempts >= AUTO_QUALITY_ATTEMPTS) stop();
+        };
+        tryApply();
+        if (!video.dataset.avQualityApplied) timer = trackInterval(setInterval(tryApply, AUTO_QUALITY_INTERVAL));
+        const onReady = () => {
+            if (!video.dataset.avQualityApplied) tryApply();
+        };
+        for (const type of AUTO_QUALITY_EVENTS) video.addEventListener(type, onReady, { passive: true });
+    }
     function iconSvg(paths, viewBox = '0 0 24 24') {
         const span = document.createElement('span');
         span.className = 'av-svg';
@@ -11316,7 +11669,11 @@
             log(`🗑 已移除观影记录 ${record.code}`);
         });
         actions.append(play, remove);
-        row.append(codeLink, main, prog, date, actions);
+        const codeCell = document.createElement('div');
+        codeCell.className = 'av-record-code-cell';
+        codeCell.append(codeLink);
+        if (record.code) codeCell.append(buildExternalLinks(record.code));
+        row.append(codeCell, main, prog, date, actions);
         return row;
     }
     function buildRecordsSection(data, range) {
