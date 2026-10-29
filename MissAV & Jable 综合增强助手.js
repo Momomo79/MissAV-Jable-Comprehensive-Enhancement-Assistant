@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      13.23
+// @version      13.24
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -318,7 +318,43 @@
         'div[class*="ad-container"]',
         'div[class*="ad-wrapper"]',
         'div[class*="ad_banner"]',
-        'div[class*="ad-placement"]'
+        'div[class*="ad-placement"]',
+        'iframe[src*="exoclick" i]',
+        'iframe[src*="trafficjunky" i]',
+        'iframe[src*="trafficfactory" i]',
+        'iframe[src*="adsterra" i]',
+        'iframe[src*="juicyads" i]',
+        'iframe[src*="popads" i]',
+        'iframe[src*="popcash" i]',
+        'iframe[src*="tsyndicate" i]',
+        'iframe[src*="twinrdengine" i]',
+        'iframe[src*="smartpop" i]',
+        'iframe[src*="snaptrckr" i]',
+        'iframe[src*="mavrtracktor" i]',
+        'iframe[src*="myavlive" i]',
+        'iframe[src*="wy2026" i]',
+        'iframe[src*="mayzaent" i]',
+        'iframe[src*="rallytrckr" i]',
+        'iframe[src*="rmishe" i]',
+        '[id^="ts_t_"]',
+        '[id^="ts_ms_"]',
+        '[data-ts-spot]',
+        '[class^="ads-"]',
+        '[class*=" ads-"]',
+        '[id*="_ads"]',
+        '[id^="popunder"]',
+        '[class^="popunder"]',
+        '[class^="sponsor"]',
+        'iframe[src*="mgid" i]',
+        'iframe[src*="nativeads" i]',
+        'iframe[src*="revcontent" i]',
+        'iframe[src*="outbrain" i]',
+        'iframe[src*="taboola" i]',
+        'iframe[src*="adnxs" i]',
+        'iframe[src*="propellerads" i]',
+        'iframe[src*="hilltopads" i]',
+        'iframe[src*="clickadu" i]',
+        'ins[data-ad-slot]',
     ].join(',');
     const PLAY_ENTRY_SELECTORS = ACTIVE_SELECTORS.playEntry.slice();
     const clamp = (value, min, max) => (value < min ? min : value > max ? max : value);
@@ -1294,6 +1330,7 @@
                 element.style.display = 'none';
             }
         }
+        sweepFloatingAds();
     }
     function sweepAdNodes(root) {
         if (!root || root.nodeType !== 1) return;
@@ -1312,6 +1349,50 @@
             return;
         }
         if (root.matches && root.matches(AD_SELECTORS) && root.style.display !== 'none') root.style.display = 'none';
+    }
+    const AD_SIGNATURE_RE = /(?:^|[\s_-])(?:ad|ads|adv|advert|adserver|popup|popunder|sponsor|traffic|campaign)/i;
+    const AD_SAFE_CLOSEST = '.plyr, .av-info-section, .av-panel, .av-quick, .av-cockpit, .av-ext-links, .av-hub-tabs';
+    function adSignatureOf(element) {
+        const cls = typeof element.className === 'string' ? element.className : '';
+        return `${element.id} ${cls} ${element.getAttribute('src') || ''}`;
+    }
+    function adFixedLike(element) {
+        const style = element.getAttribute('style') || '';
+        if (/position\s*:\s*fixed/i.test(style)) return true;
+        try {
+            return getComputedStyle(element).position === 'fixed';
+        } catch (error) {
+            debugLog(error);
+            return false;
+        }
+    }
+    function adOverlayHeuristic(element) {
+        if (!/^(?:DIV|ASIDE|SECTION|A|INS)$/.test(element.tagName)) return false;
+        if (element.querySelector('video, .plyr')) return false;
+        const links = element.querySelectorAll('a[href]');
+        if (!links.length) return false;
+        let external = 0;
+        for (const link of links) {
+            let hostname = '';
+            try {
+                hostname = new URL(link.getAttribute('href'), location.href).hostname;
+            } catch (error) {
+                continue;
+            }
+            if (hostname && hostname !== location.hostname) external += 1;
+        }
+        return external > 0 && external === links.length;
+    }
+    function sweepFloatingAds() {
+        if (!document.body) return;
+        for (const element of Array.from(document.body.children)) {
+            if (element.nodeType !== 1) continue;
+            if (/^(?:SCRIPT|STYLE|LINK|NOSCRIPT|META|TEMPLATE)$/.test(element.tagName)) continue;
+            if (isProtectedNode(element) || isProtectedFrame(element)) continue;
+            if (element.closest && element.closest(AD_SAFE_CLOSEST)) continue;
+            if (!adFixedLike(element)) continue;
+            if (AD_SIGNATURE_RE.test(adSignatureOf(element)) || adOverlayHeuristic(element)) element.remove();
+        }
     }
     function startAdObserver() {
         if (state.adObserver || !document.body) return;
@@ -1338,6 +1419,7 @@
             patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
             if (patchFrames) patchAllIframeWindows(true);
             for (const node of nodes) sweepAdNodes(node);
+            sweepFloatingAds();
             if (!state.bound) initPlayer();
         }, MUTATION_THROTTLE);
         state.adObserver = new MutationObserver(records => {
