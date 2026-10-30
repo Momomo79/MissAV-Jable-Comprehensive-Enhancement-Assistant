@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      14.03
+// @version      14.11
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -257,6 +257,13 @@
     const SUBTITLE_BOTTOM_MIN = 0;
     const SUBTITLE_BOTTOM_MAX = 80;
     const SUPPORTED_SUBTITLE_EXT = /\.(srt|vtt|ass|ssa)(?:$|[?#])/i;
+    const SUBTITLE_SOURCES = [
+        { key: 'xunlei', label: '迅雷', web: 'https://api-shoulei-ssl.xunlei.com/oracle/subtitle?name=' },
+        { key: 'cat', label: '字幕猫', web: 'https://subtitlecat.com/index.php?search=' },
+        { key: 'subhd', label: 'SubHD', web: 'https://subhd.tv/search/' },
+        { key: 'avsub', label: 'AVSub', web: 'https://www.avsubtitles.com/search_results.php?search=' },
+        { key: 'javsub', label: 'JavSub', web: 'https://javsub.ai/search?q=' }
+    ];
     const JUMP_PRESETS = {
         back: [600, 300, 60, 10],
         forward: [10, 60, 300, 600]
@@ -293,6 +300,11 @@
     const WHOS_FRAMES_LIMIT = 120;
     const WHOS_FETCH_TIMEOUT = 7000;
     const WHOS_SEARCH = 'https://whos.tv/result?search=';
+    const WHOS_AJAX_BASE = 'https://whos.tv/ajax/frames/video-frames';
+    const WHOS_MAX_PAGES = 40;
+    const WHOS_PAGE_LANES = 3;
+    const WHOS_TICK_TARGET = 40;
+    const WHOS_CACHE_VERSION = 2;
     const FRAME_TICK_HIT = 7;
     const IMAGE_EXT_RE = /\.(?:jpe?g|png|webp)(?:$|[?#])/i;
     const NOW_PRINTING_RE = /\/now_printing(?:\/|\.|$)/i;
@@ -840,6 +852,8 @@
         filterBarVisible: store.getBool('filterBarVisible', true),
         filterPanelOpen: store.getBool('filterPanelOpen', false),
         mobilePanelOpen: store.getBool('mobilePanelOpen', false),
+        framesPreview: store.get('whosFrames') !== '0',
+        subPanelOpen: store.getBool('subPanelOpen', false),
         analyticsTrack: store.getBool('analyticsTrack', true),
         audioGain: store.getNumber(siteAudioKey('Gain'), 1, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX),
         audioRoute: store.getBool(siteAudioKey('Route'), false),
@@ -892,6 +906,8 @@
         store.set('filterBarVisible', settings.filterBarVisible);
         store.set('filterPanelOpen', settings.filterPanelOpen);
         store.set('mobilePanelOpen', settings.mobilePanelOpen);
+        store.set('whosFrames', settings.framesPreview ? '1' : '0');
+        store.set('subPanelOpen', settings.subPanelOpen);
         store.set('analyticsTrack', settings.analyticsTrack);
         store.set(siteAudioKey('Gain'), settings.audioGain);
         store.set(siteAudioKey('Route'), settings.audioRoute);
@@ -1738,6 +1754,16 @@
         .custom-quick-controls.quick-compact .quick-play-btn { min-width: 64px; padding: 0 8px; }
         .custom-quick-controls.quick-compact .quick-loop-btn { min-width: 40px; padding: 0 5px; }
         .custom-subtitle { position: absolute; left: 50%; bottom: 10%; z-index: 10000; max-width: 85%; transform: translateX(-50%); color: #fff; font-size: 24px; font-weight: 700; text-align: center; white-space: pre-line; text-shadow: -1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,2px 2px 4px rgba(0,0,0,.8); pointer-events: none; }
+        .sub-panel { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 0 14px; border-top: 1px solid rgba(255,255,255,.15); }
+        .sub-src-head { display: flex; align-items: center; gap: 6px; color: #e2e8f0; font-size: 12px; font-weight: 600; }
+        .sub-src-status { margin-left: auto; font-size: 10.5px; font-weight: 400; color: #94a3b8; }
+        .sub-src-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+        .sub-src-btn { font-size: 11px; padding: 6px 2px; min-height: 30px; }
+        .sub-src-btn.is-busy { opacity: .55; }
+        .sub-src-btn.has-hit { color: #a7f3d0; border-color: rgba(16,185,129,.55); background: rgba(16,185,129,.14); }
+        .sub-src-btn.has-none { opacity: .45; }
+        .sub-src-btn.has-error { color: #fca5a5; border-color: rgba(239,68,68,.45); }
+        .sub-style-box { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid rgba(56,189,248,.22); border-radius: 8px; background: rgba(56,189,248,.05); }
         .slider-row-container { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 0 14px; border-top: 1px solid rgba(255,255,255,.15); }
         .slider-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; }
         .slider-group label { width: 65px; flex-shrink: 0; white-space: nowrap; }
@@ -1751,7 +1777,13 @@
         .slider-group input[type="range"]::-moz-range-progress { height: 4px; border: 0; border-radius: 999px; background: #38bdf8; }
         .slider-group input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,.18); }
         .slider-group input[type="range"]:hover::-moz-range-thumb { box-shadow: 0 0 0 5px rgba(56,189,248,.26); }
-        .slider-value { width: 30px; text-align: right; font-family: ui-monospace,Consolas,monospace; font-size: 11px; flex-shrink: 0; }
+        .slider-value { display: inline-flex; align-items: center; justify-content: flex-end; gap: 1px; width: auto; min-width: 52px; text-align: right; font-family: ui-monospace,Consolas,monospace; font-size: 11px; flex-shrink: 0; }
+        .custom-control-panel .slider-group input.slider-num { width: 38px; height: 20px; padding: 0 3px; border: 1px solid rgba(255,255,255,.14); border-radius: 5px; outline: none; background: rgba(255,255,255,.08); color: #f1f5f9; font-family: ui-monospace,Consolas,monospace; font-size: 11px; font-weight: 700; text-align: right; text-shadow: none; transition: border-color .18s ease, background .18s ease; }
+        .custom-control-panel .slider-group input.slider-num:hover { border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.14); }
+        .custom-control-panel .slider-group input.slider-num:focus { border-color: #60a5fa; background: rgba(255,255,255,.2); }
+        .slider-group .slider-unit { width: 12px; flex-shrink: 0; color: #cbd5e1; font-family: ui-monospace,Consolas,monospace; font-size: 10px; font-style: normal; text-align: left; }
+        .panel-row .av-open-cockpit { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 24px; padding: 0 4px; border: 1px solid rgba(59,130,246,.5); border-radius: 6px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #f8fafc; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; text-decoration: none; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: pointer; transition: filter .2s ease; }
+        .panel-row .av-open-cockpit:hover { filter: brightness(1.12); }
         .quick-loop-wrapper { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; }
         .quick-loop-btn { min-width: 46px; height: 32px; padding: 0 8px; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; line-height: 1; font-size: 13px; }
         .quick-loop-btn span { display: inline; }
@@ -2112,6 +2144,8 @@
             .custom-control-panel .av-text-row input[type="range"] { height: 34px; }
             .custom-control-panel .av-check-row { min-height: 40px; padding: 5px 0; }
             .custom-control-panel .av-text-row textarea { font-size: 16px; line-height: 1.5; min-height: 76px; padding: 8px 10px; }
+            .panel-row .av-open-cockpit { height: 40px; min-height: 40px; font-size: 13px; }
+            .custom-control-panel .slider-group input.slider-num { width: 46px; height: 32px; font-size: 12px; }
             .custom-control-panel button, .custom-control-panel select, .custom-control-panel .av-check-row,
             .custom-quick-controls button, .custom-quick-controls .quick-btn,
             .av-info-section button, .av-info-section a.av-list-action,
@@ -2845,15 +2879,24 @@
         header.append(gearBtn, panelTitle);
         return { header, gearBtn };
     }
+    function createCockpitLink() {
+        const link = document.createElement('a');
+        link.className = 'av-open-cockpit';
+        link.href = analyticsUrl();
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = '在新标签页打开观影行为数据大屏';
+        link.setAttribute('aria-label', '数据大屏');
+        link.append(document.createTextNode('数据大屏'));
+        link.addEventListener('click', () => {
+            link.href = analyticsUrl();
+        });
+        return link;
+    }
+
     function buildPanelKeysRow() {
         const keysRow = document.createElement('div');
         keysRow.className = 'panel-row';
-        const offsetGroup = createInputGroup('字幕偏移:', 'number', settings.subtitleOffset, input => {
-            applySubtitleOffset(clamp(Number.parseFloat(input.value) || 0, OFFSET_MIN, OFFSET_MAX));
-        }, {
-            min: OFFSET_MIN, max: OFFSET_MAX, step: 0.1,
-            onBlur: input => { input.value = settings.subtitleOffset; }
-        });
         keysRow.append(
             createInputGroup('加速键:', 'text', settings.keys.accelerate, input => {
                 settings.keys.accelerate = normalizeKey(input.value, 'z');
@@ -2876,50 +2919,18 @@
                 min: SKIP_MIN, max: SKIP_MAX, step: 1,
                 onBlur: input => { input.value = settings.skipTime; }
             }),
-            offsetGroup
+            createCockpitLink()
         );
-        return { keysRow, offsetInput: offsetGroup.children[1] };
+        return { keysRow };
     }
-    function buildPanelActionRow(panel, offsetInput, layoutPanel) {
+    function buildPanelActionRow(panel, layoutPanel) {
         const actionRow = document.createElement('div');
         actionRow.className = 'btn-group';
-        const fileInput = document.createElement('input');
-        fileInput.type = 'file';
-        fileInput.accept = '.srt,.vtt,.ass,.ssa,text/plain';
-        fileInput.hidden = true;
-        panel.appendChild(fileInput);
-        const btnLocal = createButton('加载本地');
-        const btnWeb = createButton('网页搜字幕');
-        const btnAPI = createButton('API搜字幕');
-        const btnClear = createButton('清除字幕');
         const btnSave = createButton('保存设置', 'btn-primary');
-        const btnResetOffset = createButton('重置本站偏移');
         btnSave.style.gridColumn = 'span 2';
-        btnLocal.addEventListener('click', () => fileInput.click());
-        btnWeb.addEventListener('click', searchSubtitleWeb);
-        btnAPI.addEventListener('click', searchSubtitleAPI);
-        btnClear.addEventListener('click', clearSubtitles);
-        btnResetOffset.addEventListener('click', () => {
-            const siteName = IS_JABLE ? 'Jable' : 'MissAV';
-            applySubtitleOffset(0);
-            offsetInput.value = 0;
-            store.remove(siteOffsetKey());
-            log(`🧹 已重置 ${siteName} 本站偏移为 0`);
-        });
         btnSave.addEventListener('click', () => {
             persistSettings();
             log('💾 设置已保存');
-        });
-        fileInput.addEventListener('change', async event => {
-            const file = event.target.files?.[0];
-            event.target.value = '';
-            if (!file) return;
-            try {
-                const text = await file.text();
-                applySubtitleText(text, `本地字幕：${file.name}`, file.name);
-            } catch (_) {
-                log('❌ 字幕读取失败');
-            }
         });
         const resetPosBtn = createButton('重置面板位置', 'btn-ghost');
         resetPosBtn.addEventListener('click', () => {
@@ -2930,17 +2941,6 @@
             store.set('panelY', 88);
             layoutPanel();
             log('面板已复位到左上角');
-        });
-        const openCockpit = document.createElement('a');
-        openCockpit.className = 'av-open-cockpit';
-        openCockpit.href = analyticsUrl();
-        openCockpit.target = '_blank';
-        openCockpit.rel = 'noopener noreferrer';
-        openCockpit.title = '在新标签页打开观影行为数据大屏';
-        openCockpit.setAttribute('aria-label', '数据大屏');
-        openCockpit.append(document.createTextNode('数据大屏'));
-        openCockpit.addEventListener('click', () => {
-            openCockpit.href = analyticsUrl();
         });
         const btnClearLib = createButton('清空已看库');
         btnClearLib.title = '只清空当前站点的已看标记，不影响另一个站点';
@@ -2953,6 +2953,24 @@
         btnBackup.style.gridColumn = 'span 2';
         btnBackup.title = '把收藏的名称、缩略图、番号、女优、类型、发行商批量打包下载到本地';
         btnBackup.addEventListener('click', openFavoriteBackup);
+        const btnFrames = createButton('');
+        btnFrames.classList.add('av-platform-btn');
+        btnFrames.style.gridColumn = '1 / -1';
+        const framesLabel = () => `关键帧预览：${settings.framesPreview ? '已开启' : '已关闭'}`;
+        btnFrames.textContent = framesLabel();
+        btnFrames.title = '在进度条上显示关键帧刻度与悬停缩略图（数据来自 whos.tv）。关闭后不再请求 whos.tv';
+        btnFrames.addEventListener('click', () => {
+            settings.framesPreview = !settings.framesPreview;
+            store.set('whosFrames', settings.framesPreview ? '1' : '0');
+            btnFrames.textContent = framesLabel();
+            removeFramePreview();
+            if (settings.framesPreview) {
+                setupFramePreview(document.querySelector('video'));
+                log('🎞️ 关键帧预览已开启');
+            } else {
+                log('🎞️ 关键帧预览已关闭');
+            }
+        });
         const btnPlatform = createButton('');
         btnPlatform.classList.add('av-platform-btn');
         btnPlatform.style.gridColumn = '1 / -1';
@@ -2975,46 +2993,141 @@
             log(`🔄 平台档位已切换为「${nextName}」，正在刷新…`);
             location.reload();
         });
-        actionRow.append(btnLocal, btnWeb, btnAPI, btnClear, btnResetOffset, resetPosBtn, openCockpit, btnClearLib, btnPlatform, btnSave, btnBackup);
+        actionRow.append(resetPosBtn, btnClearLib, btnFrames, btnPlatform, btnSave, btnBackup);
         return actionRow;
+    }
+    function createSettingSlider(labelText, key, min, max, step, onApply = applyUiStyles, format = String) {
+        const group = document.createElement('div');
+        group.className = 'slider-group';
+        const label = document.createElement('label');
+        label.textContent = labelText;
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = min;
+        slider.max = max;
+        slider.step = step;
+        slider.value = settings[key];
+        const valueBox = document.createElement('span');
+        valueBox.className = 'slider-value';
+        const valueInput = document.createElement('input');
+        valueInput.type = 'number';
+        valueInput.className = 'slider-num';
+        valueInput.min = min;
+        valueInput.max = max;
+        valueInput.step = step;
+        valueInput.value = settings[key];
+        valueInput.autocomplete = 'off';
+        valueInput.spellcheck = false;
+        valueInput.setAttribute('aria-label', `${labelText}数值`);
+        const unit = document.createElement('i');
+        unit.className = 'slider-unit';
+        unit.textContent = String(format(1)).replace(/^-?[\d.]+/, '');
+        valueBox.append(valueInput, unit);
+        const commitValue = () => {
+            const raw = Number.parseFloat(valueInput.value);
+            const next = Number.isFinite(raw) ? clamp(raw, min, max) : settings[key];
+            settings[key] = next;
+            slider.value = String(next);
+            valueInput.value = String(next);
+            onApply(next);
+        };
+        slider.addEventListener('input', event => {
+            settings[key] = Number.parseFloat(event.target.value);
+            valueInput.value = String(settings[key]);
+            onApply(settings[key]);
+        });
+        valueInput.addEventListener('change', commitValue);
+        valueInput.addEventListener('blur', commitValue);
+        valueInput.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            commitValue();
+            valueInput.blur();
+        });
+        group.append(label, slider, valueBox);
+        return group;
     }
     function buildPanelSliderRow() {
         const sliderRow = document.createElement('div');
         sliderRow.className = 'slider-row-container av-collapse';
         setCollapsed(sliderRow, true);
-        const createSlider = (labelText, key, min, max, step, onApply = applyUiStyles, format = String) => {
-            const group = document.createElement('div');
-            group.className = 'slider-group';
-            const label = document.createElement('label');
-            label.textContent = labelText;
-            const slider = document.createElement('input');
-            slider.type = 'range';
-            slider.min = min;
-            slider.max = max;
-            slider.step = step;
-            slider.value = settings[key];
-            const valueLabel = document.createElement('span');
-            valueLabel.className = 'slider-value';
-            valueLabel.textContent = format(settings[key]);
-            slider.addEventListener('input', event => {
-                settings[key] = Number.parseFloat(event.target.value);
-                valueLabel.textContent = format(settings[key]);
-                onApply();
-            });
-            group.append(label, slider, valueLabel);
-            return group;
-        };
         sliderRow.append(
-            createSlider('常规透明', 'opacity', 0, 1, 0.05),
-            createSlider('常规磨砂', 'blur', 0, 20, 1),
-            createSlider('悬浮透明', 'hoverOpacity', 0, 1, 0.05),
-            createSlider('悬浮磨砂', 'hoverBlur', 0, 20, 1),
-            createSlider('字幕字号', 'subtitleFontSize', FONT_SIZE_MIN, FONT_SIZE_MAX, 1, applySubtitleStyle, value => `${value}px`),
-            createSlider('字幕高度', 'subtitleBottom', SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX, 1, applySubtitleStyle, value => `${value}%`)
+            createSettingSlider('常规透明', 'opacity', 0, 1, 0.05),
+            createSettingSlider('常规磨砂', 'blur', 0, 20, 1),
+            createSettingSlider('悬浮透明', 'hoverOpacity', 0, 1, 0.05),
+            createSettingSlider('悬浮磨砂', 'hoverBlur', 0, 20, 1)
         );
         return sliderRow;
     }
-    function buildPanelCollapseToggles(sliderRow) {
+    function buildSubtitlePanel(panel) {
+        const wrap = document.createElement('div');
+        wrap.className = 'sub-panel av-collapse';
+        setCollapsed(wrap, !settings.subPanelOpen);
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.srt,.vtt,.ass,.ssa,text/plain';
+        fileInput.hidden = true;
+        panel.appendChild(fileInput);
+        fileInput.addEventListener('change', async event => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file) return;
+            try {
+                const text = await file.text();
+                applySubtitleText(text, `本地字幕：${file.name}`, file.name);
+            } catch (_) {
+                log('❌ 字幕读取失败');
+            }
+        });
+        const head = document.createElement('div');
+        head.className = 'sub-src-head';
+        const headTitle = document.createElement('span');
+        headTitle.textContent = '字幕源';
+        const headStatus = document.createElement('span');
+        headStatus.className = 'sub-src-status';
+        headStatus.textContent = `${SUBTITLE_SOURCES.length} 个在线源`;
+        head.append(headTitle, headStatus);
+        const grid = document.createElement('div');
+        grid.className = 'sub-src-grid';
+        for (const source of SUBTITLE_SOURCES) {
+            const btn = createButton(source.label, 'sub-src-btn');
+            btn.type = 'button';
+            btn.dataset.source = source.key;
+            btn.title = `在 ${source.label} 搜索当前番号`;
+            btn.addEventListener('click', () => searchSubtitleSource(source.key, btn));
+            grid.appendChild(btn);
+        }
+        const localRow = document.createElement('div');
+        localRow.className = 'btn-group';
+        const btnLocal = createButton('加载本地');
+        const btnClear = createButton('清除字幕');
+        btnLocal.addEventListener('click', () => fileInput.click());
+        btnClear.addEventListener('click', clearSubtitles);
+        localRow.append(btnLocal, btnClear);
+        const styleBox = document.createElement('div');
+        styleBox.className = 'sub-style-box';
+        const btnResetOffset = createButton('重置本站偏移');
+        btnResetOffset.addEventListener('click', () => {
+            applySubtitleOffset(0);
+            const slider = styleBox.querySelector('input[type="range"]');
+            if (slider) {
+                slider.value = '0';
+                const num = slider.parentElement?.querySelector('.slider-num');
+                if (num) num.value = '0';
+            }
+            store.remove(siteOffsetKey());
+            log(`🧹 已重置 ${IS_JABLE ? 'Jable' : 'MissAV'} 本站偏移为 0`);
+        });
+        styleBox.append(
+            createSettingSlider('字幕偏移', 'subtitleOffset', OFFSET_MIN, OFFSET_MAX, 0.5, applySubtitleOffset, value => `${value}s`),
+            createSettingSlider('字幕字号', 'subtitleFontSize', FONT_SIZE_MIN, FONT_SIZE_MAX, 1, applySubtitleStyle, value => `${value}px`),
+            createSettingSlider('字幕高度', 'subtitleBottom', SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX, 1, applySubtitleStyle, value => `${value}%`),
+            btnResetOffset
+        );
+        wrap.append(head, grid, localRow, styleBox);
+        return wrap;
+    }
+    function buildPanelCollapseToggles(sliderRow, subtitlePanel) {
         const loginToggleBtn = createButton('隐藏/显示自动登录', 'btn-primary panel-full-btn');
         const loginPanel = buildLoginPanel();
         loginToggleBtn.addEventListener('click', () => {
@@ -3022,6 +3135,13 @@
             setCollapsed(loginPanel, collapsed);
             settings.loginPanelOpen = !collapsed;
             store.set('loginPanelOpen', settings.loginPanelOpen);
+        });
+        const subToggleBtn = createButton('隐藏/显示字幕设置', 'btn-primary panel-full-btn');
+        subToggleBtn.addEventListener('click', () => {
+            const collapsed = !subtitlePanel.classList.contains('av-collapsed');
+            setCollapsed(subtitlePanel, collapsed);
+            settings.subPanelOpen = !collapsed;
+            store.set('subPanelOpen', settings.subPanelOpen);
         });
         const toggleSliderBtn = createButton('隐藏/显示透明UI设置', 'btn-primary panel-full-btn');
         toggleSliderBtn.addEventListener('click', () => {
@@ -3043,7 +3163,7 @@
             settings.mobilePanelOpen = !collapsed;
             store.set('mobilePanelOpen', settings.mobilePanelOpen);
         });
-        return { loginToggleBtn, loginPanel, toggleSliderBtn, filterToggleBtn, filterPanel, mobileToggleBtn, mobilePanel };
+        return { loginToggleBtn, loginPanel, subToggleBtn, toggleSliderBtn, filterToggleBtn, filterPanel, mobileToggleBtn, mobilePanel };
     }
     function createPanel() {
         if (state.panel || document.querySelector('.custom-control-panel')) return;
@@ -3088,16 +3208,17 @@
             layoutPanel();
         };
         gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
-        const { keysRow, offsetInput } = buildPanelKeysRow();
+        const { keysRow } = buildPanelKeysRow();
         const audioRow = buildPanelAudioRow();
-        const actionRow = buildPanelActionRow(panel, offsetInput, layoutPanel);
+        const actionRow = buildPanelActionRow(panel, layoutPanel);
+        const subtitlePanel = buildSubtitlePanel(panel);
         const sliderRow = buildPanelSliderRow();
-        const { loginToggleBtn, loginPanel, toggleSliderBtn, filterToggleBtn, filterPanel, mobileToggleBtn, mobilePanel } = buildPanelCollapseToggles(sliderRow);
+        const { loginToggleBtn, loginPanel, subToggleBtn, toggleSliderBtn, filterToggleBtn, filterPanel, mobileToggleBtn, mobilePanel } = buildPanelCollapseToggles(sliderRow, subtitlePanel);
         state.logEl = document.createElement('div');
         state.logEl.className = 'panel-status-log';
         footer.appendChild(state.logEl);
         flushPendingLogs(state.logEl);
-        body.append(keysRow, audioRow, actionRow, loginToggleBtn, loginPanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
+        body.append(keysRow, audioRow, actionRow, loginToggleBtn, loginPanel, subToggleBtn, subtitlePanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
         if (AV_PLATFORM.isMobile) body.append(mobileToggleBtn, mobilePanel);
         collapsibleInner.append(body, footer);
         panel.append(header, collapsible);
@@ -4401,14 +4522,119 @@
         if (!last) return null;
         return last.match(/([a-z]+-\d+|[a-z]+\d+-\d+|[a-z]+\d+[a-z]+-\d+)/i)?.[1] || last;
     }
-    function searchSubtitleWeb() {
-        const id = getCurrentVideoID();
-        if (!id) {
-            log('⚠️ 无法识别视频ID');
+    function subtitleSourceByKey(key) {
+        return SUBTITLE_SOURCES.find(item => item.key === key) || null;
+    }
+    function subtitleSourceSearchUrl(source, code) {
+        return `${source.web}${encodeURIComponent(code)}`;
+    }
+    function setSourceButtonState(btn, state) {
+        if (!btn) return;
+        btn.classList.remove('is-busy', 'has-hit', 'has-none', 'has-error');
+        if (state) btn.classList.add(state);
+    }
+    function cloudflareBlocked(html) {
+        return /Attention Required!|Just a moment\.\.\.|cf-chl-|cf-turnstile|_cf_chl_opt/i.test(html);
+    }
+    async function fetchXunleiSubtitles(code) {
+        const text = await gmRequest(`https://api-shoulei-ssl.xunlei.com/oracle/subtitle?name=${encodeURIComponent(code)}`, { timeout: 10000 });
+        const list = JSON.parse(text)?.data ?? [];
+        return list
+            .filter(item => item?.url && SUPPORTED_SUBTITLE_EXT.test(item.url))
+            .map(item => ({ url: item.url, name: item.name || item.url.split('/').pop() || '未命名字幕' }));
+    }
+    async function fetchCatSubtitles(code) {
+        const html = await gmRequest(`https://www.subtitlecat.com/index.php?search=${encodeURIComponent(code)}`, { timeout: 8000 });
+        if (cloudflareBlocked(html)) throw new Error('Cloudflare 验证拦截');
+        const pages = [...new Set([...html.matchAll(/href="([^"]*subs\/[^"]+\.html)"/gi)].map(m => m[1]))];
+        if (!pages.length) return [];
+        const settled = await Promise.allSettled(pages.slice(0, 3).map(async rel => {
+            const pageUrl = new URL(rel, 'https://www.subtitlecat.com/').href;
+            const detail = await gmRequest(pageUrl, { timeout: 8000 });
+            return [...detail.matchAll(/href="(\/subs\/\d+\/([^"]+)\.srt)"/gi)].map(m => ({
+                url: new URL(m[1], 'https://www.subtitlecat.com/').href,
+                name: `${decodeURIComponent(m[2])}.srt`
+            }));
+        }));
+        return settled.flatMap(item => (item.status === 'fulfilled' ? item.value : []));
+    }
+    async function fetchSubhdSubtitles(code) {
+        const html = await gmRequest(`https://subhd.tv/search/${encodeURIComponent(code)}`, { timeout: 8000 });
+        if (cloudflareBlocked(html)) throw new Error('Cloudflare 验证拦截');
+        const items = [];
+        const seen = new Set();
+        for (const match of html.matchAll(/href="(\/a\/[a-zA-Z0-9]+)"[^>]*>([\s\S]{0,200}?)<\/a>/gi)) {
+            const href = match[1];
+            if (seen.has(href)) continue;
+            const label = match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (!label) continue;
+            seen.add(href);
+            items.push({ url: `https://subhd.tv${href}`, name: label.slice(0, 80), external: true });
+            if (items.length >= 12) break;
+        }
+        return items;
+    }
+    async function fetchAvsubSubtitles(code) {
+        const html = await gmRequest(`https://www.avsubtitles.com/search_results.php?search=${encodeURIComponent(code)}`, { timeout: 8000 });
+        if (cloudflareBlocked(html)) throw new Error('Cloudflare 验证拦截');
+        const movies = [...new Set([...html.matchAll(/href="(\/movie\d+\/[^"#]+)"/gi)].map(m => m[1]))];
+        if (!movies.length) return [];
+        const detail = await gmRequest(new URL(movies[0], 'https://www.avsubtitles.com/').href, { timeout: 8000 });
+        return [...detail.matchAll(/href="(\/movie\d+\/[^/]+\/subtitles\/([a-z]{2})\/(\d+))"/gi)].map(m => ({
+            url: new URL(m[1], 'https://www.avsubtitles.com/').href,
+            name: `[${m[2].toUpperCase()}] ${decodeURIComponent(m[1].split('/').pop())}.srt`
+        }));
+    }
+    async function fetchJavsubSubtitles(code) {
+        const html = await gmRequest(`https://javsub.ai/search?q=${encodeURIComponent(code)}`, { timeout: 8000 });
+        if (cloudflareBlocked(html)) throw new Error('Cloudflare 验证拦截');
+        const items = [];
+        const seen = new Set();
+        for (const match of html.matchAll(/href="(\/subtitles?\/[a-zA-Z0-9_-]+)"/gi)) {
+            if (seen.has(match[1])) continue;
+            seen.add(match[1]);
+            items.push({ url: new URL(match[1], 'https://javsub.ai/').href, name: `${code} · JavSub`, external: true });
+            if (items.length >= 12) break;
+        }
+        return items;
+    }
+    const SUBTITLE_FETCHERS = {
+        xunlei: fetchXunleiSubtitles,
+        cat: fetchCatSubtitles,
+        subhd: fetchSubhdSubtitles,
+        avsub: fetchAvsubSubtitles,
+        javsub: fetchJavsubSubtitles
+    };
+    async function searchSubtitleSource(key, btn) {
+        const source = subtitleSourceByKey(key);
+        if (!source) return;
+        const code = getCurrentVideoID();
+        if (!code) {
+            log('⚠️ 无法识别视频番号');
             return;
         }
-        log(`🌐 网页搜索: ${id}`);
-        GM_openInTab(`https://subtitlecat.com/index.php?search=${encodeURIComponent(id)}`, { active: true });
+        const fetcher = SUBTITLE_FETCHERS[key];
+        if (!fetcher || btn?.classList.contains('is-busy')) return;
+        setSourceButtonState(btn, 'is-busy');
+        log(`🔍 ${source.label} 搜索: ${code}`);
+        try {
+            const items = await fetcher(code);
+            if (!items.length) {
+                setSourceButtonState(btn, 'has-none');
+                log(`⚠️ ${source.label} 未找到字幕`);
+                return;
+            }
+            setSourceButtonState(btn, 'has-hit');
+            log(`✅ ${source.label} 找到 ${items.length} 条`);
+            showSubtitlePicker(items);
+        } catch (error) {
+            setSourceButtonState(btn, 'has-error');
+            log(`❌ ${source.label} 失败: ${error.message}`);
+            if (source.web && key !== 'xunlei') {
+                log(`🌐 已打开 ${source.label} 搜索页`);
+                GM_openInTab(subtitleSourceSearchUrl(source, code), { active: true });
+            }
+        }
     }
     function gmSend(url, { headers = null, timeout = 15000, responseType = undefined, anonymous = false, method = 'GET', data = null } = {}) {
         return new Promise((resolve, reject) => {
@@ -4605,32 +4831,6 @@
         if (!slug || /^(?:new|popular|actresses|genres|makers|search|videos|en|cn|ja|zh)$/i.test(slug)) return '';
         return normalizeVideoCode(slug);
     }
-    async function searchSubtitleAPI() {
-        const id = getCurrentVideoID();
-        if (!id) {
-            log('⚠️ 无法获取ID');
-            return;
-        }
-        log(`🔍 正在API搜索: ${id}`);
-        try {
-            const text = await gmRequest(
-                `https://api-shoulei-ssl.xunlei.com/oracle/subtitle?name=${encodeURIComponent(id)}`,
-                { timeout: 10000 }
-            );
-            const list = JSON.parse(text)?.data ?? [];
-            const valid = list
-                .filter(item => item?.url && SUPPORTED_SUBTITLE_EXT.test(item.url))
-                .map(item => ({ url: item.url, name: item.name || item.url.split('/').pop() || '未命名字幕' }));
-            if (!valid.length) {
-                log('⚠️ 未找到匹配的字幕文件');
-                return;
-            }
-            log(`✅ 找到 ${valid.length} 个字幕`);
-            showSubtitlePicker(valid);
-        } catch (error) {
-            log(`❌ API错误: ${error.message}`);
-        }
-    }
     function decodeSubtitleBytes(bytes) {
         if (!bytes.length) return '';
         if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
@@ -4782,9 +4982,16 @@
         for (const item of items) {
             const row = document.createElement('div');
             row.className = 'subtitle-picker-row';
-            row.textContent = `📄 ${item.name}`;
-            row.title = item.name;
-            row.addEventListener('click', () => loadRemoteSubtitle(item.url, item.name));
+            row.textContent = `${item.external ? '🌐' : '📄'} ${item.name}`;
+            row.title = item.external ? `${item.name} · 打开详情页` : item.name;
+            row.addEventListener('click', () => {
+                if (item.external) {
+                    closeSubtitlePicker();
+                    GM_openInTab(item.url, { active: true });
+                    return;
+                }
+                loadRemoteSubtitle(item.url, item.name);
+            });
             list.appendChild(row);
         }
         state.subtitlePicker = list;
@@ -11651,7 +11858,7 @@
     let whosFrameMemo = null;
     const whosFrameInflight = new Map();
     function framesPreviewEnabled() {
-        return store.get('whosFrames') !== '0';
+        return settings.framesPreview !== false;
     }
     function loadWhosFrameCache() {
         if (whosFrameMemo) return whosFrameMemo;
@@ -11664,6 +11871,7 @@
                     for (const key of Object.keys(parsed)) {
                         const value = parsed[key];
                         if (!value || !Array.isArray(value.frames) || !value.frames.length) continue;
+                        if (value.v !== WHOS_CACHE_VERSION) continue;
                         whosFrameMemo.set(key.toLowerCase(), value);
                     }
                 }
@@ -11685,8 +11893,63 @@
             debugLog(error, 'whos-cache-save');
         }
     }
+    function frameImageKey(src) {
+        const clean = String(src || '').replace(/[?#].*$/, '');
+        const cut = clean.lastIndexOf('/');
+        const name = cut >= 0 ? clean.slice(cut + 1) : clean;
+        if (!name) return clean.toLowerCase();
+        return name.replace(/s\.(webp|jpe?g|png)$/i, '.$1').toLowerCase();
+    }
+    const WHOS_CARD_OPEN_RE = /<a\b([^>]*\bdata-frame-id="[^"]*"[^>]*)>/gi;
+    const WHOS_CARD_TIME_RE = /data-frame-time="(\d+)"/i;
+    const WHOS_CARD_ID_RE = /data-frame-id="([^"]*)"/i;
+    const WHOS_CARD_IMG_RE = /<img\b[^>]*\bsrc="(https:\/\/[^"]+)"/i;
+    const WHOS_CARD_IMG_SPAN = 1200;
+    function finishWhosFrames(byTime) {
+        const sorted = Array.from(byTime.values()).sort((a, b) => a.t - b.t);
+        const seenPic = new Set();
+        const out = [];
+        for (const frame of sorted) {
+            if (seenPic.has(frame.key)) continue;
+            seenPic.add(frame.key);
+            out.push({ t: frame.t, src: frame.src, id: frame.id });
+            if (out.length >= WHOS_FRAMES_LIMIT) break;
+        }
+        return out;
+    }
+    function parseWhosFramesFast(html) {
+        const byTime = new Map();
+        WHOS_CARD_OPEN_RE.lastIndex = 0;
+        let match = WHOS_CARD_OPEN_RE.exec(html);
+        while (match) {
+            const attrs = match[1];
+            const timeMatch = WHOS_CARD_TIME_RE.exec(attrs);
+            if (timeMatch) {
+                const time = Number(timeMatch[1]);
+                if (Number.isFinite(time) && time >= 0) {
+                    const t = Math.round(time);
+                    if (!byTime.has(t)) {
+                        const from = WHOS_CARD_OPEN_RE.lastIndex;
+                        const rest = html.slice(from, from + WHOS_CARD_IMG_SPAN);
+                        const cut = rest.search(/<a[\s>]/i);
+                        const head = cut > 0 ? rest.slice(0, cut) : rest;
+                        const imgMatch = WHOS_CARD_IMG_RE.exec(head);
+                        if (imgMatch) {
+                            const idMatch = WHOS_CARD_ID_RE.exec(attrs);
+                            byTime.set(t, { t, src: imgMatch[1], key: frameImageKey(imgMatch[1]), id: idMatch ? idMatch[1] : '' });
+                        }
+                    }
+                }
+            }
+            match = WHOS_CARD_OPEN_RE.exec(html);
+        }
+        if (!byTime.size) return [];
+        return finishWhosFrames(byTime);
+    }
     function parseWhosFrames(html) {
         if (!html) return [];
+        const fast = parseWhosFramesFast(html);
+        if (fast.length) return fast;
         let doc = null;
         try {
             doc = new DOMParser().parseFromString(html, 'text/html');
@@ -11694,20 +11957,18 @@
             debugLog(error, 'whos-parse');
             return [];
         }
-        const out = [];
-        const seen = new Set();
+        const byTime = new Map();
         for (const card of doc.querySelectorAll('a.frame-card[data-frame-time]')) {
             const time = Number(card.getAttribute('data-frame-time'));
             const img = card.querySelector('img');
             const src = img ? img.getAttribute('src') || img.getAttribute('data-src') || '' : '';
             if (!Number.isFinite(time) || time < 0) continue;
             if (!/^https:\/\//.test(src)) continue;
-            if (seen.has(time)) continue;
-            seen.add(time);
-            out.push({ t: Math.round(time), src, id: card.getAttribute('data-frame-id') || '' });
+            const t = Math.round(time);
+            if (byTime.has(t)) continue;
+            byTime.set(t, { t, src, key: frameImageKey(src), id: card.getAttribute('data-frame-id') || '' });
         }
-        out.sort((a, b) => a.t - b.t);
-        return out;
+        return finishWhosFrames(byTime);
     }
     function parseWhosFirstVideo(html) {
         if (!html) return '';
@@ -11733,6 +11994,68 @@
         }
         return '';
     }
+    function whosPageUrl(key, page) {
+        return `${WHOS_AJAX_BASE}?label_type_id=0&page=${page}&fh=${encodeURIComponent(key)}`;
+    }
+    function mergeWhosFrames(target, incoming) {
+        if (!incoming.length) return 0;
+        const seen = new Set(target.map(frame => frame.t));
+        let added = 0;
+        for (const frame of incoming) {
+            if (seen.has(frame.t)) continue;
+            seen.add(frame.t);
+            target.push(frame);
+            added += 1;
+        }
+        return added;
+    }
+    function sampleWhosFrames(frames, target) {
+        if (frames.length <= target || target < 2) return frames;
+        const step = (frames.length - 1) / (target - 1);
+        const seen = new Set();
+        const out = [];
+        for (let i = 0; i < target; i += 1) {
+            const frame = frames[Math.round(i * step)];
+            if (!frame || seen.has(frame.t)) continue;
+            seen.add(frame.t);
+            out.push(frame);
+        }
+        return out;
+    }
+    function pagedWhosFrames(key, seed) {
+        const acc = seed.slice();
+        let nextPage = 2;
+        let halted = false;
+        const runLane = () => {
+            if (halted || nextPage > WHOS_MAX_PAGES) return Promise.resolve();
+            const current = nextPage;
+            nextPage += 1;
+            return fetchHtml(whosPageUrl(key, current), { skipProxy: true, timeout: WHOS_FETCH_TIMEOUT })
+                .then(html => {
+                    const chunk = parseWhosFrames(html);
+                    if (!chunk.length) {
+                        halted = true;
+                        return undefined;
+                    }
+                    mergeWhosFrames(acc, chunk);
+                    if (halted) return undefined;
+                    return runLane();
+                })
+                .catch(error => {
+                    debugLog(error, 'whos-page');
+                    return undefined;
+                });
+        };
+        const lanes = [];
+        for (let i = 0; i < WHOS_PAGE_LANES; i += 1) lanes.push(runLane());
+        return Promise.all(lanes).then(() => {
+            if (acc.length > seed.length) {
+                acc.sort((a, b) => a.t - b.t);
+                log(`🎞 whos.tv 共 ${acc.length} 帧 · ${key.toUpperCase()}`);
+            }
+            return acc;
+        });
+    }
     function fetchWhosFrames(code) {
         const norm = normalizeVideoCode(code);
         if (!norm) return Promise.resolve([]);
@@ -11757,12 +12080,16 @@
                     });
             })
             .then(frames => {
+                if (!frames.length) return frames;
+                return pagedWhosFrames(key, frames).then(merged => sampleWhosFrames(merged, WHOS_TICK_TARGET));
+            })
+            .then(frames => {
                 whosFrameInflight.delete(key);
                 if (!frames.length) {
                     log(`🎞 whos.tv 未找到关键帧 · ${norm}`);
                     return [];
                 }
-                cache.set(key, { at: Date.now(), frames });
+                cache.set(key, { at: Date.now(), v: WHOS_CACHE_VERSION, frames });
                 saveWhosFrameCache();
                 log(`🎞 whos.tv 关键帧 ${frames.length} 张 · ${norm}`);
                 return frames;
@@ -11800,7 +12127,7 @@
         return { host, ticks, tip, img, label };
     }
     function installFramePreview(video, frames) {
-        if (!video || !frames || !frames.length) return;
+        if (!video || !frames || !frames.length || !framesPreviewEnabled()) return;
         const attach = () => {
             const scope = video.closest('.plyr') || document;
             const progress = scope.querySelector('.plyr__progress, .plyr__progress__container input[type="range"], input[type="range"]');
@@ -11825,31 +12152,84 @@
                 host.style.width = `${rr.width}px`;
                 host.style.top = `${rr.top - cr.top + (rr.height - 14) / 2}px`;
             };
+            let ticksBox = null;
+            let syncFrame = 0;
+            const queueSync = () => {
+                if (syncFrame) return;
+                syncFrame = requestAnimationFrame(() => {
+                    syncFrame = 0;
+                    ticksBox = null;
+                    syncLayer();
+                });
+            };
             syncLayer();
-            window.addEventListener('resize', syncLayer, { passive: true });
-            video.addEventListener('loadedmetadata', syncLayer, { passive: true });
-            video.addEventListener('durationchange', syncLayer, { passive: true });
-            const scale = () => frameScaleFor(frames, video.duration || 0);
-            const seekOf = frame => frame.t / scale();
+            window.addEventListener('resize', queueSync, { passive: true });
+            let scaleValue = 1;
+            let scaleDuration = -1;
+            const scale = () => {
+                const current = Number(video.duration) || 0;
+                if (current !== scaleDuration) {
+                    scaleDuration = current;
+                    scaleValue = frameScaleFor(frames, current);
+                }
+                return scaleValue;
+            };
+            const seekOf = frame => {
+                scale();
+                return frame.t / scaleValue;
+            };
             const ratioOf = frame => {
-                const duration = video.duration || 0;
-                if (!(duration > 0)) return 0;
+                const duration = Number(video.duration);
+                if (!Number.isFinite(duration) || duration <= 0) return 0;
                 return clamp(seekOf(frame) / duration, 0, 1);
             };
+            let visibleFrames = frames;
+            let tickDuration = 0;
+            let tickRatios = [];
+            let tickByTime = new Map();
+            let tickRatioOf = new Map();
             const renderTicks = () => {
-                ticks.replaceChildren();
-                if (!(video.duration > 0)) return;
+                visibleFrames = [];
+                tickRatios = [];
+                tickByTime = new Map();
+                tickRatioOf = new Map();
+                const total = Number(video.duration);
+                if (!Number.isFinite(total) || total <= 0) {
+                    ticks.replaceChildren();
+                    return;
+                }
+                tickDuration = total;
+                const fragment = document.createDocumentFragment();
+                let lastRatio = -1;
                 for (const frame of frames) {
+                    const ratio = ratioOf(frame);
+                    if (ratio - lastRatio < 0.0035) continue;
+                    lastRatio = ratio;
+                    const seconds = Number(seekOf(frame).toFixed(2));
+                    const timeKey = String(seconds);
+                    visibleFrames.push(frame);
+                    tickRatios.push(ratio);
+                    tickRatioOf.set(frame.t, ratio);
                     const mark = document.createElement('button');
                     mark.type = 'button';
                     mark.className = 'av-frame-tick';
-                    mark.style.left = `${(ratioOf(frame) * 100).toFixed(3)}%`;
-                    mark.dataset.time = String(Number(seekOf(frame).toFixed(2)));
-                    mark.title = formatDuration(Math.round(seekOf(frame)));
-                    mark.setAttribute('aria-label', `跳到 ${formatDuration(Math.round(seekOf(frame)))}`);
-                    ticks.append(mark);
+                    mark.style.left = `${(ratio * 100).toFixed(3)}%`;
+                    mark.dataset.time = timeKey;
+                    mark.title = formatDuration(Math.round(seconds));
+                    mark.setAttribute('aria-label', `跳到 ${formatDuration(Math.round(seconds))}`);
+                    tickByTime.set(timeKey, frame);
+                    fragment.appendChild(mark);
                 }
+                ticks.replaceChildren(fragment);
             };
+            const onDuration = () => {
+                queueSync();
+                const total = Number(video.duration);
+                if (!Number.isFinite(total) || total <= 0) return;
+                if (Math.abs(total - tickDuration) < 0.5) return;
+                renderTicks();
+            };
+            video.addEventListener('durationchange', onDuration, { passive: true });
             let hideTimer = 0;
             const hide = () => {
                 host.classList.remove('is-on');
@@ -11858,31 +12238,43 @@
                 if (hideTimer) clearTimeout(hideTimer);
                 hideTimer = trackTimeout(setTimeout(hide, 1400));
             };
-            const frameByTime = value => frames.find(frame => String(Number(seekOf(frame).toFixed(2))) === value) || null;
+            const frameByTime = value => tickByTime.get(value) || null;
             const showFrame = frame => {
                 if (!frame) return;
                 const seek = seekOf(frame);
                 if (img.getAttribute('src') !== frame.src) img.setAttribute('src', frame.src);
                 const remain = Math.max(0, (video.duration || 0) - seek);
                 label.textContent = `${formatDuration(Math.round(seek))} · 剩 ${formatDuration(remain)}`;
-                tip.style.left = `${(clamp(ratioOf(frame), 0.08, 0.92) * 100).toFixed(2)}%`;
+                const frameRatio = tickRatioOf.has(frame.t) ? tickRatioOf.get(frame.t) : ratioOf(frame);
+                tip.style.left = `${(clamp(frameRatio, 0.08, 0.92) * 100).toFixed(2)}%`;
                 host.classList.add('is-on');
                 if (hideTimer) clearTimeout(hideTimer);
             };
             const nearestTick = clientX => {
-                if (!(video.duration > 0)) return null;
-                const box = ticks.getBoundingClientRect();
+                if (!tickRatios.length) return null;
+                if (!ticksBox) ticksBox = ticks.getBoundingClientRect();
+                const box = ticksBox;
                 if (!box.width) return null;
-                let best = null;
-                let bestDelta = Infinity;
-                for (const frame of frames) {
-                    const delta = Math.abs(box.left + ratioOf(frame) * box.width - clientX);
+                const position = clamp((clientX - box.left) / box.width, 0, 1);
+                let low = 0;
+                let high = tickRatios.length - 1;
+                while (low < high) {
+                    const mid = (low + high) >> 1;
+                    if (tickRatios[mid] < position) low = mid + 1;
+                    else high = mid;
+                }
+                let best = low;
+                let bestDelta = Math.abs(box.left + tickRatios[low] * box.width - clientX);
+                const previous = low - 1;
+                if (previous >= 0) {
+                    const delta = Math.abs(box.left + tickRatios[previous] * box.width - clientX);
                     if (delta < bestDelta) {
                         bestDelta = delta;
-                        best = frame;
+                        best = previous;
                     }
                 }
-                return best && bestDelta <= FRAME_TICK_HIT ? best : null;
+                if (bestDelta > FRAME_TICK_HIT) return null;
+                return visibleFrames[best] || null;
             };
             const applySeek = input => {
                 const seconds = Number(input);
@@ -11906,11 +12298,19 @@
                 };
                 if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settle);
             };
-            const onMove = event => {
-                if (event.pointerType === 'touch') return;
-                const frame = nearestTick(event.clientX);
+            let moveFrameId = 0;
+            let moveX = 0;
+            const flushMove = () => {
+                moveFrameId = 0;
+                ticksBox = null;
+                const frame = nearestTick(moveX);
                 if (frame) showFrame(frame);
                 else hide();
+            };
+            const onMove = event => {
+                if (event.pointerType === 'touch') return;
+                moveX = event.clientX;
+                if (!moveFrameId) moveFrameId = requestAnimationFrame(flushMove);
             };
             const onDown = event => {
                 const hit = event.target instanceof Element ? event.target.closest('.av-frame-tick') : null;
@@ -11959,9 +12359,10 @@
             progress.addEventListener('pointerup', scheduleHide, { passive: true });
             progress.addEventListener('pointercancel', scheduleHide, { passive: true });
             progress.addEventListener('pointerleave', onLeave, { passive: true });
-            const onMeta = () => renderTicks();
-            video.addEventListener('loadedmetadata', onMeta, { passive: true });
-            video.addEventListener('durationchange', onMeta, { passive: true });
+            video.addEventListener('loadedmetadata', () => {
+                queueSync();
+                renderTicks();
+            }, { passive: true });
             renderTicks();
             return true;
         };
@@ -11972,6 +12373,11 @@
             if (attach() || tries >= 40 || !video.isConnected) clearInterval(timer);
         }, 250));
     }
+    function removeFramePreview() {
+        for (const host of document.querySelectorAll('.av-frame-marks')) host.remove();
+        for (const el of document.querySelectorAll('[data-av-frames-ready]')) delete el.dataset.avFramesReady;
+        for (const v of document.querySelectorAll('video')) delete v.dataset.avFramesBound;
+    }
     function setupFramePreview(video) {
         if (!video || video.dataset.avFramesBound === '1') return;
         video.dataset.avFramesBound = '1';
@@ -11979,7 +12385,7 @@
         const code = getPageVideoCode();
         if (!code) return;
         fetchWhosFrames(code).then(frames => {
-            if (!frames.length || !video.isConnected) return;
+            if (!frames.length || !video.isConnected || !framesPreviewEnabled()) return;
             installFramePreview(video, frames);
         });
     }
