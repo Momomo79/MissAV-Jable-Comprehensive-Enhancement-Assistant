@@ -1,6 +1,6 @@
 # 🚀 MissAV & Jable 综合增强助手
 
-![Version](https://img.shields.io/badge/version-14.03-blue.svg)
+![Version](https://img.shields.io/badge/version-14.11-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-PC%20(Desktop)-orange.svg)
 ![Mobile](https://img.shields.io/badge/mobile-Android%20%2F%20iOS-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
