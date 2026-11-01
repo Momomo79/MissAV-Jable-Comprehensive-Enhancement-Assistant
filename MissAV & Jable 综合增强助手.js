@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      14.11
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与音频设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      14.12
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -28,6 +28,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
 // @connect      xunlei.com
 // @connect      geilijiasu.com
 // @connect      subtitle.v.geilijiasu.com
@@ -853,6 +854,7 @@
         filterPanelOpen: store.getBool('filterPanelOpen', false),
         mobilePanelOpen: store.getBool('mobilePanelOpen', false),
         framesPreview: store.get('whosFrames') !== '0',
+        hideMenu: store.get('hideMenu') === '1',
         subPanelOpen: store.getBool('subPanelOpen', false),
         analyticsTrack: store.getBool('analyticsTrack', true),
         audioGain: store.getNumber(siteAudioKey('Gain'), 1, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX),
@@ -907,6 +909,7 @@
         store.set('filterPanelOpen', settings.filterPanelOpen);
         store.set('mobilePanelOpen', settings.mobilePanelOpen);
         store.set('whosFrames', settings.framesPreview ? '1' : '0');
+        store.set('hideMenu', settings.hideMenu ? '1' : '0');
         store.set('subPanelOpen', settings.subPanelOpen);
         store.set('analyticsTrack', settings.analyticsTrack);
         store.set(siteAudioKey('Gain'), settings.audioGain);
@@ -1131,6 +1134,8 @@
     const ORIG_DOC_DESCRIPTORS = {};
     const protectInstance = {};
     let guardSweepAt = 0;
+    let visibilitySpoofError = null;
+    let visibilitySpoofStage = '';
     const readDescriptors = win => {
         for (const key of ['hidden', 'webkitHidden', 'visibilityState', 'webkitVisibilityState']) {
             if (ORIG_DOC_DESCRIPTORS[key]) continue;
@@ -1169,6 +1174,7 @@
             if (on) readDescriptors(win);
             protectInstance.hidden = on ? Object.getOwnPropertyDescriptor(target, 'hidden') : null;
             protectInstance.visibilityState = on ? Object.getOwnPropertyDescriptor(target, 'visibilityState') : null;
+            visibilitySpoofStage = 'hidden';
             Object.defineProperty(target, 'hidden', {
                 configurable: true,
                 enumerable: true,
@@ -1176,6 +1182,7 @@
                     return on ? false : originalHidden();
                 }
             });
+            visibilitySpoofStage = 'visibilityState';
             Object.defineProperty(target, 'visibilityState', {
                 configurable: true,
                 enumerable: true,
@@ -1184,8 +1191,12 @@
                 }
             });
             Object.defineProperty(target, VISIBILITY_PATCHED, { value: on, configurable: true });
+            visibilitySpoofError = null;
+            visibilitySpoofStage = '';
             return true;
-        } catch (_) {
+        } catch (error) {
+            visibilitySpoofError = error;
+            debugLog(error, 'visibility-spoof');
             return false;
         }
     };
@@ -1265,6 +1276,55 @@
         if (event.cancelable) event.preventDefault();
         event.stopImmediatePropagation();
     };
+    let visibilityGuardAlerted = false;
+    const visibilityFailureReason = () => {
+        if (!visibilitySpoofError) return '属性改写未抛异常但未生效';
+        const name = visibilitySpoofError.name || 'Error';
+        const message = visibilitySpoofError.message || String(visibilitySpoofError);
+        return `${name}: ${message}`;
+    };
+    const visibilityDescriptorState = win => {
+        try {
+            const own = Object.getOwnPropertyDescriptor(win.document, 'hidden');
+            const proto = Object.getOwnPropertyDescriptor(win.Document.prototype, 'hidden');
+            const ownText = own ? (own.configurable ? '可写' : '锁定') : '缺失';
+            const protoText = proto ? (proto.configurable ? '可写' : '锁定') : '缺失';
+            return `hidden 自身${ownText}/原型${protoText}`;
+        } catch (error) {
+            return `hidden 描述符读取失败(${error && error.name ? error.name : 'Error'})`;
+        }
+    };
+    const reportVisibilityGuard = win => {
+        let ok = false;
+        try {
+            ok = win.document[VISIBILITY_PATCHED] === true;
+        } catch (error) {
+            debugLog(error, 'visibility-guard');
+        }
+        if (ok) {
+            visibilityGuardAlerted = false;
+            visibilitySpoofError = null;
+            visibilitySpoofStage = '';
+            return;
+        }
+        if (visibilityGuardAlerted) return;
+        visibilityGuardAlerted = true;
+        const stage = visibilitySpoofStage ? `步骤=${visibilitySpoofStage} · ` : '';
+        log(`❌ 切屏检测屏蔽失败：${visibilityFailureReason()} · ${stage}${visibilityDescriptorState(win)}`);
+        try {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[切屏检测屏蔽] 详细诊断', {
+                    reason: visibilityFailureReason(),
+                    stage: visibilitySpoofStage || '(未进入改写)',
+                    error: visibilitySpoofError,
+                    marker: win.document[VISIBILITY_PATCHED],
+                    sameDocument: Object.getPrototypeOf(win.document) === win.Document.prototype
+                });
+            }
+        } catch (error) {
+            debugLog(error, 'visibility-guard-log');
+        }
+    };
     const ensureVisibilityGuard = force => {
         const now = Date.now();
         if (!force && now - guardSweepAt < 1500) return false;
@@ -1273,6 +1333,7 @@
         applyVisibilitySpoof(win, true);
         patchFocusApi(win, true);
         patchEventHandlers(win, true);
+        reportVisibilityGuard(win);
         return true;
     };
     for (const type of ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'freeze', 'resume', 'blur', 'focusout']) {
@@ -1676,6 +1737,8 @@
         .panel-gear:hover { color: #fff; background: rgba(148,163,184,.18); border-color: rgba(148,163,184,.32); box-shadow: 0 0 10px rgba(129,140,248,.45); }
         .panel-gear:focus-visible { outline: 2px solid rgba(56,189,248,.7); outline-offset: 2px; }
         .custom-control-panel.panel-collapsed .panel-gear { transform: rotate(180deg); }
+        .panel-hint { padding: 2px 10px 0; text-align: center; font-size: 10px; line-height: 1.5; color: rgba(148,163,184,.92); letter-spacing: .2px; }
+        .custom-control-panel.panel-menu-hidden { display: none !important; }
         .custom-control-panel.panel-collapsed .panel-header { gap: 0; }
         .custom-control-panel.panel-collapsed .panel-title { max-width: 0; opacity: 0; }
         .panel-collapse { width: ${PANEL_WIDTH - 2}px; display: grid; grid-template-rows: 1fr; transition: grid-template-rows .3s cubic-bezier(.4,0,.2,1), opacity .24s ease; }
@@ -1702,8 +1765,8 @@
         .btn-group button.btn-danger { background: rgba(239,68,68,.25); color: #fecaca; border-color: rgba(239,68,68,.4); }
         .btn-group button.btn-ghost { background: rgba(148,163,184,.18); color: #e2e8f0; border-color: rgba(148,163,184,.32); }
         .btn-group button.btn-ghost:hover { background: rgba(148,163,184,.3); }
-        .btn-group button.av-platform-btn { grid-column: 1 / -1; width: 100%; min-height: 30px; margin-top: 2px; padding: 5px 10px; text-align: center; letter-spacing: .6px; background: linear-gradient(135deg, rgba(56,189,248,.22), rgba(59,130,246,.22)); border-color: rgba(96,165,250,.45); color: #e0f2fe; }
-        .btn-group button.av-platform-btn:hover { background: linear-gradient(135deg, rgba(56,189,248,.34), rgba(59,130,246,.34)); border-color: rgba(125,211,252,.7); }
+        .btn-group button.av-platform-btn, .btn-group button.av-frames-btn { grid-column: 1 / -1; width: 100%; min-height: 30px; margin-top: 2px; padding: 5px 10px; text-align: center; letter-spacing: .6px; background: linear-gradient(135deg, rgba(56,189,248,.22), rgba(59,130,246,.22)); border-color: rgba(96,165,250,.45); color: #e0f2fe; }
+        .btn-group button.av-platform-btn:hover, .btn-group button.av-frames-btn:hover { background: linear-gradient(135deg, rgba(56,189,248,.34), rgba(59,130,246,.34)); border-color: rgba(125,211,252,.7); }
         .btn-group .av-open-cockpit { display: inline-flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; width: 100%; min-height: 26px; padding: 4px 5px; border: 1px solid rgba(59,130,246,.5); border-radius: 6px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #f8fafc; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; text-decoration: none; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: pointer; transition: filter .2s ease; }
         .btn-group .av-open-cockpit:hover { filter: brightness(1.12); }
         .av-audio { margin: 0 0 6px; }
@@ -2085,7 +2148,7 @@
             .custom-quick-controls.quick-docked .quick-play-btn { min-width: 72px; margin: 0 2px; border-radius: 14px; }
             .custom-quick-controls.quick-docked .quick-more-btn { min-width: 38px; }
             .custom-subtitle { font-size: 18px; bottom: 16%; max-width: 92%; }
-            .btn-group button.av-platform-btn { min-height: 40px; font-size: 13px; }
+            .btn-group button.av-platform-btn, .btn-group button.av-frames-btn { min-height: 40px; font-size: 13px; }
             .av-info-section, .av-jable-meta { box-sizing: border-box; min-width: 0; max-width: 100%; }
             .av-info-section *, .av-info-section *::before, .av-info-section *::after { box-sizing: border-box; }
             .av-info-head { padding: 11px 12px; }
@@ -2875,7 +2938,7 @@
         gearBtn.setAttribute('aria-label', '展开或折叠设置面板');
         gearBtn.setAttribute('aria-expanded', settings.isMinimized ? 'false' : 'true');
         gearBtn.title = settings.isMinimized ? '展开设置面板' : '折叠设置面板';
-        gearBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+        setMarkup(gearBtn, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>');
         header.append(gearBtn, panelTitle);
         return { header, gearBtn };
     }
@@ -2923,6 +2986,25 @@
         );
         return { keysRow };
     }
+    function setMenuHidden(hidden) {
+        settings.hideMenu = hidden;
+        store.set('hideMenu', hidden ? '1' : '0');
+        const panel = document.querySelector('.custom-control-panel');
+        if (panel) panel.classList.toggle('panel-menu-hidden', hidden);
+        log(hidden ? '👁️ 面板已完全隐藏，可在油猴菜单里点「显示菜单」恢复' : '👁️ 面板已重新显示');
+    }
+    let panelMenusRegistered = false;
+    function registerPanelMenus() {
+        if (panelMenusRegistered) return;
+        if (typeof GM_registerMenuCommand !== 'function') return;
+        try {
+            GM_registerMenuCommand('完全隐藏菜单', () => setMenuHidden(true));
+            GM_registerMenuCommand('显示菜单', () => setMenuHidden(false));
+            panelMenusRegistered = true;
+        } catch (error) {
+            debugLog(error, 'panel-menu');
+        }
+    }
     function buildPanelActionRow(panel, layoutPanel) {
         const actionRow = document.createElement('div');
         actionRow.className = 'btn-group';
@@ -2954,7 +3036,7 @@
         btnBackup.title = '把收藏的名称、缩略图、番号、女优、类型、发行商批量打包下载到本地';
         btnBackup.addEventListener('click', openFavoriteBackup);
         const btnFrames = createButton('');
-        btnFrames.classList.add('av-platform-btn');
+        btnFrames.classList.add('av-frames-btn');
         btnFrames.style.gridColumn = '1 / -1';
         const framesLabel = () => `关键帧预览：${settings.framesPreview ? '已开启' : '已关闭'}`;
         btnFrames.textContent = framesLabel();
@@ -3220,8 +3302,12 @@
         flushPendingLogs(state.logEl);
         body.append(keysRow, audioRow, actionRow, loginToggleBtn, loginPanel, subToggleBtn, subtitlePanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
         if (AV_PLATFORM.isMobile) body.append(mobileToggleBtn, mobilePanel);
-        collapsibleInner.append(body, footer);
+        const hint = document.createElement('div');
+        hint.className = 'panel-hint';
+        hint.textContent = '（点标题栏的齿轮可显示 / 隐藏本菜单）';
+        collapsibleInner.append(hint, body, footer);
         panel.append(header, collapsible);
+        if (settings.hideMenu) panel.classList.add('panel-menu-hidden');
         getUiLayer().appendChild(panel);
         applyUiStyles();
         const persistAnchor = () => {
@@ -3232,6 +3318,7 @@
         makeDraggable(panel, header, { x: 'panelX', y: 'panelY' }, persistAnchor);
         clampPanelPosition(panel);
         layoutPanel();
+        registerPanelMenus();
         if (AV_PLATFORM.isMobile) {
             window.addEventListener('resize', clampMobileInjectedWidth, { passive: true });
             window.addEventListener('orientationchange', clampMobileInjectedWidth, { passive: true });
@@ -5369,7 +5456,7 @@
         if (!options.silent) {
             log(applied
                 ? (sinkId ? `🔊 输出已切到 ${settings.audioDeviceLabel || '所选设备'}` : '🔊 输出已恢复系统默认')
-                : '⚠️ 当前浏览器不支持设备路由');
+                : '⚠️ 当前浏览器不支持声音设备路由');
         }
         return applied;
     }
@@ -5483,8 +5570,8 @@
         caret.className = 'av-audio-caret';
         caret.textContent = '▾';
         gainBtn.append(gainLabel, caret);
-        const routeBtn = createButton('设备路由', 'btn-primary');
-        routeBtn.title = '打开设备路由悬浮窗（按站点独立保存）';
+        const routeBtn = createButton('声音设备路由', 'btn-primary');
+        routeBtn.title = '打开声音设备路由悬浮窗（按站点独立保存）';
         const box = document.createElement('div');
         box.className = 'av-audio-panel av-collapse av-collapsed';
         const line = document.createElement('div');
@@ -5557,7 +5644,7 @@
     function audioDefaultStatus() {
         return settings.audioRoute
             ? `已启用：${audioSiteName()} · ${settings.audioDeviceLabel || '系统默认输出'} · 音量 ${audioGainText(settings.audioGain)}`
-            : `未启用设备路由 · 音量 ${audioGainText(settings.audioGain)}`;
+            : `未启用声音设备路由 · 音量 ${audioGainText(settings.audioGain)}`;
     }
     function audioRenderDevices(items) {
         const list = state.audioDeviceList;
@@ -5614,7 +5701,7 @@
         const outputs = await audioListOutputs();
         if (outputs === null) {
             audioRenderDevices([]);
-            audioSetStatus('当前浏览器不支持设备路由', '需要 Chrome 或 Edge 110 及以上版本');
+            audioSetStatus('当前浏览器不支持声音设备路由', '需要 Chrome 或 Edge 110 及以上版本');
             return;
         }
         const items = [{ deviceId: '', label: '系统默认输出', tag: settings.audioDeviceId ? '' : '已选' }];
@@ -5633,7 +5720,7 @@
         }
         audioRenderDevices(items);
         const hint = settings.audioRoute && !settings.audioDeviceId ? '当前使用系统默认输出' : '';
-        audioSetStatus(audioDefaultStatus(), audioSinkSupported(audioActiveVideo()) ? hint : '当前浏览器不支持设备路由，所选设备会保存但不会生效');
+        audioSetStatus(audioDefaultStatus(), audioSinkSupported(audioActiveVideo()) ? hint : '当前浏览器不支持声音设备路由，所选设备会保存但不会生效');
     }
     async function audioRequestPermission() {
         const media = navigator.mediaDevices;
@@ -5661,7 +5748,7 @@
             if (ctx.state === 'suspended') await ctx.resume();
             if (typeof ctx.setSinkId === 'function') await ctx.setSinkId(sinkId);
             else if (sinkId) {
-                audioSetStatus('当前浏览器不支持设备路由', '测试音将从系统默认输出播放');
+                audioSetStatus('当前浏览器不支持声音设备路由', '测试音将从系统默认输出播放');
             }
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
@@ -5735,7 +5822,7 @@
         header.className = 'subtitle-picker-header';
         const title = document.createElement('span');
         title.className = 'subtitle-picker-title';
-        title.textContent = '🎧 设备路由';
+        title.textContent = '🎧 声音设备路由';
         const closeBtn = document.createElement('span');
         closeBtn.className = 'subtitle-picker-close';
         closeBtn.textContent = '[关闭]';
@@ -5759,7 +5846,7 @@
         toggleText.className = 'av-audio-toggle-text';
         const toggleTitle = document.createElement('span');
         toggleTitle.className = 'av-audio-toggle-title';
-        toggleTitle.textContent = '启用设备路由';
+        toggleTitle.textContent = '启用声音设备路由';
         const toggleHint = document.createElement('span');
         toggleHint.className = 'av-audio-toggle-hint';
         toggleHint.textContent = '关掉则回到系统默认输出（不影响增益）';
@@ -5794,7 +5881,7 @@
         checkbox.addEventListener('change', () => {
             settings.audioRoute = checkbox.checked;
             audioApplySink(audioActiveVideo(), { silent: true });
-            audioSetStatus(audioDefaultStatus(), checkbox.checked ? '点「保存」写入本站配置' : '已停用设备路由');
+            audioSetStatus(audioDefaultStatus(), checkbox.checked ? '点「保存」写入本站配置' : '已停用声音设备路由');
         });
         refreshBtn.addEventListener('click', () => audioRefreshDevices());
         authBtn.addEventListener('click', audioRequestPermission);
@@ -7286,7 +7373,7 @@
         const title = `${rating.source} 评分：${rating.score.toFixed(1)} / 10` +
             (rating.count ? `（${rating.count} 人评价）` : '');
         if (existing) {
-            existing.innerHTML = label;
+            setMarkup(existing, label);
             existing.title = title;
             return;
         }
@@ -7294,7 +7381,7 @@
         if (!titleEl) return;
         const badge = document.createElement('span');
         badge.className = 'info-rating-badge';
-        badge.innerHTML = label;
+        setMarkup(badge, label);
         badge.title = title;
         titleEl.insertBefore(badge, titleEl.firstChild);
     }
@@ -7493,7 +7580,7 @@
             const title = document.createElement('span');
             title.className = 'av-info-title';
             const icon = document.createElement('span');
-            icon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>';
+            setMarkup(icon, '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>');
             const titleText = document.createElement('span');
             titleText.textContent = '官方剧照与社区短评';
             title.append(icon, titleText);
@@ -7760,7 +7847,7 @@
         left.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;';
         const icon = document.createElement('span');
         icon.className = 'av-list-icon';
-        icon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"></path></svg>';
+        setMarkup(icon, '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"></path></svg>');
         const title = document.createElement('strong');
         title.className = 'av-list-title';
         title.textContent = item.name;
@@ -7771,7 +7858,7 @@
         const stat = (text, svg) => {
             const span = document.createElement('span');
             span.className = 'av-list-stat';
-            if (svg) span.innerHTML = svg;
+            if (svg) setMarkup(span, svg);
             span.appendChild(document.createTextNode(text));
             return span;
         };
@@ -9027,7 +9114,7 @@
     const RESUME_GUARD_TOLERANCE = 3;
     const RESUME_GUARD_RELEASE = 20;
     const RESUME_GUARD_TRIES = 6;
-    const RESUME_TOAST_MS = 10000;
+    const RESUME_TOAST_MS = 2500;
     const resumeSeekBound = new WeakSet();
     const MAX_RECORDS = 3000;
     const MAX_RECORDS_SLACK = 200;
@@ -12389,10 +12476,25 @@
             installFramePreview(video, frames);
         });
     }
+    function setMarkup(el, markup) {
+        if (!el || typeof markup !== 'string') return el;
+        try {
+            const doc = new DOMParser().parseFromString(`<body>${markup}</body>`, 'text/html');
+            const nodes = doc.body ? Array.from(doc.body.childNodes) : [];
+            if (!nodes.length) { el.replaceChildren(); return el; }
+            el.replaceChildren();
+            for (const node of nodes) el.appendChild(document.importNode(node, true));
+            return el;
+        } catch (error) {
+            debugLog(error, 'markup-inject');
+        }
+        el.textContent = markup.replace(/<[^>]*>/g, '');
+        return el;
+    }
     function iconSvg(paths, viewBox = '0 0 24 24') {
         const span = document.createElement('span');
         span.className = 'av-svg';
-        span.innerHTML = `<svg viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+        setMarkup(span, `<svg viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`);
         return span;
     }
     function buildKpi(label, value, unit, footer, iconPaths, tone) {
@@ -13872,6 +13974,7 @@
         clearTimeout(state.holdTimer);
         disposePageLifecycle();
     }, { once: true });
+    registerPanelMenus();
     } catch (error) {
         console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
     }
