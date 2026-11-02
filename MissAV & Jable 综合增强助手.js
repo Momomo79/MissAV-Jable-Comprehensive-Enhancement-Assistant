@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      14.13
+// @version      14.14
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -303,10 +303,10 @@
     const WHOS_SEARCH = 'https://whos.tv/result?search=';
     const WHOS_AJAX_BASE = 'https://whos.tv/ajax/frames/video-frames';
     const WHOS_MAX_PAGES = 40;
-    const WHOS_PAGE_LANES = 3;
+    const WHOS_PAGE_LANES = 4;
     const WHOS_TICK_TARGET = 40;
     const WHOS_CACHE_VERSION = 2;
-    const FRAME_TICK_HIT = 7;
+    const FRAME_TICK_HIT = 4;
     const IMAGE_EXT_RE = /\.(?:jpe?g|png|webp)(?:$|[?#])/i;
     const NOW_PRINTING_RE = /\/now_printing(?:\/|\.|$)/i;
     const COMMENT_BLOCK_RE = /<div[^>]+class=["'][^"']*(?:comment-content|comment-body|bubble-content)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
@@ -2005,12 +2005,14 @@
         .av-frame-tick::before { content: ''; position: absolute; top: 4px; left: 50%; width: 3px; height: calc(100% - 8px); margin-left: -1.5px; border-radius: 1px; background: #f59e0b; box-shadow: 0 0 0 1px rgba(2, 6, 23, .55); transition: background .12s ease, transform .12s ease; }
         .av-frame-tick:hover::before, .av-frame-tick:focus-visible::before { background: #fbbf24; transform: scaleY(1.7); }
         .av-frame-tick:focus-visible { outline: none; }
-        .av-frame-tip { position: absolute; bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 3px; opacity: 0; transform: translateX(-50%); transition: opacity .12s ease; pointer-events: none; z-index: 4; }
+        .av-frame-tip { position: absolute; bottom: 16px; display: block; opacity: 0; transform: translateX(-50%); transition: opacity .12s ease; pointer-events: none; z-index: 4; }
         .av-frame-marks.is-on .av-frame-tip { opacity: 1; }
-        .av-frame-img { display: block; width: 160px; height: 90px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(148, 163, 184, .55); background: #0f172a; box-shadow: 0 6px 18px rgba(2, 6, 23, .55); }
-        .av-frame-time { padding: 1px 6px; border-radius: 4px; background: rgba(2, 6, 23, .86); color: #e2e8f0; font-size: 10px; line-height: 1.4; white-space: nowrap; }
+        .av-frame-img { display: block; box-sizing: border-box; width: var(--av-frame-w, 236px); height: var(--av-frame-h, 135px); object-fit: cover; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .35); background: #0b1220; box-shadow: 0 6px 18px rgba(2, 6, 23, .55); }
+        .av-frame-time { position: absolute; left: 1px; right: 1px; bottom: 1px; padding: 12px 6px 4px; border-radius: 0 0 5px 5px; background: linear-gradient(to top, rgba(2, 6, 23, .9), rgba(2, 6, 23, 0)); color: #e2e8f0; font-size: 11px; font-weight: 600; line-height: 1.2; text-align: center; white-space: nowrap; }
+        .plyr__preview-thumb.av-preview-off { opacity: 0 !important; visibility: hidden !important; }
         @media (max-width: 480px) {
-            .av-frame-img { width: 118px; height: 66px; }
+            .av-frame-marks { --av-frame-w: 160px; --av-frame-h: 90px; }
+            .av-frame-time { font-size: 10px; padding: 10px 4px 3px; }
             .av-frame-tick { width: 15px; margin-left: -7.5px; }
             .av-frame-tick::before { width: 2px; margin-left: -1px; }
         }
@@ -11964,6 +11966,8 @@
     }
     let whosFrameMemo = null;
     const whosFrameInflight = new Map();
+    const frameRenderers = new WeakMap();
+
     function framesPreviewEnabled() {
         return settings.framesPreview !== false;
     }
@@ -12163,7 +12167,7 @@
             return acc;
         });
     }
-    function fetchWhosFrames(code) {
+    function fetchWhosFrames(code, onSeed) {
         const norm = normalizeVideoCode(code);
         if (!norm) return Promise.resolve([]);
         const key = norm.toLowerCase();
@@ -12188,6 +12192,13 @@
             })
             .then(frames => {
                 if (!frames.length) return frames;
+                if (typeof onSeed === 'function') {
+                    try {
+                        onSeed(frames.slice());
+                    } catch (error) {
+                        debugLog(error, 'whos-seed');
+                    }
+                }
                 return pagedWhosFrames(key, frames).then(merged => sampleWhosFrames(merged, WHOS_TICK_TARGET));
             })
             .then(frames => {
@@ -12239,7 +12250,11 @@
             const scope = video.closest('.plyr') || document;
             const progress = scope.querySelector('.plyr__progress, .plyr__progress__container input[type="range"], input[type="range"]');
             if (!(progress instanceof HTMLElement) || !progress.isConnected) return false;
-            if (progress.dataset.avFramesReady === '1') return true;
+            if (progress.dataset.avFramesReady === '1') {
+                const updater = frameRenderers.get(progress);
+                if (updater) updater(frames);
+                return true;
+            }
             progress.dataset.avFramesReady = '1';
             let layerTarget = progress;
             if (progress.tagName === 'INPUT') {
@@ -12248,7 +12263,9 @@
             }
             if (getComputedStyle(layerTarget).position === 'static') layerTarget.style.position = 'relative';
             const { host, ticks, tip, img, label } = buildFrameLayer(layerTarget);
+            let frameList = frames;
             const railOf = () => layerTarget.querySelector('input[type="range"]') || layerTarget;
+
             const syncLayer = () => {
                 const rail = railOf();
                 if (!rail || !rail.isConnected) return;
@@ -12277,7 +12294,7 @@
                 const current = Number(video.duration) || 0;
                 if (current !== scaleDuration) {
                     scaleDuration = current;
-                    scaleValue = frameScaleFor(frames, current);
+                    scaleValue = frameScaleFor(frameList, current);
                 }
                 return scaleValue;
             };
@@ -12290,7 +12307,7 @@
                 if (!Number.isFinite(duration) || duration <= 0) return 0;
                 return clamp(seekOf(frame) / duration, 0, 1);
             };
-            let visibleFrames = frames;
+            let visibleFrames = frameList;
             let tickDuration = 0;
             let tickRatios = [];
             let tickByTime = new Map();
@@ -12307,10 +12324,12 @@
                 }
                 tickDuration = total;
                 const fragment = document.createDocumentFragment();
+                const railWidth = ticks.getBoundingClientRect().width || 600;
+                const minGap = Math.max(0.0025, 5 / railWidth);
                 let lastRatio = -1;
-                for (const frame of frames) {
+                for (const frame of frameList) {
                     const ratio = ratioOf(frame);
-                    if (ratio - lastRatio < 0.0035) continue;
+                    if (ratio - lastRatio < minGap) continue;
                     lastRatio = ratio;
                     const seconds = Number(seekOf(frame).toFixed(2));
                     const timeKey = String(seconds);
@@ -12338,15 +12357,48 @@
             };
             video.addEventListener('durationchange', onDuration, { passive: true });
             let hideTimer = 0;
+            let previewNode = null;
+            const plyrRoot = video.closest('.plyr');
+            const findPreview = () => {
+                if (previewNode && previewNode.isConnected) return previewNode;
+                previewNode = (plyrRoot || document).querySelector('.plyr__preview-thumb');
+                return previewNode;
+            };
+            const mutePreview = on => {
+                const node = findPreview();
+                if (node) node.classList.toggle('av-preview-off', on);
+            };
             const hide = () => {
                 host.classList.remove('is-on');
+                mutePreview(false);
             };
             const scheduleHide = () => {
                 if (hideTimer) clearTimeout(hideTimer);
                 hideTimer = trackTimeout(setTimeout(hide, 1400));
             };
             const frameByTime = value => tickByTime.get(value) || null;
+            frameRenderers.set(progress, nextFrames => {
+                frameList = nextFrames;
+                renderTicks();
+            });
+            let previewMeasuredAt = 0;
+            const syncPreviewSize = () => {
+                const now = Date.now();
+                if (now - previewMeasuredAt < 250) return;
+                previewMeasuredAt = now;
+                const node = findPreview();
+                if (!node) return;
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 80 || rect.height < 45) return;
+                const width = Math.round(rect.width);
+                const height = Math.round(rect.height);
+                if (host.dataset.avPreviewSize === `${width}x${height}`) return;
+                host.dataset.avPreviewSize = `${width}x${height}`;
+                host.style.setProperty('--av-frame-w', `${width}px`);
+                host.style.setProperty('--av-frame-h', `${height}px`);
+            };
             const showFrame = frame => {
+                syncPreviewSize();
                 if (!frame) return;
                 const seek = seekOf(frame);
                 if (img.getAttribute('src') !== frame.src) img.setAttribute('src', frame.src);
@@ -12354,6 +12406,7 @@
                 label.textContent = `${formatDuration(Math.round(seek))} · 剩 ${formatDuration(remain)}`;
                 const frameRatio = tickRatioOf.has(frame.t) ? tickRatioOf.get(frame.t) : ratioOf(frame);
                 tip.style.left = `${(clamp(frameRatio, 0.08, 0.92) * 100).toFixed(2)}%`;
+                mutePreview(true);
                 host.classList.add('is-on');
                 if (hideTimer) clearTimeout(hideTimer);
             };
@@ -12407,16 +12460,28 @@
             };
             let moveFrameId = 0;
             let moveX = 0;
+            let moveTickTime = null;
             const flushMove = () => {
                 moveFrameId = 0;
                 ticksBox = null;
+                const timeKey = moveTickTime;
+                moveTickTime = null;
+                if (timeKey !== null) {
+                    const hitFrame = frameByTime(timeKey);
+                    if (hitFrame) {
+                        showFrame(hitFrame);
+                        return;
+                    }
+                }
                 const frame = nearestTick(moveX);
                 if (frame) showFrame(frame);
                 else hide();
             };
             const onMove = event => {
                 if (event.pointerType === 'touch') return;
+                const tickNode = event.target instanceof Element ? event.target.closest('.av-frame-tick') : null;
                 moveX = event.clientX;
+                moveTickTime = tickNode ? tickNode.dataset.time : null;
                 if (!moveFrameId) moveFrameId = requestAnimationFrame(flushMove);
             };
             const onDown = event => {
@@ -12483,6 +12548,7 @@
     function removeFramePreview() {
         for (const host of document.querySelectorAll('.av-frame-marks')) host.remove();
         for (const el of document.querySelectorAll('[data-av-frames-ready]')) delete el.dataset.avFramesReady;
+        for (const el of document.querySelectorAll('.av-preview-off')) el.classList.remove('av-preview-off');
         for (const v of document.querySelectorAll('video')) delete v.dataset.avFramesBound;
     }
     function setupFramePreview(video) {
@@ -12491,7 +12557,10 @@
         if (!framesPreviewEnabled()) return;
         const code = getPageVideoCode();
         if (!code) return;
-        fetchWhosFrames(code).then(frames => {
+        fetchWhosFrames(code, seed => {
+            if (!video.isConnected || !framesPreviewEnabled()) return;
+            installFramePreview(video, seed);
+        }).then(frames => {
             if (!frames.length || !video.isConnected || !framesPreviewEnabled()) return;
             installFramePreview(video, frames);
         });
