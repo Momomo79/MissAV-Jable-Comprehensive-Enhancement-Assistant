@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      14.12
+// @version      14.13
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -1431,6 +1431,21 @@
             hideAdNode(root);
         }
     }
+    const FAKE_APP_NOTICE_RE = /(?:不會|不会)被偷(?:錄|录)|(?:仿|彷)冒[\s\S]{0,14}MissAV/i;
+    const FAKE_APP_NOTICE_SEL = 'div[class*="bg-primary"], div.text-center';
+    function isFakeAppNotice(element) {
+        if (!element || element.nodeType !== 1) return false;
+        const text = (element.textContent || '').trim();
+        if (!text || text.length > 160) return false;
+        return FAKE_APP_NOTICE_RE.test(text);
+    }
+    function pruneFakeAppNotice() {
+        for (const element of document.querySelectorAll(FAKE_APP_NOTICE_SEL)) {
+            if (!isFakeAppNotice(element)) continue;
+            if (isProtectedNode(element)) continue;
+            hideAdNode(element);
+        }
+    }
     const PROMO_HREF_RE = /(?:bit\.ly|mycomic\.com|myavlive\.com|mayzaent\.com|fluxtrck\.|javhd-trk\.|zline0\.com|theporndude\.com|141jj\.com|huu29\.com|fuu78\.com|greentrafsa\.com|snaptrckr\.|labadena\.com|adxadserv\.com)/i;
     const PROMO_BOX_SEL = 'li, div.py-1, h6, div.text-center, p, dt, dd';
     function prunePromoLinks() {
@@ -1463,6 +1478,7 @@
         sweepFloatingAds();
         pruneLiveWidgets();
         prunePromoLinks();
+        pruneFakeAppNotice();
     }
     function sweepAdNodes(root) {
         if (!root || root.nodeType !== 1) return;
@@ -1481,6 +1497,10 @@
             return;
         }
         if (root.matches && root.matches(AD_SELECTORS)) hideAdNode(root);
+        if (root.matches && root.matches(FAKE_APP_NOTICE_SEL) && isFakeAppNotice(root)) hideAdNode(root);
+        for (const node of root.querySelectorAll(FAKE_APP_NOTICE_SEL)) {
+            if (isFakeAppNotice(node)) hideAdNode(node);
+        }
     }
     const AD_SIGNATURE_RE = /(?:^|[\s_-])(?:ad|ads|adv|advert|adserver|popup|popunder|sponsor|traffic|campaign)/i;
     const AD_SAFE_CLOSEST = '.plyr, .av-info-section, .av-panel, .av-quick, .av-cockpit, .av-ext-links, .av-hub-tabs';
