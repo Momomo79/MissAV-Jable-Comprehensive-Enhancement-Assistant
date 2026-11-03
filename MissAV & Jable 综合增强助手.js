@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      14.14
+// @version      14.16
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -94,15 +94,6 @@
         } catch (_) {
         }
     }
-    function safeRun(fn, label) {
-        try {
-            return fn();
-        } catch (error) {
-            debugLog(error, label);
-            return undefined;
-        }
-    }
-
     const PLATFORM_MODE_KEY = `${STORAGE_PREFIX}platformMode`;
     const PLATFORM_MODES = ['auto', 'mobile', 'desktop'];
     const PLATFORM_UA_MOBILE = /Android|iPhone|iPod|Windows Phone|webOS|BlackBerry|Opera Mini|IEMobile|HarmonyOS|MicroMessenger|MiuiBrowser|Quark|UCBrowser/i;
@@ -1086,7 +1077,9 @@
                 }
             }
         });
-        cockpitMediaKiller.observe(document.documentElement, { childList: true, subtree: true });
+        const mediaRoot = document.documentElement || document.body;
+        if (!mediaRoot) return;
+        cockpitMediaKiller.observe(mediaRoot, { childList: true, subtree: true });
     }
     function disarmMediaKiller() {
         if (!cockpitMediaKiller) return;
@@ -1463,10 +1456,9 @@
             hideAdNode(target);
         }
     }
-    function cleanAds() {
-        patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
-        patchAllIframeWindows();
-        for (const element of document.querySelectorAll(AD_SELECTORS)) {
+    function pruneAdNodes(scope) {
+        if (!scope || !scope.querySelectorAll) return;
+        for (const element of scope.querySelectorAll(AD_SELECTORS)) {
             if (isProtectedNode(element)) continue;
             if (element.tagName === 'IFRAME') {
                 if (isProtectedFrame(element)) continue;
@@ -1475,6 +1467,11 @@
                 hideAdNode(element);
             }
         }
+    }
+    function cleanAds() {
+        patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+        patchAllIframeWindows();
+        pruneAdNodes(document);
         sweepFloatingAds();
         pruneLiveWidgets();
         prunePromoLinks();
@@ -1482,15 +1479,7 @@
     }
     function sweepAdNodes(root) {
         if (!root || root.nodeType !== 1) return;
-        for (const element of root.querySelectorAll(AD_SELECTORS)) {
-            if (isProtectedNode(element)) continue;
-            if (element.tagName === 'IFRAME') {
-                if (isProtectedFrame(element)) continue;
-                element.remove();
-            } else {
-                hideAdNode(element);
-            }
-        }
+        pruneAdNodes(root);
         if (isProtectedNode(root)) return;
         if (root.tagName === 'IFRAME') {
             if (!isProtectedFrame(root)) root.remove();
@@ -1836,7 +1825,7 @@
         .custom-quick-controls.quick-compact .quick-btn-glyph { display: none; }
         .custom-quick-controls.quick-compact .quick-play-btn { min-width: 64px; padding: 0 8px; }
         .custom-quick-controls.quick-compact .quick-loop-btn { min-width: 40px; padding: 0 5px; }
-        .custom-subtitle { position: absolute; left: 50%; bottom: 10%; z-index: 10000; max-width: 85%; transform: translateX(-50%); color: #fff; font-size: 24px; font-weight: 700; text-align: center; white-space: pre-line; text-shadow: -1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,2px 2px 4px rgba(0,0,0,.8); pointer-events: none; }
+        .custom-subtitle { position: absolute !important; left: 50% !important; top: 78% !important; bottom: auto !important; z-index: 10000 !important; max-width: 85%; width: max-content; transform: translateX(-50%) !important; color: #fff; font-size: 24px; font-weight: 700; text-align: center; white-space: pre-line; text-shadow: -1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,2px 2px 4px rgba(0,0,0,.8); pointer-events: none; }
         .sub-panel { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 0 14px; border-top: 1px solid rgba(255,255,255,.15); }
         .sub-src-head { display: flex; align-items: center; gap: 6px; color: #e2e8f0; font-size: 12px; font-weight: 600; }
         .sub-src-status { margin-left: auto; font-size: 10.5px; font-weight: 400; color: #94a3b8; }
@@ -2005,13 +1994,15 @@
         .av-frame-tick::before { content: ''; position: absolute; top: 4px; left: 50%; width: 3px; height: calc(100% - 8px); margin-left: -1.5px; border-radius: 1px; background: #f59e0b; box-shadow: 0 0 0 1px rgba(2, 6, 23, .55); transition: background .12s ease, transform .12s ease; }
         .av-frame-tick:hover::before, .av-frame-tick:focus-visible::before { background: #fbbf24; transform: scaleY(1.7); }
         .av-frame-tick:focus-visible { outline: none; }
-        .av-frame-tip { position: absolute; bottom: 16px; display: block; opacity: 0; transform: translateX(-50%); transition: opacity .12s ease; pointer-events: none; z-index: 4; }
+        .av-frame-tip { position: absolute; bottom: 16px; display: block; width: var(--av-frame-w, var(--av-frame-def, 236px)); height: var(--av-frame-h, var(--av-frame-defh, 135px)); max-width: none !important; max-height: none !important; opacity: 0; transform: translateX(-50%); transition: opacity .12s ease; pointer-events: none; z-index: 4; }
         .av-frame-marks.is-on .av-frame-tip { opacity: 1; }
-        .av-frame-img { display: block; box-sizing: border-box; width: var(--av-frame-w, 236px); height: var(--av-frame-h, 135px); object-fit: cover; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .35); background: #0b1220; box-shadow: 0 6px 18px rgba(2, 6, 23, .55); }
+        .av-frame-img { display: block !important; box-sizing: border-box !important; width: var(--av-frame-w, var(--av-frame-def, 236px)) !important; min-width: 0 !important; max-width: none !important; height: var(--av-frame-h, var(--av-frame-defh, 135px)) !important; min-height: 0 !important; max-height: none !important; aspect-ratio: auto !important; object-fit: cover !important; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .35); background: #0b1220; box-shadow: 0 6px 18px rgba(2, 6, 23, .55); }
+        .plyr--fullscreen .av-frame-img, .plyr--fullscreen-active .av-frame-img, .plyr:fullscreen .av-frame-img { --av-frame-def: 280px; --av-frame-defh: 158px; }
+
         .av-frame-time { position: absolute; left: 1px; right: 1px; bottom: 1px; padding: 12px 6px 4px; border-radius: 0 0 5px 5px; background: linear-gradient(to top, rgba(2, 6, 23, .9), rgba(2, 6, 23, 0)); color: #e2e8f0; font-size: 11px; font-weight: 600; line-height: 1.2; text-align: center; white-space: nowrap; }
-        .plyr__preview-thumb.av-preview-off { opacity: 0 !important; visibility: hidden !important; }
+        .plyr__preview-thumb.av-preview-off, [class*="preview-thumb"].av-preview-off { opacity: 0 !important; visibility: hidden !important; }
         @media (max-width: 480px) {
-            .av-frame-marks { --av-frame-w: 160px; --av-frame-h: 90px; }
+            .av-frame-img { --av-frame-def: 160px; --av-frame-defh: 90px; }
             .av-frame-time { font-size: 10px; padding: 10px 4px 3px; }
             .av-frame-tick { width: 15px; margin-left: -7.5px; }
             .av-frame-tick::before { width: 2px; margin-left: -1px; }
@@ -2169,7 +2160,7 @@
             .custom-quick-controls.quick-docked .quick-btn { min-width: 42px; height: 40px; font-size: 13px; padding: 0 6px; border-radius: 10px; }
             .custom-quick-controls.quick-docked .quick-play-btn { min-width: 72px; margin: 0 2px; border-radius: 14px; }
             .custom-quick-controls.quick-docked .quick-more-btn { min-width: 38px; }
-            .custom-subtitle { font-size: 18px; bottom: 16%; max-width: 92%; }
+            .custom-subtitle { font-size: 18px; max-width: 92%; }
             .btn-group button.av-platform-btn, .btn-group button.av-frames-btn { min-height: 40px; font-size: 13px; }
             .av-info-section, .av-jable-meta { box-sizing: border-box; min-width: 0; max-width: 100%; }
             .av-info-section *, .av-info-section *::before, .av-info-section *::after { box-sizing: border-box; }
@@ -2244,7 +2235,7 @@
             @media (max-height: 480px) {
                 .custom-control-panel .panel-collapse-inner { max-height: calc(100dvh - 72px); }
                 .subtitle-picker, .av-audio-win { max-height: 88dvh; }
-                .custom-subtitle { bottom: 8%; font-size: 16px; }
+                .custom-subtitle { font-size: 16px; }
             }
         `);
     }
@@ -2359,22 +2350,16 @@
             if (event.pointerId !== state.holdPointerId) return;
             if (Math.hypot(event.clientX - state.holdStartX, event.clientY - state.holdStartY) > HOLD_CANCEL_DISTANCE) cancelHold();
         }, { passive: true });
-        container.addEventListener('pointerup', event => {
+        const endHoldPointer = event => {
             if (event.pointerId === state.holdPointerId) cancelHold();
             try {
                 container.releasePointerCapture?.(event.pointerId);
             } catch (error) {
                 debugLog(error);
             }
-        });
-        container.addEventListener('pointercancel', event => {
-            if (event.pointerId === state.holdPointerId) cancelHold();
-            try {
-                container.releasePointerCapture?.(event.pointerId);
-            } catch (error) {
-                debugLog(error);
-            }
-        });
+        };
+        container.addEventListener('pointerup', endHoldPointer);
+        container.addEventListener('pointercancel', endHoldPointer);
         container.addEventListener('pointerleave', event => {
             if (event.pointerId === state.holdPointerId) cancelHold();
         });
@@ -4500,17 +4485,67 @@
         state.activeCueText = text;
         el.textContent = text;
         el.style.display = text ? 'block' : 'none';
+        if (text) syncSubtitleGeometry(true);
     }
     function applySubtitleOffset(offset) {
         settings.subtitleOffset = offset;
         state.cueCursor = -1;
         renderSubtitle(true);
     }
+    function subtitleHost() {
+        const video = state.video;
+        const fullscreen = document.fullscreenElement || document.webkitFullscreenElement || null;
+        if (fullscreen && fullscreen !== video && video && fullscreen.contains(video)) return fullscreen;
+        if (video) {
+            const wrap = video.closest('.plyr__video-wrapper') || video.closest('.plyr') || video.parentElement;
+            if (wrap) return wrap;
+        }
+        return state.container || null;
+    }
+    let subtitleGeomAt = 0;
+    function syncSubtitleGeometry(force = false) {
+        const el = state.subtitleEl;
+        const video = state.video;
+        if (!el || !video || !video.isConnected) return;
+        const now = Date.now();
+        if (!force && now - subtitleGeomAt < 40) return;
+        subtitleGeomAt = now;
+        const host = subtitleHost();
+        if (host && el.parentElement !== host) {
+            ensurePositioned(host);
+            host.appendChild(el);
+        }
+        const videoRect = video.getBoundingClientRect();
+        if (!videoRect.height) return;
+        const hostRect = el.parentElement ? el.parentElement.getBoundingClientRect() : videoRect;
+        const pct = clamp(settings.subtitleBottom, SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX);
+        const gap = videoRect.height * pct / 100;
+        const height = el.offsetHeight || parseFloat(getComputedStyle(el).fontSize) * 1.4;
+        const top = videoRect.bottom - gap - height - hostRect.top;
+        el.style.setProperty('top', `${Math.round(top)}px`, 'important');
+        el.style.setProperty('bottom', 'auto', 'important');
+    }
+    function ensureSubtitleGeometryWatch() {
+        if (state.subtitleGeomBound) return;
+        state.subtitleGeomBound = true;
+        let pending = 0;
+        const schedule = () => {
+            if (pending) return;
+            pending = requestAnimationFrame(() => {
+                pending = 0;
+                syncSubtitleGeometry();
+            });
+        };
+        window.addEventListener('scroll', schedule, { passive: true, capture: true });
+        window.addEventListener('resize', schedule, { passive: true });
+        document.addEventListener('fullscreenchange', () => syncSubtitleGeometry(true));
+        document.addEventListener('webkitfullscreenchange', () => syncSubtitleGeometry(true));
+    }
     function applySubtitleStyle() {
         const el = state.subtitleEl;
         if (!el) return;
         el.style.fontSize = `${settings.subtitleFontSize}px`;
-        el.style.bottom = `${settings.subtitleBottom}%`;
+        syncSubtitleGeometry(true);
     }
     function applySubtitleText(text, label = '字幕', fileName = '') {
         const { items, starts } = parseSubtitles(text);
@@ -7964,12 +7999,7 @@
             strong.textContent = title;
             const p = document.createElement('p');
             p.textContent = text;
-            const link = document.createElement('a');
-            link.className = 'av-list-action';
-            link.href = item.shareUrl;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = `前往 JavDB 原站查看完整影单（共 ${item.movieCount} 部）↗`;
+            const link = buildListAction(item.shareUrl, `前往 JavDB 原站查看完整影单（共 ${item.movieCount} 部）↗`);
             wrap.append(strong, p, link);
             return wrap;
         };
@@ -7995,12 +8025,7 @@
                 delete state.listMovies[item.id];
                 loadListMovies(item, body);
             });
-            const link = document.createElement('a');
-            link.className = 'av-list-action';
-            link.href = item.shareUrl;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = '在 JavDB 查看 ↗';
+            const link = buildListAction(item.shareUrl, '在 JavDB 查看 ↗');
             wrap.append(p, retry, link);
             body.replaceChildren(wrap);
             return;
@@ -8412,9 +8437,7 @@
             video.parentElement
         );
     }
-    function playerMetricsOk(video) {
-        if (!video || !video.isConnected) return false;
-        if (isPreviewVideo(video)) return false;
+    function videoSurfaceSize(video) {
         let width = video.videoWidth || 0;
         let height = video.videoHeight || 0;
         if (!width || !height) {
@@ -8422,6 +8445,12 @@
             width = rect.width;
             height = rect.height;
         }
+        return { width, height };
+    }
+    function playerMetricsOk(video) {
+        if (!video || !video.isConnected) return false;
+        if (isPreviewVideo(video)) return false;
+        const { width, height } = videoSurfaceSize(video);
         return width >= MIN_PLAYER_WIDTH && height >= MIN_PLAYER_HEIGHT;
     }
     function findMainVideo() {
@@ -8437,13 +8466,7 @@
         for (const video of document.querySelectorAll('video')) {
             if (isPreviewVideo(video)) continue;
             const host = video.closest(PLAYER_HOST_SELECTOR);
-            let width = video.videoWidth || 0;
-            let height = video.videoHeight || 0;
-            if (!width || !height) {
-                const rect = video.getBoundingClientRect();
-                width = rect.width;
-                height = rect.height;
-            }
+            const { width, height } = videoSurfaceSize(video);
             if (width < MIN_PLAYER_WIDTH || height < MIN_PLAYER_HEIGHT) continue;
             const score = width * height * (host ? 100 : 1);
             if (score > bestScore) {
@@ -8490,7 +8513,7 @@
         const sweepNow = Date.now();
         if (sweepNow - sweepOrphanAt < 800) return;
         sweepOrphanAt = sweepNow;
-        for (const selector of ['.custom-subtitle', '.speed-hud-host', '.tap-hud-host', '.custom-quick-controls']) {
+        for (const selector of ['.speed-hud-host', '.tap-hud-host', '.custom-quick-controls']) {
             for (const node of document.querySelectorAll(selector)) {
                 if (container.contains(node)) continue;
                 if (node.parentElement?.contains(container)) continue;
@@ -8528,6 +8551,7 @@
             container.appendChild(state.subtitleEl);
         }
         applySubtitleStyle();
+        ensureSubtitleGeometryWatch();
         createPanel();
         createQuickControls();
         watchQuickControls();
@@ -10237,23 +10261,27 @@
         if (!rect || rect.height < 1 || rect.width < 280) return false;
         return true;
     }
+    function ensureFilterFallback(grid) {
+        const holder = (grid && grid.parentElement) || document.body;
+        if (!holder) return null;
+        let fallback = holder.querySelector ? holder.querySelector('.av-filter-injected-header') : null;
+        if (fallback) return fallback;
+        fallback = document.createElement('div');
+        fallback.className = 'av-filter-injected-header';
+        if (holder === document.body) holder.insertBefore(fallback, holder.firstChild);
+        else holder.insertBefore(fallback, grid);
+        return fallback;
+    }
     function relocateFilterHost(host, card) {
         if (!host || !card || !card.closest) return host;
         if (host.closest('.av-filter-injected-header, .av-filter-inline-row, .profile-nav')) return host;
         if (!host.closest('header, .site-header, .app-nav, nav')) return host;
         const grid = filterGridScope(card);
         if (!grid) return host;
-        const holder = grid.parentElement || document.body;
-        let fallback = holder.querySelector ? holder.querySelector('.av-filter-injected-header') : null;
-        if (!fallback) {
-            fallback = document.createElement('div');
-            fallback.className = 'av-filter-injected-header';
-            if (holder === document.body) holder.insertBefore(fallback, holder.firstChild);
-            else holder.insertBefore(fallback, grid);
-        }
+        const fallback = ensureFilterFallback(grid);
         host.classList.remove('av-filter-inline');
         clearInlineRow();
-        if (host.parentElement !== fallback) fallback.appendChild(host);
+        if (fallback && host.parentElement !== fallback) fallback.appendChild(host);
         return host;
     }
     function prepareFilterHost() {
@@ -10346,17 +10374,10 @@
             clearInlineRow();
             if (host.parentElement !== slot) slot.appendChild(host);
         } else {
-            const holder = grid.parentElement || document.body;
-            let fallback = holder.querySelector ? holder.querySelector('.av-filter-injected-header') : null;
-            if (!fallback) {
-                fallback = document.createElement('div');
-                fallback.className = 'av-filter-injected-header';
-                if (holder === document.body) holder.insertBefore(fallback, holder.firstChild);
-                else holder.insertBefore(fallback, grid);
-            }
+            const fallback = ensureFilterFallback(grid);
             host.classList.remove('av-filter-inline');
             clearInlineRow();
-            if (host.parentElement !== fallback) fallback.appendChild(host);
+            if (fallback && host.parentElement !== fallback) fallback.appendChild(host);
         }
         state.filterHost = host;
         return relocateFilterHost(host, firstCard);
@@ -12357,16 +12378,21 @@
             };
             video.addEventListener('durationchange', onDuration, { passive: true });
             let hideTimer = 0;
-            let previewNode = null;
             const plyrRoot = video.closest('.plyr');
-            const findPreview = () => {
-                if (previewNode && previewNode.isConnected) return previewNode;
-                previewNode = (plyrRoot || document).querySelector('.plyr__preview-thumb');
-                return previewNode;
+            const previewNodes = () => {
+                const scope = plyrRoot || document;
+                let list = scope.querySelectorAll('.plyr__preview-thumb, [class*="preview-thumb"], [class*="previewThumb"]');
+                if (!list.length) list = document.querySelectorAll('.plyr__preview-thumb, [class*="preview-thumb"], [class*="previewThumb"]');
+                return list.length ? list : null;
             };
             const mutePreview = on => {
-                const node = findPreview();
-                if (node) node.classList.toggle('av-preview-off', on);
+                const list = previewNodes();
+                if (!list) return;
+                for (const node of list) {
+                    node.classList.toggle('av-preview-off', on);
+                    if (on) node.style.setProperty('visibility', 'hidden', 'important');
+                    else node.style.removeProperty('visibility');
+                }
             };
             const hide = () => {
                 host.classList.remove('is-on');
@@ -12381,25 +12407,67 @@
                 frameList = nextFrames;
                 renderTicks();
             });
-            let previewMeasuredAt = 0;
-            const syncPreviewSize = () => {
+            const measureSiteBox = () => {
+                const list = previewNodes();
+                if (!list) return null;
+                let best = null;
+                for (const node of list) {
+                    const box = node.getBoundingClientRect();
+                    if (box.width < 140 || box.height < 70) continue;
+                    const ratio = box.width / box.height;
+                    if (ratio < 1.45 || ratio > 2.1) continue;
+                    if (!best || box.width > best.w) best = { w: Math.round(box.width), h: Math.round(box.height) };
+                }
+                return best;
+            };
+            let boxCheckedAt = 0;
+            const syncBox = () => {
                 const now = Date.now();
-                if (now - previewMeasuredAt < 250) return;
-                previewMeasuredAt = now;
-                const node = findPreview();
-                if (!node) return;
-                const rect = node.getBoundingClientRect();
-                if (rect.width < 80 || rect.height < 45) return;
-                const width = Math.round(rect.width);
-                const height = Math.round(rect.height);
-                if (host.dataset.avPreviewSize === `${width}x${height}`) return;
-                host.dataset.avPreviewSize = `${width}x${height}`;
-                host.style.setProperty('--av-frame-w', `${width}px`);
-                host.style.setProperty('--av-frame-h', `${height}px`);
+                if (now - boxCheckedAt < 400) return;
+                boxCheckedAt = now;
+                const size = measureSiteBox();
+                if (!size) return;
+                const key = `${size.w}x${size.h}`;
+                if (host.dataset.avBox === key) return;
+                host.dataset.avBox = key;
+                host.style.setProperty('--av-frame-w', `${size.w}px`);
+                host.style.setProperty('--av-frame-h', `${size.h}px`);
+            };
+            const frameWarm = new Set();
+            const warmQueue = [];
+            let warmActive = 0;
+            const runWarm = () => {
+                while (warmActive < 3 && warmQueue.length) {
+                    const url = warmQueue.shift();
+                    if (!url || frameWarm.has(url)) continue;
+                    frameWarm.add(url);
+                    warmActive += 1;
+                    const probe = new Image();
+                    probe.decoding = 'async';
+                    const settle = () => {
+                        warmActive -= 1;
+                        runWarm();
+                    };
+                    probe.onload = settle;
+                    probe.onerror = settle;
+                    probe.src = url;
+                }
+            };
+            const warmAround = frame => {
+                const index = visibleFrames.indexOf(frame);
+                if (index < 0) return;
+                for (let step = 1; step <= 6; step += 1) {
+                    const next = visibleFrames[index + step];
+                    const prev = visibleFrames[index - step];
+                    if (next && next.src && !frameWarm.has(next.src) && warmQueue.indexOf(next.src) === -1) warmQueue.push(next.src);
+                    if (prev && prev.src && !frameWarm.has(prev.src) && warmQueue.indexOf(prev.src) === -1) warmQueue.push(prev.src);
+                }
+                runWarm();
             };
             const showFrame = frame => {
-                syncPreviewSize();
                 if (!frame) return;
+                syncBox();
+                warmAround(frame);
                 const seek = seekOf(frame);
                 if (img.getAttribute('src') !== frame.src) img.setAttribute('src', frame.src);
                 const remain = Math.max(0, (video.duration || 0) - seek);
@@ -12548,7 +12616,11 @@
     function removeFramePreview() {
         for (const host of document.querySelectorAll('.av-frame-marks')) host.remove();
         for (const el of document.querySelectorAll('[data-av-frames-ready]')) delete el.dataset.avFramesReady;
-        for (const el of document.querySelectorAll('.av-preview-off')) el.classList.remove('av-preview-off');
+        for (const el of document.querySelectorAll('.av-preview-off')) {
+            el.classList.remove('av-preview-off');
+            el.style.removeProperty('visibility');
+        }
+        for (const el of document.querySelectorAll('[class*="preview-thumb"]')) el.style.removeProperty('visibility');
         for (const v of document.querySelectorAll('video')) delete v.dataset.avFramesBound;
     }
     function setupFramePreview(video) {
@@ -13263,35 +13335,18 @@
                 const source = metric === 'seconds' ? data.topActressesByTime : data.topActresses;
                 rankList.replaceChildren();
                 source.forEach((item, index) => {
-                    const row = document.createElement('div');
-                    row.className = 'av-rank-row';
-                    const badge = document.createElement('span');
-                    badge.className = `av-rank-badge ${index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : ''}`;
-                    badge.textContent = String(index + 1);
-                    const body = document.createElement('div');
-                    body.className = 'av-rank-body';
-                    const head = document.createElement('div');
-                    head.className = 'av-rank-head';
-                    const link = document.createElement('a');
-                    link.className = 'av-actress-link';
-                    link.href = IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`;
-                    link.target = '_blank';
-                    link.rel = 'noopener noreferrer';
-                    link.textContent = item.name;
-                    const meta = document.createElement('span');
-                    meta.className = 'av-rank-meta';
-                    meta.textContent = metric === 'seconds'
-                        ? `${formatDuration(item.seconds)} · ${item.count} 次`
-                        : `${item.count} 次 · ${formatDuration(item.seconds)}`;
-                    head.append(link, meta);
-                    const bar = document.createElement('div');
-                    bar.className = 'av-progress-bar is-actress';
-                    const fill = document.createElement('div');
-                    fill.style.width = `${Math.min(100, metric === 'seconds' ? item.secondsPercentage : item.percentage)}%`;
-                    bar.appendChild(fill);
-                    body.append(head, bar);
-                    row.append(badge, body);
-                    rankList.appendChild(row);
+                    rankList.appendChild(buildRankRow({
+                        badgeText: String(index + 1),
+                        badgeClass: rankMedalClass(index),
+                        linkClass: 'av-actress-link',
+                        href: IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`,
+                        label: item.name,
+                        metaText: metric === 'seconds'
+                            ? `${formatDuration(item.seconds)} · ${item.count} 次`
+                            : `${item.count} 次 · ${formatDuration(item.seconds)}`,
+                        barClass: 'is-actress',
+                        fillPercent: Math.min(100, metric === 'seconds' ? item.secondsPercentage : item.percentage)
+                    }));
                 });
                 syncMetricToggle(toggle, metric);
             };
@@ -13342,35 +13397,18 @@
                 const source = metric === 'seconds' ? data.topMakersByTime : data.topMakers;
                 makerList.replaceChildren();
                 source.forEach((item, index) => {
-                    const row = document.createElement('div');
-                    row.className = 'av-rank-row';
-                    const badge = document.createElement('span');
-                    badge.className = `av-rank-badge ${index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : ''}`;
-                    badge.textContent = String(index + 1);
-                    const body = document.createElement('div');
-                    body.className = 'av-rank-body';
-                    const head = document.createElement('div');
-                    head.className = 'av-rank-head';
-                    const link = document.createElement('a');
-                    link.className = 'av-actress-link';
-                    link.href = IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`;
-                    link.target = '_blank';
-                    link.rel = 'noopener noreferrer';
-                    link.textContent = item.name;
-                    const meta = document.createElement('span');
-                    meta.className = 'av-rank-meta';
-                    meta.textContent = metric === 'seconds'
-                        ? `${formatDuration(item.seconds)} · ${item.count} 部`
-                        : `${item.count} 部 · ${formatDuration(item.seconds)}`;
-                    head.append(link, meta);
-                    const bar = document.createElement('div');
-                    bar.className = 'av-progress-bar is-maker';
-                    const fill = document.createElement('div');
-                    fill.style.width = `${Math.min(100, metric === 'seconds' ? item.secondsPercentage : item.percentage)}%`;
-                    bar.appendChild(fill);
-                    body.append(head, bar);
-                    row.append(badge, body);
-                    makerList.appendChild(row);
+                    makerList.appendChild(buildRankRow({
+                        badgeText: String(index + 1),
+                        badgeClass: rankMedalClass(index),
+                        linkClass: 'av-actress-link',
+                        href: IS_JABLE ? `https://jable.tv/search/${encodeURIComponent(item.name)}/` : `https://missav.ai/search/${encodeURIComponent(item.name)}`,
+                        label: item.name,
+                        metaText: metric === 'seconds'
+                            ? `${formatDuration(item.seconds)} · ${item.count} 部`
+                            : `${item.count} 部 · ${formatDuration(item.seconds)}`,
+                        barClass: 'is-maker',
+                        fillPercent: Math.min(100, metric === 'seconds' ? item.secondsPercentage : item.percentage)
+                    }));
                 });
                 syncMetricToggle(makerToggle, metric);
             };
@@ -13433,6 +13471,51 @@
         wrap.appendChild(group);
         return wrap;
     }
+    function buildListAction(href, label) {
+        const link = document.createElement('a');
+        link.className = 'av-list-action';
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = label;
+        return link;
+    }
+    function rankMedalClass(index) {
+        if (index === 0) return 'is-gold';
+        if (index === 1) return 'is-silver';
+        if (index === 2) return 'is-bronze';
+        return '';
+    }
+    function buildRankRow(options) {
+        const row = document.createElement('div');
+        row.className = 'av-rank-row';
+        const badge = document.createElement('span');
+        badge.className = `av-rank-badge ${options.badgeClass || ''}`.trim();
+        badge.textContent = options.badgeText;
+        const body = document.createElement('div');
+        body.className = 'av-rank-body';
+        const head = document.createElement('div');
+        head.className = 'av-rank-head';
+        const link = document.createElement('a');
+        link.className = options.linkClass;
+        link.href = options.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = options.label;
+        if (options.labelTitle) link.title = options.labelTitle;
+        const meta = document.createElement('span');
+        meta.className = 'av-rank-meta';
+        meta.textContent = options.metaText;
+        head.append(link, meta);
+        const bar = document.createElement('div');
+        bar.className = `av-progress-bar ${options.barClass}`;
+        const fill = document.createElement('div');
+        fill.style.width = `${options.fillPercent}%`;
+        bar.appendChild(fill);
+        body.append(head, bar);
+        row.append(badge, body);
+        return row;
+    }
     function buildResumeCard() {
         const items = resumePendingList(12);
         if (!items.length) return null;
@@ -13440,35 +13523,17 @@
         card.className = 'av-cockpit-card';
         card.appendChild(buildCardTitle('<path d="M8 5v14l11-7z"/>', '继续观看', '按上次播放位置排序，点击番号回到该位置', true));
         for (const item of items) {
-            const row = document.createElement('div');
-            row.className = 'av-rank-row';
-            const badge = document.createElement('span');
-            badge.className = 'av-rank-badge';
-            badge.textContent = '▶';
-            const body = document.createElement('div');
-            body.className = 'av-rank-body';
-            const head = document.createElement('div');
-            head.className = 'av-rank-head';
-            const link = document.createElement('a');
-            link.className = 'av-actress-link av-open-record';
-            link.href = item.url || (IS_JABLE ? `https://jable.tv/videos/${encodeURIComponent(item.code.toLowerCase())}/` : `https://missav.ai/${encodeURIComponent(item.code.toLowerCase())}`);
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = item.title || item.code;
-            link.title = `${item.code} · ${formatDuration(item.position)}${item.duration ? ` / ${formatDuration(item.duration)}` : ''}`;
-            const meta = document.createElement('span');
-            meta.className = 'av-rank-meta';
             const percent = item.duration ? Math.min(100, Math.round((item.position / item.duration) * 100)) : 0;
-            meta.textContent = `${item.code} · ${formatDuration(item.position)}${item.duration ? ` / ${formatDuration(item.duration)} · ${percent}%` : ''} · ${formatRecordDate(item.at)}`;
-            head.append(link, meta);
-            const bar = document.createElement('div');
-            bar.className = 'av-progress-bar is-actress';
-            const fill = document.createElement('div');
-            fill.style.width = `${Math.max(2, percent)}%`;
-            bar.appendChild(fill);
-            body.append(head, bar);
-            row.append(badge, body);
-            card.appendChild(row);
+            card.appendChild(buildRankRow({
+                badgeText: '▶',
+                linkClass: 'av-actress-link av-open-record',
+                href: item.url || (IS_JABLE ? `https://jable.tv/videos/${encodeURIComponent(item.code.toLowerCase())}/` : `https://missav.ai/${encodeURIComponent(item.code.toLowerCase())}`),
+                label: item.title || item.code,
+                labelTitle: `${item.code} · ${formatDuration(item.position)}${item.duration ? ` / ${formatDuration(item.duration)}` : ''}`,
+                metaText: `${item.code} · ${formatDuration(item.position)}${item.duration ? ` / ${formatDuration(item.duration)} · ${percent}%` : ''} · ${formatRecordDate(item.at)}`,
+                barClass: 'is-actress',
+                fillPercent: Math.max(2, percent)
+            }));
         }
         return card;
     }
