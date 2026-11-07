@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      14.16
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      15.00
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -94,6 +94,135 @@
         } catch (_) {
         }
     }
+
+    const PERSIST_DELAY = 200;
+    const PERSIST_QUEUE = new Map();
+    const PERSIST_WRITTEN = new Map();
+    const PERSIST_STATE = { queued: 0, written: 0, ls: 0, gm: 0, skipped: 0, failed: 0 };
+    let persistTimer = 0;
+    let persistHooked = false;
+    function persistDrain() {
+        try {
+            flushAnalyticsStorage();
+        } catch (error) {
+            debugLog(error, 'persist-drain-analytics');
+        }
+        persistFlush();
+    }
+    function persistHook() {
+        if (persistHooked) return;
+        persistHooked = true;
+        try {
+            window.addEventListener('pagehide', persistDrain, { passive: true });
+            window.addEventListener('beforeunload', persistDrain, { passive: true });
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') persistDrain();
+            }, { passive: true });
+        } catch (error) {
+            debugLog(error, 'persist-hook');
+        }
+    }
+    function persistPeek(fullKey) {
+        const pending = PERSIST_QUEUE.get(fullKey);
+        return pending ? pending.text : null;
+    }
+    function persistRead(fullKey) {
+        const pending = persistPeek(fullKey);
+        if (pending !== null) return pending;
+        try {
+            return localStorage.getItem(fullKey);
+        } catch (_) {
+            return null;
+        }
+    }
+    function persistKnown(fullKey, text) {
+        const known = PERSIST_WRITTEN.get(fullKey);
+        if (known && known.text === text) return known;
+        if (PERSIST_WRITTEN.size >= 96) PERSIST_WRITTEN.clear();
+        const fresh = { text, ls: false, gm: false };
+        PERSIST_WRITTEN.set(fullKey, fresh);
+        return fresh;
+    }
+    function persistWrite(fullKey, value, sink = 'ls') {
+        const text = String(value);
+        const wantGm = sink === 'gm' || sink === 'both';
+        const wantLs = sink !== 'gm';
+        const known = persistKnown(fullKey, text);
+        if ((!wantLs || known.ls) && (!wantGm || known.gm)) {
+            PERSIST_STATE.skipped += 1;
+            return false;
+        }
+        const pending = PERSIST_QUEUE.get(fullKey);
+        if (pending && pending.text === text && (!wantLs || pending.ls) && (!wantGm || pending.gm)) {
+            PERSIST_STATE.skipped += 1;
+            return false;
+        }
+        PERSIST_QUEUE.set(fullKey, {
+            text,
+            ls: wantLs && !known.ls,
+            gm: wantGm && !known.gm
+        });
+        PERSIST_STATE.queued += 1;
+        persistHook();
+        if (!persistTimer) persistTimer = setTimeout(persistFlush, PERSIST_DELAY);
+        return true;
+    }
+    function persistFlush() {
+        if (persistTimer) {
+            clearTimeout(persistTimer);
+            persistTimer = 0;
+        }
+        if (!PERSIST_QUEUE.size) return PERSIST_STATE;
+        const batch = Array.from(PERSIST_QUEUE);
+        PERSIST_QUEUE.clear();
+        for (const [fullKey, item] of batch) {
+            const known = persistKnown(fullKey, item.text);
+            if (item.ls) {
+                try {
+                    localStorage.setItem(fullKey, item.text);
+                    known.ls = true;
+                    PERSIST_STATE.ls += 1;
+                } catch (error) {
+                    PERSIST_STATE.failed += 1;
+                    debugLog(error, 'persist-ls');
+                    if (/cache/i.test(fullKey)) {
+                        cacheSweep(8);
+                        try {
+                            localStorage.setItem(fullKey, item.text);
+                            known.ls = true;
+                            PERSIST_STATE.ls += 1;
+                            PERSIST_STATE.failed -= 1;
+                        } catch (retryError) {
+                            debugLog(retryError, 'persist-ls-retry');
+                        }
+                    }
+                }
+            }
+            if (item.gm) {
+                try {
+                    if (typeof GM_setValue === 'function') {
+                        GM_setValue(fullKey, item.text);
+                        known.gm = true;
+                        PERSIST_STATE.gm += 1;
+                    }
+                } catch (gmError) {
+                    PERSIST_STATE.failed += 1;
+                    debugLog(gmError, 'persist-gm');
+                }
+            }
+            PERSIST_STATE.written += 1;
+        }
+        return PERSIST_STATE;
+    }
+    try {
+        (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).__avPersist = {
+            state: PERSIST_STATE,
+            flush: persistFlush,
+            peek: persistPeek
+        };
+    } catch (_) {
+    }
+
     const PLATFORM_MODE_KEY = `${STORAGE_PREFIX}platformMode`;
     const PLATFORM_MODES = ['auto', 'mobile', 'desktop'];
     const PLATFORM_UA_MOBILE = /Android|iPhone|iPod|Windows Phone|webOS|BlackBerry|Opera Mini|IEMobile|HarmonyOS|MicroMessenger|MiuiBrowser|Quark|UCBrowser/i;
@@ -107,7 +236,7 @@
         }
         if (!forced) {
             try {
-                const stored = String(localStorage.getItem(PLATFORM_MODE_KEY) || '').toLowerCase();
+                const stored = String(persistRead(PLATFORM_MODE_KEY) || '').toLowerCase();
                 if (PLATFORM_MODES.includes(stored)) forced = stored;
             } catch (_) {
             }
@@ -236,7 +365,7 @@
     const PLAYER_HOST_SELECTOR = ACTIVE_SELECTORS.playerHost;
     const PREVIEW_HOST_SELECTOR = ACTIVE_SELECTORS.previewHost;
     const REPEAT_SEEK_INTERVAL = 120;
-    const PANEL_WIDTH = 310;
+    const PANEL_WIDTH = 372;
     const PASSIVE_CAPTURE = { passive: true, capture: true };
     const SPEED_MIN = 0.1;
     const SPEED_MAX = 16;
@@ -271,7 +400,430 @@
     const AUDIO_GAIN_PRESETS = [1, 1.5, 2, 3, 4.5, 6];
     const AUDIO_CORS_WAIT_MS = 4000;
     const INFO_CACHE_PREFIX = 'info:v4:';
-    const ACTRESS_CACHE_PREFIX = 'actress:';
+    const ACTRESS_CACHE_PREFIX = 'actress2:';
+    const ACTRESS_FAV_PREFIX = 'actressFav';
+    const ACTRESS_FAV_SITES = [
+        { key: 'missav', label: 'MissAV', savedPath: '/saved/actresses' },
+        { key: 'jable', label: 'Jable', savedPath: '' }
+    ];
+    const ACTRESS_VARIANT_PAIRS = '麗|丽,澤|泽,華|华,繪|绘,穗|穗,遙|遥,葉|叶,瀬|濑,瀨|濑,優|优,愛|爱,結|结,織|织,綺|绮,鈴|铃,櫻|樱,桜|樱,綾|绫,實|实,亞|亚,來|来,時|时,東|东,馬|马,鳥|鸟,龍|龙,鳳|凤,岡|冈,島|岛,嶋|岛,嶌|岛,濱|滨,浜|滨,邊|边,貝|贝,廣|广,氣|气,醫|医,戰|战,藝|艺,樂|乐,學|学,國|国,圖|图,團|团,圍|围,園|园,圓|圆,場|场,塊|块,壯|壮,聲|声,處|处,備|备,價|价,億|亿,儀|仪,劍|剑,務|务,動|动,勵|励,勸|劝,區|区,協|协,單|单,賣|卖,衛|卫,參|参,雙|双,髮|发,發|发,變|变,疊|叠,號|号,嘆|叹,嚇|吓,嚴|严,囉|啰,驕|骄,驗|验,驚|惊,體|体,點|点,黨|党,齊|齐,龜|龟,亂|乱,爭|争,於|于,與|与,興|兴,舉|举,舊|旧,艱|艰,蘇|苏,蘭|兰,蟲|虫,蠶|蚕,蠻|蛮,衆|众,債|债,傷|伤,傾|倾,償|偿,僅|仅,傑|杰,兩|两,歲|岁,靜|静,顏|颜,願|愿,頂|顶,順|顺,須|须,項|项,顯|显,風|风,飛|飞,餘|余,飯|饭,餅|饼,駒|驹,驅|驱,鬥|斗,魚|鱼,鮮|鲜,黃|黄,黙|默,嵐|岚,頁|页,亜|亚,悪|恶,圧|压,囲|围,転|转,徳|德,恵|惠,稲|稻,駅|驿,応|应,壊|坏,覚|觉,拡|扩,殻|壳,巻|卷,陥|陷,寛|宽,歓|欢,観|观,関|关,舘|馆,舗|铺,経|经,蛍|萤,軽|轻,撃|击,検|检,剣|剑,険|险,顕|显,験|验,効|效,鉱|矿,済|济,砕|碎,雑|杂,賛|赞,糸|丝,児|儿,歯|齿,釈|释,収|收,渋|涩,獣|兽,縦|纵,従|从,粋|粹,酔|醉,穂|穗,髄|髓,枢|枢,斉|齐,摂|摄,専|专,銭|钱,禅|禅,荘|庄,捜|搜,挿|插,巣|巢,曽|曾,痩|瘦,総|总,聡|聪,蔵|藏,臓|脏,続|续,対|对,帯|带,滝|泷,択|择,弾|弹,遅|迟,鋳|铸,庁|厅,徴|征,聴|听,鉄|铁,転|转,伝|传,闘|斗,読|读,縄|绳,弐|贰,悩|恼,脳|脑,覇|霸,廃|废,抜|拔,飯|饭,仏|佛,辺|边,弁|辩,歩|步,満|满,黙|默,訳|译,薬|药,予|预,揺|摇,様|样,謡|谣,覧|览,竜|龙,両|两,猟|猎,緑|绿,涙|泪,塁|垒,隣|邻,霊|灵,齢|龄,暦|历,歴|历,炉|炉,労|劳,楼|楼,録|录,湾|湾';
+
+    let actressVariantCache = null;
+    function actressVariantMap() {
+        if (actressVariantCache) return actressVariantCache;
+        const map = new Map();
+        for (const pair of ACTRESS_VARIANT_PAIRS.split(',')) {
+            const parts = pair.trim().split('|');
+            if (parts.length !== 2 || !parts[0] || !parts[1]) continue;
+            map.set(parts[0], parts[1]);
+        }
+        actressVariantCache = map;
+        return map;
+    }
+    const FOLD_NAME_MEMO = new Map();
+    function actressNameKeepChar(ch) {
+        const code = ch.charCodeAt(0);
+        if (!(code > 0)) return false;
+        if (code >= 0x30 && code <= 0x39) return true;
+        if (code >= 0x61 && code <= 0x7a) return true;
+        if (code >= 0x3040 && code <= 0x309f) return true;
+        if (code >= 0x4e00 && code <= 0x9fff) return true;
+        return false;
+    }
+    function foldActressName(value) {
+        const raw = String(value === null || value === undefined ? '' : value).trim();
+        if (!raw) return '';
+        const hit = FOLD_NAME_MEMO.get(raw);
+        if (hit !== undefined) return hit;
+        let text = raw;
+        try {
+            text = text.normalize('NFKC');
+        } catch (_) {
+            text = raw;
+        }
+        const variants = actressVariantMap();
+        let out = '';
+        for (const original of text.toLowerCase()) {
+            if (original === '\u3005' || original === '\u30fb' || original === '\u00b7') continue;
+            let ch = original;
+            const code = ch.charCodeAt(0);
+            if (code >= 0x30a1 && code <= 0x30f6) ch = String.fromCharCode(code - 0x60);
+            const mapped = variants.get(ch) || variants.get(original) || ch;
+            if (mapped.length > 1) {
+                if (/[0-9a-z\u3040-\u309f\u4e00-\u9fff]/.test(mapped)) out += mapped;
+            } else if (mapped && actressNameKeepChar(mapped)) {
+                out += mapped;
+            }
+        }
+        if (FOLD_NAME_MEMO.size >= 4000) FOLD_NAME_MEMO.clear();
+        FOLD_NAME_MEMO.set(raw, out);
+        return out;
+    }
+    function cleanActressName(raw) {
+        let text = String(raw === null || raw === undefined ? '' : raw).replace(/\s+/g, ' ').trim();
+        if (!text) return '';
+        text = text.replace(/\d+\s*(?:條|条|部|個|个|本)?\s*(?:影片|作品|片子|视频|視頻|動畫|动画)/giu, ' ');
+        text = text.replace(/\d{4}\s*年?\s*(?:出道|デビュー)/giu, ' ');
+        text = text.replace(/\d+\s*(?:條|条|部|個|个|本)/gu, ' ');
+        text = text.replace(/(?:出道|デビュー)/giu, ' ');
+        text = text.replace(/\s+/g, ' ').trim();
+        return text;
+    }
+    const ACTRESS_META_KEY = 'actressMeta_v1';
+    const ACTRESS_PROFILE_KEY = 'actressProfile_v1';
+    const ACTRESS_AVATAR_KEY = 'actressAvatar_v1';
+    const ACTRESS_PROFILE_LIMIT = 400;
+    const ACTRESS_AVATAR_LIMIT = 120;
+    const ACTRESS_AVATAR_TTL = 86400000 * 30;
+    const ACTRESS_TAG_LIMIT = 6;
+    let actressMetaCache = null;
+    let actressProfileCache = null;
+    let actressAvatarCache = null;
+    function actressJsonRead(key, fallback) {
+        return historyParseJson(historyStorageGet(key) || '', fallback);
+    }
+    function actressJsonWrite(key, value) {
+        historyStorageSet(key, JSON.stringify(value));
+    }
+    function actressMetaStore() {
+        if (actressMetaCache) return actressMetaCache;
+        const parsed = actressJsonRead(ACTRESS_META_KEY, {});
+        const map = new Map();
+        if (parsed && typeof parsed === 'object') {
+            for (const key of Object.keys(parsed)) {
+                const entry = parsed[key];
+                if (!entry || typeof entry !== 'object') continue;
+                map.set(key, entry);
+            }
+        }
+        actressMetaCache = map;
+        return map;
+    }
+    function actressMetaOf(name) {
+        const folded = foldActressName(name);
+        if (!folded) return { rating: 0, tags: [], note: '' };
+        const entry = actressMetaStore().get(folded);
+        if (!entry || typeof entry !== 'object') return { rating: 0, tags: [], note: '' };
+        const rating = clamp(Number(entry.rating) || 0, 0, 5);
+        const tags = Array.isArray(entry.tags) ? entry.tags.map(item => String(item || '').trim()).filter(Boolean) : [];
+        return { rating, tags, note: String(entry.note || '') };
+    }
+    function actressMetaPatch(name, patch) {
+        const folded = foldActressName(name);
+        if (!folded) return null;
+        const store = actressMetaStore();
+        const current = Object.assign({ rating: 0, tags: [], note: '' }, store.get(folded) || {});
+        if (patch && Object.prototype.hasOwnProperty.call(patch, 'rating')) current.rating = clamp(Number(patch.rating) || 0, 0, 5);
+        if (patch && Array.isArray(patch.tags)) {
+            const next = [];
+            const seen = new Set();
+            for (const item of patch.tags) {
+                const tag = String(item || '').trim().slice(0, 16);
+                if (!tag) continue;
+                const key = tag.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                next.push(tag);
+            }
+            current.tags = next.slice(0, ACTRESS_TAG_LIMIT * 4);
+        }
+        if (patch && Object.prototype.hasOwnProperty.call(patch, 'note')) current.note = String(patch.note || '').slice(0, 240);
+        if (!current.rating && !current.tags.length && !current.note) store.delete(folded);
+        else store.set(folded, current);
+        const plain = {};
+        for (const [key, value] of store) plain[key] = value;
+        actressJsonWrite(ACTRESS_META_KEY, plain);
+        return current;
+    }
+    function actressMetaTags() {
+        const counts = new Map();
+        for (const entry of actressMetaStore().values()) {
+            if (!entry || !Array.isArray(entry.tags)) continue;
+            for (const tag of entry.tags) {
+                const key = String(tag || '').trim();
+                if (!key) continue;
+                counts.set(key, (counts.get(key) || 0) + 1);
+            }
+        }
+        return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ja'));
+    }
+    function actressProfileStore() {
+        if (actressProfileCache) return actressProfileCache;
+        const parsed = actressJsonRead(ACTRESS_PROFILE_KEY, {});
+        const map = new Map();
+        if (parsed && typeof parsed === 'object') {
+            for (const key of Object.keys(parsed)) {
+                const entry = parsed[key];
+                if (!entry || typeof entry !== 'object') continue;
+                map.set(key, entry);
+            }
+        }
+        actressProfileCache = map;
+        return map;
+    }
+    function actressProfileOf(name) {
+        const folded = foldActressName(name);
+        if (!folded) return null;
+        const entry = actressProfileStore().get(folded);
+        if (!entry || typeof entry !== 'object') return null;
+        return {
+            name: String(entry.name || name),
+            aliases: Array.isArray(entry.aliases) ? entry.aliases.map(item => String(item || '').trim()).filter(Boolean) : [],
+            works: Number(entry.works) || 0,
+            avatar: String(entry.avatar || ''),
+            twitter: String(entry.twitter || ''),
+            instagram: String(entry.instagram || ''),
+            actorPath: String(entry.actorPath || ''),
+            busPath: String(entry.busPath || ''),
+            birthday: String(entry.birthday || ''),
+            age: String(entry.age || ''),
+            height: String(entry.height || ''),
+            cup: String(entry.cup || ''),
+            bust: String(entry.bust || ''),
+            waist: String(entry.waist || ''),
+            hip: String(entry.hip || ''),
+            hobby: String(entry.hobby || ''),
+            busAvatar: String(entry.busAvatar || ''),
+            busWorks: Number(entry.busWorks) || 0,
+            busFetchedAt: Number(entry.busFetchedAt) || 0,
+            fetchedAt: Number(entry.fetchedAt) || 0
+        };
+    }
+    function actressProfileSave(name, patch) {
+        const folded = foldActressName(name);
+        if (!folded) return null;
+        const store = actressProfileStore();
+        const current = Object.assign({ name: String(name || ''), aliases: [], works: 0, avatar: '', twitter: '', instagram: '', actorPath: '', busPath: '', busAvatar: '', birthday: '', age: '', height: '', cup: '', bust: '', waist: '', hip: '', hobby: '', busWorks: 0, busFetchedAt: 0, fetchedAt: 0 }, store.get(folded) || {}, patch || {});
+        current.fetchedAt = Date.now();
+        store.set(folded, current);
+        if (store.size > ACTRESS_PROFILE_LIMIT) {
+            const stale = [...store.entries()].sort((a, b) => (Number(a[1].fetchedAt) || 0) - (Number(b[1].fetchedAt) || 0));
+            for (const [key] of stale.slice(0, store.size - ACTRESS_PROFILE_LIMIT)) store.delete(key);
+        }
+        const plain = {};
+        for (const [key, value] of store) plain[key] = value;
+        actressJsonWrite(ACTRESS_PROFILE_KEY, plain);
+        return current;
+    }
+    function actressAvatarStore() {
+        if (actressAvatarCache) return actressAvatarCache;
+        const parsed = actressJsonRead(ACTRESS_AVATAR_KEY, {});
+        actressAvatarCache = parsed && typeof parsed === 'object' ? parsed : {};
+        return actressAvatarCache;
+    }
+    function actressAvatarSave(url, dataUrl) {
+        const key = String(url || '');
+        if (!key || !dataUrl) return '';
+        const store = actressAvatarStore();
+        store[key] = { data: dataUrl, at: Date.now() };
+        const keys = Object.keys(store);
+        if (keys.length > ACTRESS_AVATAR_LIMIT) {
+            keys.sort((a, b) => (Number(store[a].at) || 0) - (Number(store[b].at) || 0));
+            for (const stale of keys.slice(0, keys.length - ACTRESS_AVATAR_LIMIT)) delete store[stale];
+        }
+        actressJsonWrite(ACTRESS_AVATAR_KEY, store);
+        return dataUrl;
+    }
+    function actressAvatarCached(url) {
+        const key = String(url || '');
+        if (!key) return '';
+        const entry = actressAvatarStore()[key];
+        if (!entry || typeof entry !== 'object') return '';
+        if (Number(entry.at) && Date.now() - Number(entry.at) > ACTRESS_AVATAR_TTL * 6) return '';
+        return typeof entry.data === 'string' ? entry.data : '';
+    }
+    function actressAvatarMime(buffer) {
+        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        if (bytes.length > 3 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+        if (bytes.length > 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg';
+        if (bytes.length > 5 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif';
+        if (bytes.length > 11 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+        return 'image/jpeg';
+    }
+    function actressAvatarEncode(buffer) {
+        const mime = actressAvatarMime(buffer);
+        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let index = 0; index < bytes.length; index += chunkSize) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunkSize));
+        }
+        return `data:${mime};base64,${btoa(binary)}`;
+    }
+    function actressAvatarFind(url, headers = null) {
+        const key = String(url || '');
+        if (!key) return Promise.resolve('');
+        const cached = actressAvatarCached(key);
+        if (cached) return Promise.resolve(cached);
+        const requestHeaders = headers && Object.keys(headers).length ? headers : null;
+        return gmRequest(key, { binary: true, timeout: 9000, headers: requestHeaders })
+            .then(buffer => {
+                if (!(buffer instanceof ArrayBuffer) && !(buffer instanceof Uint8Array)) return '';
+                if (!buffer.byteLength) return '';
+                return actressAvatarSave(key, actressAvatarEncode(buffer));
+            })
+            .catch(error => {
+                debugLog(error, 'actress-avatar');
+                return '';
+            });
+    }
+    function actressWatchIndex() {
+        if (state.actressWatchIndex) return state.actressWatchIndex;
+        const index = new Map();
+        const foldCache = new Map();
+        for (const record of analyticsRecords()) {
+            const names = Array.isArray(record.actresses) ? record.actresses : [];
+            if (!names.length) continue;
+            const watchedAt = Number(record.watchedAt) || 0;
+            const seconds = Number(record.watchedSeconds) || 0;
+            const seen = new Set();
+            for (const raw of names) {
+                const name = String(raw || '').trim();
+                if (!name) continue;
+                let folded = foldCache.get(name);
+                if (folded === undefined) {
+                    folded = foldActressName(name);
+                    foldCache.set(name, folded);
+                }
+                if (!folded || seen.has(folded)) continue;
+                seen.add(folded);
+                let bucket = index.get(folded);
+                if (!bucket) {
+                    bucket = { works: 0, seconds: 0, lastAt: 0, lastCode: '', lastTitle: '', lastUrl: '', items: [] };
+                    index.set(folded, bucket);
+                }
+                bucket.works += 1;
+                bucket.seconds += seconds;
+                if (watchedAt >= bucket.lastAt) {
+                    bucket.lastAt = watchedAt;
+                    bucket.lastCode = String(record.code || '');
+                    bucket.lastTitle = String(record.title || '');
+                    bucket.lastUrl = String(record.url || '');
+                }
+                bucket.items.push({
+                    code: String(record.code || ''),
+                    title: String(record.title || ''),
+                    url: String(record.url || ''),
+                    watchedAt,
+                    seconds,
+                    duration: Number(record.duration) || 0
+                });
+            }
+        }
+        for (const bucket of index.values()) {
+            bucket.items.sort((a, b) => b.watchedAt - a.watchedAt);
+            if (bucket.items.length > 12) bucket.items.length = 12;
+        }
+        state.actressWatchIndex = index;
+        return index;
+    }
+    function actressWatchStats(name) {
+        const folded = foldActressName(name);
+        if (!folded) return { works: 0, seconds: 0, lastAt: 0, lastCode: '', lastTitle: '', lastUrl: '', items: [] };
+        return actressWatchIndex().get(folded) || { works: 0, seconds: 0, lastAt: 0, lastCode: '', lastTitle: '', lastUrl: '', items: [] };
+    }
+    function actressSiteUrl(item) {
+        const site = item && item.site ? item.site : SITE_TAG;
+        const slug = String(item && item.slug ? item.slug : '').trim();
+        const name = String(item && item.name ? item.name : '');
+        if (site === 'jable') {
+            if (slug) return `https://jable.tv/models/${encodeURIComponent(slug)}/`;
+            return `https://jable.tv/search/${encodeURIComponent(name)}/`;
+        }
+        if (slug) return `https://missav.ws/actresses/${encodeURIComponent(slug)}`;
+        return `https://missav.ws/search/${encodeURIComponent(name)}`;
+    }
+    function actressExternalLinks(name, profile) {
+        const query = encodeURIComponent(name);
+        const slug = profile && profile.actorPath ? profile.actorPath : '';
+        const bus = profile && profile.busPath ? profile.busPath : '';
+        return [
+            { label: 'JavDB', href: slug ? `https://javdb.com${slug}` : `https://javdb.com/search?q=${query}&f=actor` },
+            { label: 'JavBus', href: bus ? `https://www.javbus.com${bus}` : `https://www.javbus.com/searchstar/${query}` },
+            { label: '维基百科', href: `https://zh.wikipedia.org/w/index.php?search=${query}` }
+        ];
+    }
+
+    function actressFavStoreKey(site) {
+        return ACTRESS_FAV_PREFIX + '@' + site;
+    }
+    function actressFavList(site) {
+        const parsed = historyParseJson(historyStorageGet(actressFavStoreKey(site)) || '[]', []);
+        if (!Array.isArray(parsed)) return [];
+        const out = [];
+        const seen = new Set();
+        for (const item of parsed) {
+            if (!item || !item.name) continue;
+            const name = cleanActressName(item.name);
+            if (!name || name.length < 2) continue;
+            const folded = foldActressName(name);
+            if (!folded || seen.has(folded)) continue;
+            seen.add(folded);
+            out.push({
+                name,
+                url: String(item.url || ''),
+                slug: String(item.slug || ''),
+                site: String(item.site || site),
+                addAt: Number(item.addAt) || 0
+            });
+        }
+        return out;
+    }
+    function actressFavRepair(site) {
+        const key = actressFavStoreKey(site);
+        const raw = historyParseJson(historyStorageGet(key) || '[]', []);
+        const list = actressFavList(site);
+        const before = Array.isArray(raw) ? raw.length : 0;
+        const same = Array.isArray(raw) && raw.length === list.length && raw.every((item, index) => item && String(item.name || '').trim() === list[index].name);
+        if (!same) {
+            actressFavSave(site, list);
+            if (before > list.length) log(`🧹 女优收藏已清理重复/异常 ${before - list.length} 条（${itemLabel(site)}）`);
+        }
+        return list;
+    }
+    function actressFavSave(site, list) {
+        historyStorageSet(actressFavStoreKey(site), JSON.stringify(list));
+    }
+    function actressFavHas(site, name) {
+        const folded = foldActressName(name);
+        if (!folded) return false;
+        for (const item of actressFavList(site)) {
+            if (foldActressName(item.name) === folded) return true;
+        }
+        return false;
+    }
+    function actressFavAdd(site, entry) {
+        const name = String(entry && entry.name ? entry.name : '').trim();
+        if (!name) return 'empty';
+        const folded = foldActressName(name);
+        const list = actressFavList(site);
+        for (const item of list) {
+            if (foldActressName(item.name) === folded) return 'exists';
+        }
+        list.push({ name, url: String(entry.url || ''), slug: String(entry.slug || ''), site, addAt: Date.now() });
+        actressFavSave(site, list);
+        refreshActressPage();
+        return 'added';
+    }
+    function actressFavRemove(site, name) {
+        const folded = foldActressName(name);
+        const list = actressFavList(site);
+        const next = [];
+        for (const item of list) {
+            if (foldActressName(item.name) !== folded) next.push(item);
+        }
+        if (next.length === list.length) return false;
+        actressFavSave(site, next);
+        refreshActressPage();
+        return true;
+    }
+    function actressFavClear(site) {
+        const list = actressFavList(site);
+        if (!list.length) return 0;
+        actressFavSave(site, []);
+        refreshActressPage();
+        return list.length;
+    }
     const JDFORREPAM_API = 'https://jdforrepam.com';
     const JDSIGN_SUFFIX = '71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa';
     const JDFORREPAM_HEADERS = { 'User-Agent': 'Dart/3.5 (dart:io)', Accept: 'application/json' };
@@ -306,7 +858,19 @@
     const JL_SCORE_RE = /class=["']score["'][^>]*>\s*\(?([0-9.]+)\)?\s*<\/span>/i;
     const JL_COMMENT_RE = /<table[^>]+class=["']comment["'][^>]*>([\s\S]*?)<\/table>/gi;
     const JD_ACTOR_PATH_RE = /href=["'](\/actors\/[a-zA-Z0-9_-]+)["']/gi;
+    const JD_ACTOR_NAME_RE = /class=["']actor-section-name["'][^>]*>([^<]+)</i;
+    const JD_ACTOR_WORKS_RE = /class=["']section-meta["'][^>]*>\s*([\d,]+)\s*(?:部|本|條|条|个|個)/i;
+    const JD_ACTOR_AVATAR_RE = /class=["']avatar["'][^>]*style=["'][^"']*background-image:\s*url\(\s*['"]?([^'")]+)['"]?\s*\)/i;
     const JD_TWITTER_RE = /href=["'](https?:\/\/(?:twitter\.com|x\.com)\/[^"'\s?#]+)["']/i;
+    const JB_ACTOR_PATH_RE = /href=["'](?:https?:\/\/www\.javbus\.com)?(\/star\/[a-zA-Z0-9_-]+)["']/;
+    const JB_SEARCH_HIT_RE = /<a[^>]+href=["'](?:https?:\/\/www\.javbus\.com)?(\/star\/[a-zA-Z0-9_-]+)["'][^>]*>[\s\S]{0,240}?<img[^>]+src=["']([^"']+)["'][^>]*title=["']([^"']*)["']/gi;
+    const JB_ACTOR_IMG_RE = /<img[^>]+src=["']([^"']*\/pics\/actress\/[^"']+)["'][^>]*title=["']([^"']*)["']/i;
+    const JB_ACTOR_LABEL_RE = /<p>\s*(生日|出生|年齡|年龄|身高|罩杯|胸圍|胸围|腰圍|腰围|臀圍|臀围|愛好|爱好)\s*[:：]\s*([^<]*)<\/p>/g;
+    const JB_ACTOR_WORKS_RE = /全部影片[^0-9]{0,12}([\d,]+)/;
+    const JB_PAGE_HEADERS = {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9'
+    };
     const JD_INSTAGRAM_RE = /href=["'](https?:\/\/(?:www\.)?instagram\.com\/[^"'\s?#]+)["']/i;
     const BLOCKED_ACTOR_PATHS = new Set([
         '/actors/censored',
@@ -587,14 +1151,19 @@
         if (href.startsWith('/')) return `${base}${href}`;
         return href;
     }
+    const READ_CACHE_MEMO = new Map();
     function readCache(key) {
         try {
-            const raw = localStorage.getItem(STORAGE_PREFIX + key);
+            const raw = persistRead(STORAGE_PREFIX + key);
             if (!raw) return null;
+            const memo = READ_CACHE_MEMO.get(key);
+            if (memo && memo.raw === raw) return memo.data;
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return null;
-            if (parsed.expires && parsed.expires < Date.now()) return null;
-            return parsed.data ?? null;
+            const data = parsed.expires && parsed.expires < Date.now() ? null : parsed.data ?? null;
+            if (READ_CACHE_MEMO.size >= 64) READ_CACHE_MEMO.clear();
+            READ_CACHE_MEMO.set(key, { raw, data });
+            return data;
         } catch (_) {
             return null;
         }
@@ -602,23 +1171,29 @@
     const CACHE_INDEX_KEY = 'cacheIndex_v1';
     const CACHE_MAX_ENTRIES = 48;
     const CACHE_MAX_BYTES = 1400000;
+    let cacheIndexMemo = null;
     function cacheIndexRead() {
+        if (cacheIndexMemo) return cacheIndexMemo;
         try {
-            const raw = localStorage.getItem(STORAGE_PREFIX + CACHE_INDEX_KEY);
-            if (!raw) return {};
-            const parsed = JSON.parse(raw);
-            return parsed && typeof parsed === 'object' ? parsed : {};
+            const raw = persistRead(STORAGE_PREFIX + CACHE_INDEX_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            cacheIndexMemo = parsed && typeof parsed === 'object' ? parsed : {};
         } catch (error) {
             debugLog(error, 'cache-index-read');
-            return {};
+            cacheIndexMemo = {};
         }
+        return cacheIndexMemo;
     }
     function cacheIndexSave(index) {
+        cacheIndexMemo = index;
+        let text = '';
         try {
-            localStorage.setItem(STORAGE_PREFIX + CACHE_INDEX_KEY, JSON.stringify(index));
+            text = JSON.stringify(index);
         } catch (error) {
-            debugLog(error, 'cache-index-save');
+            debugLog(error, 'cache-index-encode');
+            return;
         }
+        persistWrite(STORAGE_PREFIX + CACHE_INDEX_KEY, text);
     }
     function cacheSweep(minDrop = 0) {
         const index = cacheIndexRead();
@@ -634,8 +1209,12 @@
         for (const item of entries) {
             const over = remaining > CACHE_MAX_ENTRIES || bytes > CACHE_MAX_BYTES;
             if (!over && dropped >= minDrop) break;
+            const fullKey = STORAGE_PREFIX + item.key;
+            READ_CACHE_MEMO.delete(item.key);
+            PERSIST_QUEUE.delete(fullKey);
+            PERSIST_WRITTEN.delete(fullKey);
             try {
-                localStorage.removeItem(STORAGE_PREFIX + item.key);
+                localStorage.removeItem(fullKey);
             } catch (error) {
                 debugLog(error, 'cache-drop');
             }
@@ -655,19 +1234,8 @@
             debugLog(error, 'cache-encode');
             return false;
         }
-        try {
-            localStorage.setItem(STORAGE_PREFIX + key, payload);
-        } catch (error) {
-            debugLog(error, 'cache-write');
-            const count = Object.keys(cacheIndexRead()).length;
-            cacheSweep(Math.max(6, Math.ceil(count / 3)));
-            try {
-                localStorage.setItem(STORAGE_PREFIX + key, payload);
-            } catch (retryError) {
-                debugLog(retryError, 'cache-write-retry');
-                return false;
-            }
-        }
+        READ_CACHE_MEMO.delete(key);
+        persistWrite(STORAGE_PREFIX + key, payload);
         const index = cacheIndexRead();
         index[key] = { at: Date.now(), size: payload.length };
         cacheIndexSave(index);
@@ -679,18 +1247,10 @@
     }
     const store = {
         get(key) {
-            try {
-                return localStorage.getItem(STORAGE_PREFIX + key);
-            } catch (_) {
-                return null;
-            }
+            return persistRead(STORAGE_PREFIX + key);
         },
         set(key, value) {
-            try {
-                localStorage.setItem(STORAGE_PREFIX + key, String(value));
-            } catch (error) {
-                debugLog(error);
-            }
+            persistWrite(STORAGE_PREFIX + key, value);
         },
         getNumber(key, fallback, min, max) {
             const value = Number.parseFloat(this.get(key));
@@ -705,8 +1265,12 @@
             return value === null ? fallback : value;
         },
         remove(key) {
+            const fullKey = STORAGE_PREFIX + key;
+            PERSIST_QUEUE.delete(fullKey);
+            PERSIST_WRITTEN.delete(fullKey);
+            READ_CACHE_MEMO.delete(key);
             try {
-                localStorage.removeItem(STORAGE_PREFIX + key);
+                localStorage.removeItem(fullKey);
             } catch (error) {
                 debugLog(error);
             }
@@ -824,10 +1388,10 @@
         pickerX: store.getNumber('pickerX', NaN, 0, 99999),
         pickerY: store.getNumber('pickerY', NaN, 0, 99999),
         isMinimized: store.getBool('isMinimized'),
-        opacity: store.getNumber('opacity', 0.3, 0, 1),
-        blur: store.getNumber('blur', 1, 0, 20),
-        hoverOpacity: store.getNumber('hoverOpacity', 0.9, 0, 1),
-        hoverBlur: store.getNumber('hoverBlur', 1, 0, 20),
+        opacity: store.getNumber('opacity', 0.92, 0, 1),
+        blur: store.getNumber('blur', 16, 0, 20),
+        hoverOpacity: store.getNumber('hoverOpacity', 0.96, 0, 1),
+        hoverBlur: store.getNumber('hoverBlur', 16, 0, 20),
         holdAccelerate: store.getBool('holdAccelerate', true),
         wakeLock: store.getBool('wakeLock', true),
         mediaSession: store.getBool('mediaSession', true),
@@ -839,6 +1403,7 @@
         filterEnableBlacklist: store.getBool('filterEnableBlacklist', true),
         filterKeywords: store.getKeyName('filterKeywords', ''),
         filterPrefixes: store.getKeyName('filterPrefixes', ''),
+        filterActressBlacklist: store.getKeyName('filterActressBlacklist', ''),
         filterDimMode: store.getBool('filterDimMode', false),
         filterTrackWatched: store.getBool('filterTrackWatched', true),
         filterBarVisible: store.getBool('filterBarVisible', true),
@@ -894,6 +1459,7 @@
         store.set('filterEnableBlacklist', settings.filterEnableBlacklist);
         store.set('filterKeywords', settings.filterKeywords);
         store.set('filterPrefixes', settings.filterPrefixes);
+        store.set('filterActressBlacklist', settings.filterActressBlacklist);
         store.set('filterDimMode', settings.filterDimMode);
         store.set('filterTrackWatched', settings.filterTrackWatched);
         store.set('filterBarVisible', settings.filterBarVisible);
@@ -926,6 +1492,9 @@
         subtitleEl: null,
         subtitlePicker: null,
         favoriteBackup: null,
+        actressPage: null,
+        actressWatchIndex: null,
+        actressSheet: null,
         subtitleSource: '',
         cueIndex: null,
         cueCursor: -1,
@@ -1040,7 +1609,8 @@
         tapLastY: 0
     };
     const ANALYTICS_ENTRY = /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
-    const COCKPIT_GUARD_CSS = 'html.av-cockpit-mode,html.av-cockpit-mode body{margin:0 !important;padding:0 !important;background:#090a0f !important;overflow-x:hidden !important}html.av-cockpit-mode body>*:not(.av-analytics-page){display:none !important}html.av-cockpit-mode .custom-ui-layer-top{display:none !important}html.av-cockpit-mode .av-analytics-page{position:fixed !important;inset:0 !important;z-index:2147483600 !important;overflow-y:auto !important;background:#090a0f !important}';
+    const ACTRESS_ENTRY = /^#av-actress\b/.test(location.hash);
+    const COCKPIT_GUARD_CSS = 'html.av-cockpit-mode,html.av-cockpit-mode body{margin:0 !important;padding:0 !important;background:#090a0f !important;overflow-x:hidden !important}html.av-cockpit-mode body>*:not(.av-cockpit-page){display:none !important}html.av-cockpit-mode .custom-ui-layer-top{display:none !important}html.av-cockpit-mode .av-cockpit-page{position:fixed !important;inset:0 !important;z-index:2147483600 !important;overflow-y:auto !important;background:#090a0f !important}';
     function engageCockpitGuard() {
         try {
             document.documentElement.classList.add('av-cockpit-mode');
@@ -1108,12 +1678,40 @@
             debugLog(error);
         }
     }
+    const ACTRESS_FLAG_KEY = 'avSub:actressPage';
+    function actressFlagGet() {
+        try {
+            return sessionStorage.getItem(ACTRESS_FLAG_KEY) === '1';
+        } catch (_) {
+            return false;
+        }
+    }
+    function actressFlagSet() {
+        try {
+            sessionStorage.setItem(ACTRESS_FLAG_KEY, '1');
+        } catch (error) {
+            debugLog(error);
+        }
+    }
+    function actressFlagClear() {
+        try {
+            sessionStorage.removeItem(ACTRESS_FLAG_KEY);
+        } catch (error) {
+            debugLog(error);
+        }
+    }
     if (ANALYTICS_ENTRY) {
         engageCockpitGuard();
         armMediaKiller();
         cockpitFlagSet();
     }
+    if (ACTRESS_ENTRY) {
+        engageCockpitGuard();
+        armMediaKiller();
+        actressFlagSet();
+    }
     let cockpitSticky = ANALYTICS_ENTRY || cockpitFlagGet();
+    let actressSticky = ACTRESS_ENTRY || actressFlagGet();
     if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href) && !/^https:\/\/m\./.test(location.href)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
         return;
@@ -1403,7 +2001,20 @@
             }
         }
     }
+    function isOwnUiNode(node) {
+        if (!node || node.nodeType !== 1) return false;
+        try {
+            if (node.hasAttribute && node.hasAttribute('data-av-helper')) return true;
+            const list = node.classList;
+            if (list && (list.contains('av-analytics-page') || list.contains('av-actress-page') || list.contains('av-cockpit-page') || list.contains('custom-control-panel') || list.contains('custom-quick-controls') || list.contains('av-panel'))) return true;
+            const parent = node.parentElement;
+            return !!(parent && parent.closest && parent.closest(OWN_UI_GUARD));
+        } catch (_) {
+            return false;
+        }
+    }
     function isProtectedNode(element) {
+        if (isOwnUiNode(element)) return true;
         if (element.classList?.contains('av-info-section')) return true;
         const container = state.container;
         if (!container) return false;
@@ -1491,6 +2102,7 @@
             if (isFakeAppNotice(node)) hideAdNode(node);
         }
     }
+    const OWN_UI_GUARD = '[data-av-helper], .av-analytics-page, .av-actress-page, .av-cockpit-page, .custom-control-panel, .custom-quick-controls, .av-panel';
     const AD_SIGNATURE_RE = /(?:^|[\s_-])(?:ad|ads|adv|advert|adserver|popup|popunder|sponsor|traffic|campaign)/i;
     const AD_SAFE_CLOSEST = '.plyr, .av-info-section, .av-panel, .av-quick, .av-cockpit, .av-ext-links, .av-hub-tabs';
     function adSignatureOf(element) {
@@ -1535,15 +2147,18 @@
             if (AD_SIGNATURE_RE.test(adSignatureOf(element)) || adOverlayHeuristic(element)) element.remove();
         }
     }
+    const GLOBAL_SWEEP_INTERVAL = 1200;
     function startAdObserver() {
         if (state.adObserver || !document.body) return;
         const pending = [];
         let frames = false;
+        let globalSweepAt = 0;
         const sweep = throttle(() => {
             if (!pending.length) return;
             const batch = new Set(pending.splice(0, pending.length));
             const nodes = [];
             for (const node of batch) {
+                if (isOwnUiNode(node)) continue;
                 let ancestor = node.parentElement;
                 let nested = false;
                 while (ancestor) {
@@ -1560,9 +2175,13 @@
             patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
             if (patchFrames) patchAllIframeWindows(true);
             for (const node of nodes) sweepAdNodes(node);
-            sweepFloatingAds();
-            pruneLiveWidgets();
-            prunePromoLinks();
+            const stamp = Date.now();
+            if (!globalSweepAt || stamp - globalSweepAt > GLOBAL_SWEEP_INTERVAL) {
+                globalSweepAt = stamp;
+                sweepFloatingAds();
+                pruneLiveWidgets();
+                prunePromoLinks();
+            }
             if (!state.bound) initPlayer();
         }, MUTATION_THROTTLE);
         state.adObserver = new MutationObserver(records => {
@@ -1575,6 +2194,7 @@
                 }
                 for (const node of record.addedNodes) {
                     if (node.nodeType !== 1) continue;
+                    if (isOwnUiNode(node)) continue;
                     pending.push(node);
                     if (!frames && (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe')))) frames = true;
                 }
@@ -1856,6 +2476,10 @@
         .slider-group .slider-unit { width: 12px; flex-shrink: 0; color: #cbd5e1; font-family: ui-monospace,Consolas,monospace; font-size: 10px; font-style: normal; text-align: left; }
         .panel-row .av-open-cockpit { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 24px; padding: 0 4px; border: 1px solid rgba(59,130,246,.5); border-radius: 6px; background: linear-gradient(135deg,#3b82f6,#2563eb); color: #f8fafc; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; text-decoration: none; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: pointer; transition: filter .2s ease; }
         .panel-row .av-open-cockpit:hover { filter: brightness(1.12); }
+        .panel-row button.av-panel-actress { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 24px; margin: 0; padding: 0 4px; border: 1px solid rgba(56,189,248,.45); border-radius: 6px; background: rgba(14,165,233,.16); color: #e0f2fe; font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; letter-spacing: .2px; cursor: pointer; transition: background .2s ease, filter .2s ease; }
+        .panel-row button.av-panel-actress:hover { background: rgba(14,165,233,.3); filter: brightness(1.08); }
+        .panel-row button.av-panel-actress.is-danger { border-color: rgba(248,113,113,.45); background: rgba(248,113,113,.14); color: #fecaca; }
+        .panel-row button.av-panel-actress.is-danger:hover { background: rgba(248,113,113,.26); }
         .quick-loop-wrapper { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; }
         .quick-loop-btn { min-width: 46px; height: 32px; padding: 0 8px; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; line-height: 1; font-size: 13px; }
         .quick-loop-btn span { display: inline; }
@@ -1900,6 +2524,118 @@
         .av-audio-actions button.btn-primary:hover { filter: brightness(1.12); }
         .av-audio-status { margin-top: 8px; color: #6ee7b7; font-size: 11px; font-weight: 600; word-break: break-all; }
         .av-audio-status-hint { margin-top: 3px; color: #94a3b8; font-size: 10px; font-weight: 500; }
+        .av-actress-ops { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .av-actress-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+        .av-actress-search { flex: 1 1 180px; min-width: 0; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .26); background: rgba(2, 6, 23, .45); color: #e2e8f0; font: 500 12px/1.4 inherit; }
+        .av-actress-search::placeholder { color: #64748b; }
+        .av-actress-search:focus { outline: none; border-color: rgba(56, 189, 248, .6); box-shadow: 0 0 0 2px rgba(56, 189, 248, .16); }
+        .av-actress-sort, .av-actress-bulk { padding: 6px 11px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .26); background: rgba(148, 163, 184, .08); color: #cbd5e1; font: 600 11px/1.4 inherit; cursor: pointer; white-space: nowrap; }
+        .av-actress-sort:hover, .av-actress-bulk:hover { color: #e0f2fe; border-color: rgba(56, 189, 248, .42); }
+        .av-actress-bulk.is-danger { border-color: rgba(248, 113, 113, .4); color: #fca5a5; background: rgba(248, 113, 113, .1); }
+        .av-actress-bulk.is-danger:hover { background: rgba(248, 113, 113, .2); color: #fee2e2; }
+        .av-actress-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-top: 12px; }
+        .av-actress-kpi { padding: 9px 11px; border-radius: 10px; border: 1px solid rgba(148, 163, 184, .13); background: rgba(148, 163, 184, .05); min-width: 0; }
+        .av-actress-kpi-label { font-size: 10px; color: #64748b; letter-spacing: .3px; }
+        .av-actress-kpi-value { margin-top: 3px; font-size: 16px; font-weight: 700; color: #e0f2fe; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-actress-status { margin-top: 10px; padding: 7px 10px; border-radius: 9px; border: 1px solid rgba(56, 189, 248, .22); background: rgba(56, 189, 248, .08); color: #7dd3fc; font-size: 11px; line-height: 1.5; }
+        .av-actress-status.is-warn { border-color: rgba(251, 191, 36, .3); background: rgba(251, 191, 36, .1); color: #fcd34d; }
+        .av-actress-info { display: flex; flex: 1 1 170px; flex-direction: column; gap: 2px; min-width: 0; }
+        .av-actress-meta { font-size: 10.5px; color: #64748b; white-space: normal; overflow-wrap: break-word; word-break: keep-all; line-height: 1.4; }
+        .av-actress-avatar { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(148, 163, 184, .22); background: linear-gradient(135deg, rgba(56, 189, 248, .28), rgba(139, 92, 246, .28)); color: #e0f2fe; font-size: 14px; font-weight: 700; }
+        .av-actress-social { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+        .av-actress-social .social-badge { width: 20px; height: 20px; font-size: 11px; }
+        .av-actress-social-idle { font-size: 10px; color: #475569; }
+        .av-actress-empty { padding: 22px 12px; border-radius: 10px; border: 1px dashed rgba(148, 163, 184, .24); color: #94a3b8; font-size: 12px; line-height: 1.7; text-align: center; margin-top: 12px; }
+        .av-actress-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 8px; margin-top: 12px; }
+        .av-actress-row { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 9px 10px; border-radius: 10px; border: 1px solid rgba(148, 163, 184, .14); background: rgba(148, 163, 184, .06); min-width: 0; }
+        .av-actress-row:hover { background: rgba(148, 163, 184, .1); border-color: rgba(56, 189, 248, .32); }
+        .av-actress-name { min-width: 0; display: block; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.35; color: #7dd3fc; text-decoration: none; font-weight: 600; font-size: 13px; }
+        .av-actress-name:hover { color: #bae6fd; text-decoration: underline; }
+        .av-actress-del { flex: 0 0 auto; padding: 4px 9px; border-radius: 7px; border: 1px solid rgba(248, 113, 113, .45); background: rgba(248, 113, 113, .14); color: #fca5a5; font: 600 11px/1.2 inherit; cursor: pointer; }
+        .av-actress-del:hover { background: rgba(248, 113, 113, .28); color: #fee2e2; }
+        .av-actress-fav-btn { display: inline-flex; align-items: center; justify-content: center; margin: 6px 0 0; padding: 5px 12px; border-radius: 8px; border: 1px solid rgba(96,165,250,.55); background: rgba(59,130,246,.22); color: #bfdbfe; font: 600 12px/1.2 inherit; cursor: pointer; }
+        .av-actress-fav-btn:hover { background: rgba(59,130,246,.34); color: #fff; }
+        .av-actress-fav-btn.is-on { border-color: rgba(52,211,153,.6); background: rgba(16,185,129,.24); color: #a7f3d0; }
+        .av-actress-grid[data-view="grid"] { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+        .av-actress-grid[data-view="wall"] { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+        .av-actress-row.is-picked { border-color: rgba(56, 189, 248, .55); background: rgba(56, 189, 248, .12); }
+        .av-actress-check { flex: 0 0 auto; width: 15px; height: 15px; margin: 0; accent-color: #38bdf8; cursor: pointer; }
+        .av-actress-avatar.has-photo { background: rgba(15, 23, 42, .7); overflow: hidden; padding: 0; }
+        .av-actress-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
+        .av-actress-stars { display: inline-flex; align-items: center; gap: 2px; margin-top: 2px; }
+        .av-star { font-size: 12px; line-height: 1; color: #334155; cursor: pointer; transition: color .15s ease, transform .15s ease; }
+        .av-star.is-on { color: #fbbf24; }
+        .av-star:hover { transform: scale(1.15); }
+        .av-actress-tagline { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+        .av-actress-tag { padding: 1px 6px; border-radius: 999px; font-size: 10px; color: #a5b4fc; background: rgba(129, 140, 248, .14); border: 1px solid rgba(129, 140, 248, .3); }
+        .av-actress-tag.is-more { color: #64748b; border-color: rgba(148, 163, 184, .24); background: rgba(148, 163, 184, .1); }
+        .av-actress-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; margin-left: auto; }
+        .av-actress-detail { padding: 4px 8px; border-radius: 7px; border: 1px solid rgba(56, 189, 248, .35); background: rgba(56, 189, 248, .12); color: #7dd3fc; font: 600 11px/1.2 inherit; cursor: pointer; }
+        .av-actress-detail:hover { background: rgba(56, 189, 248, .24); color: #e0f2fe; }
+        .av-actress-tagbar { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+        .av-tag-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(148, 163, 184, .26); background: rgba(148, 163, 184, .08); color: #94a3b8; font: 600 10px/1.4 inherit; cursor: pointer; }
+        .av-tag-chip.is-on { border-color: rgba(56, 189, 248, .6); background: rgba(56, 189, 248, .2); color: #e0f2fe; }
+        .av-actress-batch { display: none; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(56, 189, 248, .3); background: rgba(56, 189, 248, .1); font-size: 11px; color: #bae6fd; }
+        .av-actress-batch.is-on { display: flex; }
+        .av-actress-view { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; border: 1px solid rgba(148, 163, 184, .2); background: rgba(2, 6, 23, .52); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .38); }
+        .av-actress-view button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #94a3b8; font: 600 11px/1.3 inherit; cursor: pointer; white-space: nowrap; transition: background .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease; }
+        .av-actress-view button .av-svg svg { width: 13px; height: 13px; stroke-width: 1.9; }
+        .av-actress-view button:hover { color: #e0f2fe; background: rgba(56, 189, 248, .12); }
+        .av-actress-view button.is-on { color: #f8fafc; background: linear-gradient(135deg, #0ea5e9, #2563eb); border-color: rgba(125, 211, 252, .55); box-shadow: 0 2px 10px rgba(37, 99, 235, .45); }
+        .av-actress-view button.is-on .av-svg svg { stroke-width: 2.2; }
+        @media (max-width: 560px) {
+            .av-actress-search { flex: 1 1 100%; min-height: 36px; font-size: 13px; }
+            .av-actress-view { flex: 1 1 100%; box-sizing: border-box; align-self: stretch; }
+            .av-actress-view button { flex: 1 1 0; justify-content: center; min-height: 32px; }
+            .av-actress-view button .av-svg svg { width: 14px; height: 14px; }
+            .av-actress-sort, .av-actress-bulk { min-height: 36px; padding: 8px 12px; font-size: 12px; }
+            .av-actress-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+            .av-actress-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+            .av-actress-kpi { padding: 8px; }
+            .av-actress-kpi-value { font-size: 14px; }
+        }
+        .av-actress-grid[data-view="grid"] .av-actress-row, .av-actress-grid[data-view="wall"] .av-actress-row { position: relative; flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px; text-align: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-info, .av-actress-grid[data-view="wall"] .av-actress-info { width: 100%; flex: 0 0 auto; align-items: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-stars, .av-actress-grid[data-view="wall"] .av-actress-stars { justify-content: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-tagline, .av-actress-grid[data-view="wall"] .av-actress-tagline { justify-content: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-actions, .av-actress-grid[data-view="wall"] .av-actress-actions { margin-left: 0; justify-content: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-check, .av-actress-grid[data-view="wall"] .av-actress-check { position: absolute; top: 6px; left: 6px; }
+        .av-actress-grid[data-view="grid"] .av-actress-avatar { width: 56px; height: 56px; font-size: 20px; }
+        .av-actress-grid[data-view="wall"] .av-actress-avatar { width: 48px; height: 48px; font-size: 18px; }
+        .av-actress-grid[data-view="grid"] .av-actress-name, .av-actress-grid[data-view="wall"] .av-actress-name { font-size: 12px; text-align: center; }
+        .av-actress-grid[data-view="wall"] .av-actress-meta, .av-actress-grid[data-view="wall"] .av-actress-tagline, .av-actress-grid[data-view="wall"] .av-actress-del { display: none; }
+        .av-actress-sheet { position: fixed; inset: 0; z-index: 2147483000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(2, 6, 23, .74); backdrop-filter: blur(3px); }
+        .av-actress-sheet-card { box-sizing: border-box; width: min(560px, 100%); max-height: min(86vh, 760px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; border-radius: 14px; border: 1px solid rgba(148, 163, 184, .24); background: rgba(15, 23, 42, .97); color: #e2e8f0; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; box-shadow: 0 24px 64px rgba(0, 0, 0, .6); }
+        .av-sheet-head { display: flex; gap: 12px; align-items: flex-start; }
+        .av-sheet-avatar { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 72px; height: 72px; overflow: hidden; border-radius: 50%; border: 1px solid rgba(148, 163, 184, .24); background: linear-gradient(135deg, rgba(56, 189, 248, .28), rgba(139, 92, 246, .28)); color: #e0f2fe; font-size: 26px; font-weight: 700; }
+        .av-sheet-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
+        .av-sheet-name { font-size: 17px; font-weight: 700; color: #f1f5f9; overflow-wrap: anywhere; }
+        .av-sheet-sub { margin-top: 3px; font-size: 11px; color: #94a3b8; overflow-wrap: anywhere; }
+        .av-sheet-close { flex: 0 0 auto; margin-left: auto; width: 26px; height: 26px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .28); background: rgba(148, 163, 184, .1); color: #cbd5e1; font: 600 13px/1 inherit; cursor: pointer; }
+        .av-sheet-close:hover { color: #f8fafc; border-color: rgba(248, 113, 113, .5); }
+        .av-sheet-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(148, 163, 184, .14); }
+        .av-sheet-label { margin-bottom: 6px; font-size: 10px; letter-spacing: .4px; text-transform: uppercase; color: #64748b; }
+        .av-sheet-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+        .av-sheet-stat { min-width: 0; padding: 8px 10px; border-radius: 9px; border: 1px solid rgba(148, 163, 184, .14); background: rgba(148, 163, 184, .06); }
+        .av-sheet-stat b { display: block; font-size: 14px; color: #e0f2fe; overflow-wrap: anywhere; }
+        .av-sheet-stat span { font-size: 10px; color: #64748b; }
+        .av-sheet-stat.is-wide { grid-column: 1 / -1; }
+        .av-sheet-stat b.is-quiet { font-weight: 600; color: #94a3b8; }
+        .av-sheet-hint { margin-top: 6px; color: #64748b; font-size: 10px; }
+        .av-sheet-retry { margin-top: 6px; padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .3); background: rgba(148, 163, 184, .1); color: #cbd5e1; font: 600 11px/1.3 inherit; cursor: pointer; }
+        .av-sheet-links { display: flex; flex-wrap: wrap; gap: 6px; }
+        .av-sheet-link { padding: 5px 10px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .26); background: rgba(148, 163, 184, .08); color: #cbd5e1; font: 600 11px/1.3 inherit; text-decoration: none; }
+        .av-sheet-link:hover { color: #e0f2fe; border-color: rgba(56, 189, 248, .45); }
+        .av-sheet-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+        .av-sheet-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; color: #c7d2fe; background: rgba(129, 140, 248, .16); border: 1px solid rgba(129, 140, 248, .32); }
+        .av-sheet-tag button { padding: 0; border: 0; background: transparent; color: #94a3b8; font: 700 11px/1 inherit; cursor: pointer; }
+        .av-sheet-input { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 6px 9px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, .26); background: rgba(2, 6, 23, .5); color: #e2e8f0; font: 500 12px/1.4 inherit; }
+        .av-sheet-input:focus { outline: none; border-color: rgba(56, 189, 248, .6); }
+        .av-sheet-timeline { display: flex; flex-direction: column; gap: 5px; }
+        .av-sheet-work { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 8px; background: rgba(148, 163, 184, .06); color: #cbd5e1; font-size: 11px; text-decoration: none; }
+        .av-sheet-work:hover { background: rgba(56, 189, 248, .14); color: #e0f2fe; }
+        .av-sheet-work b { color: #7dd3fc; font-weight: 700; white-space: nowrap; }
+        .av-sheet-work span { white-space: nowrap; color: #64748b; font-size: 10px; }
         .av-backup-window { position: fixed; left: 15px; top: 12%; z-index: 1; box-sizing: border-box; width: min(560px, 94vw); max-height: min(78vh, 640px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border-radius: 12px; --ui-bg-opacity: .34; --ui-blur: 1px; --ui-hover-opacity: .94; --ui-hover-blur: 1px; background: rgba(28,28,34,var(--ui-bg-opacity)); backdrop-filter: blur(var(--ui-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(200%); border: 1px solid rgba(255,255,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 12px 34px rgba(0,0,0,.45); color: #f8fafc; font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.6); transition: background .2s ease, box-shadow .2s ease; pointer-events: auto; contain: layout style; }
         .av-backup-window:hover, .av-backup-window:focus-within { background: rgba(28,28,34,var(--ui-hover-opacity)); backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); -webkit-backdrop-filter: blur(var(--ui-hover-blur)) saturate(200%); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 14px 38px rgba(0,0,0,.55); }
         .av-backup-window.panel-dragging { transition: none; }
@@ -2178,6 +2914,23 @@
             .av-list-movies { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
             .av-info-head, .av-info-body { padding-left: calc(12px + env(safe-area-inset-left, 0px)); padding-right: calc(12px + env(safe-area-inset-right, 0px)); }
             .av-backup-window { left: 6px; right: 6px; top: 7%; width: auto; max-width: none; max-height: 84vh; max-height: 84dvh; padding: 10px; }
+            .av-actress-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+            .av-actress-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+            .av-actress-kpi { padding: 8px; }
+            .av-actress-kpi-value { font-size: 14px; }
+            .av-actress-search { flex: 1 1 100%; min-height: 36px; font-size: 13px; }
+            .av-actress-view { flex: 1 1 100%; box-sizing: border-box; }
+            .av-actress-view button { flex: 1 1 0; justify-content: center; min-height: 32px; }
+            .av-actress-view button .av-svg svg { width: 14px; height: 14px; }
+            .av-actress-sort, .av-actress-bulk { min-height: 36px; padding: 8px 12px; font-size: 12px; }
+            .av-actress-social .social-badge { width: 26px; height: 26px; font-size: 12px; }
+            .av-actress-info { flex-basis: 130px; }
+            .av-actress-avatar { width: 40px; height: 40px; font-size: 15px; }
+            .av-actress-sheet { padding: 8px; }
+            .av-actress-sheet-card { padding: 12px; max-height: 90vh; }
+            .av-actress-row { padding: 10px; }
+            .av-actress-del { min-height: 32px; padding: 6px 12px; font-size: 12px; }
+            .av-actress-fav-btn { padding: 7px 14px; font-size: 13px; }
             .av-backup-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .av-audio .av-audio-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .av-audio-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2221,6 +2974,7 @@
             .custom-control-panel .av-check-row { min-height: 40px; padding: 5px 0; }
             .custom-control-panel .av-text-row textarea { font-size: 16px; line-height: 1.5; min-height: 76px; padding: 8px 10px; }
             .panel-row .av-open-cockpit { height: 40px; min-height: 40px; font-size: 13px; }
+            .panel-row button.av-panel-actress { height: 40px; min-height: 40px; font-size: 13px; }
             .custom-control-panel .slider-group input.slider-num { width: 46px; height: 32px; font-size: 12px; }
             .custom-control-panel button, .custom-control-panel select, .custom-control-panel .av-check-row,
             .custom-quick-controls button, .custom-quick-controls .quick-btn,
@@ -2247,10 +3001,25 @@
     }
     const isPaused = () => !state.video || state.video.paused;
     function updatePlayPauseButton() {
+        const paused = isPaused();
         const button = state.playPauseBtn;
-        if (!button) return;
-        const text = isPaused() ? '▶ 播放' : '⏸ 暂停';
-        if (button.textContent !== text) button.textContent = text;
+        if (button) {
+            const text = paused ? '▶ 播放' : '⏸ 暂停';
+            if (button.textContent !== text) button.textContent = text;
+        }
+        if (state.capPlay) {
+            const glyph = paused
+                ? '<path d="M8 5v14l11-7z"/>'
+                : '<path d="M9 5v14M15 5v14"/>';
+            if (state.capPlay.dataset.glyph !== glyph) {
+                state.capPlay.dataset.glyph = glyph;
+                state.capPlay.innerHTML = avxSvg(glyph, { w: 1.9 });
+            }
+        }
+        if (state.panelPill) {
+            const label = paused ? '已就绪' : '播放中';
+            if (state.panelPill.textContent !== label) state.panelPill.textContent = label;
+        }
     }
     async function togglePlayPause() {
         const video = state.video;
@@ -2767,7 +3536,28 @@
         state.uiLayer = layer;
         return layer;
     }
+    const VIEWPORT_TTL = 150;
+    let viewportCacheBox = null;
+    let viewportCacheAt = 0;
+    let viewportHooked = false;
+    function viewportInvalidate() {
+        viewportCacheBox = null;
+        viewportCacheAt = 0;
+    }
+    function viewportHook() {
+        if (viewportHooked) return;
+        viewportHooked = true;
+        try {
+            window.addEventListener('resize', viewportInvalidate, { passive: true });
+            window.addEventListener('orientationchange', viewportInvalidate, { passive: true });
+        } catch (error) {
+            debugLog(error, 'viewport-hook');
+        }
+    }
     function viewportBox() {
+        const stamp = Date.now();
+        if (viewportCacheBox && stamp - viewportCacheAt < VIEWPORT_TTL) return viewportCacheBox;
+        viewportHook();
         const de = document.documentElement;
         const innerW = window.innerWidth || 0;
         const innerH = window.innerHeight || 0;
@@ -2778,10 +3568,12 @@
             if (!values.length) return fallback;
             return AV_PLATFORM.isMobile ? Math.min(...values) : inner || layout;
         };
-        return {
+        viewportCacheBox = {
             w: Math.max(240, pick(innerW, layoutW, 360)),
             h: Math.max(320, pick(innerH, layoutH, 640))
         };
+        viewportCacheAt = stamp;
+        return viewportCacheBox;
     }
     function clampPanelPosition(panel = state.panel) {
         if (!panel) return;
@@ -2833,6 +3625,7 @@
             document.removeEventListener('mousemove', onMove, true);
             document.removeEventListener('mouseup', onUp, true);
             if (moved) {
+                suppressHandleClickUntil = performance.now() + 300;
                 flushPosition();
                 if (onEnd) onEnd();
                 element.classList.remove('panel-dragging');
@@ -2925,6 +3718,728 @@
             target.style.setProperty('--ui-hover-opacity', mobileHoverSolid === null ? settings.hoverOpacity : mobileHoverSolid);
             target.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
         }
+            GM_addStyle(`
+
+.avx2, .avx2 *, .avx2 *::before, .avx2 *::after { box-sizing: border-box; }
+.avx2 {
+    --bg: rgba(18, 21, 29, .93);
+    --line: rgba(255,255,255,.07);
+    --line2: rgba(255,255,255,.11);
+    --text: #e9eef7;
+    --sub: #9aa6ba;
+    --muted: #74819a;
+    --acc: #8fb2ff;
+    --acc2: #b49bff;
+    --grad: linear-gradient(90deg,#8fb2ff,#b49bff);
+    --grad2: linear-gradient(135deg,#8fb2ff,#b49bff);
+    --ok: #4ade80;
+    --danger: #ff7a8a;
+    font-family: "Inter","SF Pro Text","PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.avx2 button { font-family: inherit; font-size: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+.avx2 input, .avx2 textarea { font-family: inherit; font-size: inherit; }
+
+
+.avx2 {
+    position: fixed; z-index: 2147483000; width: 372px;
+    max-width: calc(100vw - 16px);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 28px 64px -22px rgba(0,0,0,.92), 0 0 0 1px rgba(255,255,255,.02) inset;
+    -webkit-backdrop-filter: blur(26px) saturate(1.35);
+    backdrop-filter: blur(26px) saturate(1.35);
+    overflow: hidden;
+    transition: box-shadow .18s ease, width .2s ease, border-radius .2s ease;
+}
+.avx2.is-drag { transition: none; }
+.avx2::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 130px; pointer-events: none;
+    background: linear-gradient(180deg, rgba(140,165,255,.10), transparent);
+}
+:where(.avx2) .avx-head { display: flex; align-items: center; gap: 9px; padding: 12px 12px 10px 13px; position: relative; cursor: grab; user-select: none; }
+.avx2.is-drag .avx-head { cursor: grabbing; }
+:where(.avx2) .avx-logo {
+    width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto; display: grid; place-items: center;
+    background: linear-gradient(140deg,#8fb2ff,#b49bff 62%,#7be0ff);
+    box-shadow: 0 4px 14px -3px rgba(140,150,255,.75);
+}
+:where(.avx2) .avx-logo svg { width: 14px; height: 14px; stroke: #0a0d14; fill: none; stroke-width: 2.1; stroke-linejoin: round; }
+:where(.avx2) .avx-titles { flex: 1; min-width: 0; }
+:where(.avx2) .avx-titles b { display: block; font-size: 12.5px; font-weight: 600; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:where(.avx2) .avx-titles small { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:where(.avx2) .avx-pill {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: #a7e9c0;
+    background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.18);
+    padding: 3px 8px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto;
+}
+:where(.avx2) .avx-pill i { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+:where(.avx2) .avx-ico {
+    width: 26px; height: 26px; border-radius: 8px; border: 1px solid transparent;
+    color: var(--muted); display: grid; place-items: center; flex: 0 0 auto; transition: .15s;
+}
+:where(.avx2) .avx-ico:hover { background: rgba(255,255,255,.06); color: var(--text); border-color: var(--line); }
+:where(.avx2) .avx-ico svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+
+:where(.avx2) .avx-tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); position: relative; }
+:where(.avx2) .avx-tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 9px 0 10px; color: var(--muted); font-size: 10px; letter-spacing: .02em;
+    position: relative; transition: color .16s; border-radius: 8px 8px 0 0;
+}
+:where(.avx2) .avx-tab svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: .16s; }
+:where(.avx2) .avx-tab:hover { color: #b8c5d8; }
+:where(.avx2) .avx-tab.is-on { color: #eaf1ff; }
+:where(.avx2) .avx-tab.is-on svg { filter: drop-shadow(0 0 6px rgba(143,178,255,.6)); }
+:where(.avx2) .avx-tab.is-on::after {
+    content: ""; position: absolute; left: 50%; bottom: -1px; transform: translateX(-50%);
+    width: 22px; height: 2px; border-radius: 2px; background: var(--grad); box-shadow: 0 0 10px rgba(150,170,255,.85);
+}
+
+
+:where(.avx2) .avx-body {
+    padding: 12px 11px 11px; display: flex; flex-direction: column; gap: 10px;
+    max-height: min(64vh, 560px); overflow-y: auto; overscroll-behavior: contain;
+}
+:where(.avx2) .avx-body::-webkit-scrollbar { width: 4px; }
+:where(.avx2) .avx-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 4px; }
+:where(.avx2) .avx-pane { display: none; flex-direction: column; gap: 10px; }
+:where(.avx2) .avx-pane.is-on { display: flex; }
+
+:where(.avx2) .avx-card { background: rgba(255,255,255,.028); border: 1px solid rgba(255,255,255,.045); border-radius: 11px; overflow: hidden; }
+:where(.avx2) .avx-card-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 11px 8px; }
+:where(.avx2) .avx-card-h b { font-size: 10px; font-weight: 600; color: #8e9bb0; letter-spacing: .13em; text-transform: uppercase; }
+:where(.avx2) .avx-card-h span { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+:where(.avx2) .avx-row { display: flex; align-items: center; gap: 9px; padding: 9px 11px; min-height: 38px; border-top: 1px solid rgba(255,255,255,.045); }
+:where(.avx2) .avx-card > .avx-row:first-child, :where(.avx2) .avx-card-h + .avx-row { border-top: 0; }
+:where(.avx2) .avx-row--tight { min-height: 32px; padding: 7px 11px; }
+:where(.avx2) .avx-row .avx-lbl { flex: 1; min-width: 0; }
+:where(.avx2) .avx-row .avx-lbl b { display: block; font-size: 11.5px; font-weight: 500; color: #dbe3f0; letter-spacing: .01em; }
+:where(.avx2) .avx-row .avx-lbl small { display: block; font-size: 9.5px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+:where(.avx2) .avx-val { font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+:where(.avx2) .avx-sw { width: 32px; height: 18px; border-radius: 999px; background: rgba(255,255,255,.11); position: relative; flex: 0 0 auto; transition: .2s; border: 1px solid rgba(255,255,255,.06); }
+:where(.avx2) .avx-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #8b96a8; transition: .2s; }
+:where(.avx2) .avx-sw.is-on { background: var(--grad2); border-color: transparent; box-shadow: 0 0 14px -2px rgba(150,170,255,.6); }
+:where(.avx2) .avx-sw.is-on::after { left: 16px; background: #fff; }
+
+
+:where(.avx2) .avx-seg { display: flex; gap: 3px; background: rgba(255,255,255,.045); padding: 3px; border-radius: 9px; border: 1px solid rgba(255,255,255,.045); flex: 0 0 auto; }
+:where(.avx2) .avx-seg button { color: var(--sub); font-size: 10.5px; padding: 4px 9px; border-radius: 6px; transition: .15s; white-space: nowrap; }
+:where(.avx2) .avx-seg button:hover { color: #dfe7f5; }
+:where(.avx2) .avx-seg button.on { background: rgba(255,255,255,.10); color: #fff; box-shadow: 0 1px 0 rgba(255,255,255,.08) inset; }
+:where(.avx2) .avx-seg--grow { flex: 1; }
+:where(.avx2) .avx-seg--grow button { flex: 1; text-align: center; padding: 5px 0; }
+
+
+:where(.avx2) .avx-sl { padding: 10px 11px 9px; border-top: 1px solid rgba(255,255,255,.045); }
+:where(.avx2) .avx-card > .avx-sl:first-child { border-top: 0; }
+:where(.avx2) .avx-sl-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; gap: 8px; }
+:where(.avx2) .avx-sl-h b { font-size: 11.5px; font-weight: 500; color: #dbe3f0; }
+:where(.avx2) .avx-sl-h .avx-unit { font-size: 9.5px; color: var(--muted); margin-left: 3px; }
+:where(.avx2) .avx-num {
+    font-size: 10.5px; color: #cfdaef; font-variant-numeric: tabular-nums;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 6px; padding: 2px 7px; min-width: 48px; text-align: center; flex: 0 0 auto;
+}
+:where(.avx2) .avx-range { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 12px; background: transparent; cursor: pointer; }
+:where(.avx2) .avx-range::-webkit-slider-runnable-track {
+    height: 4px; border-radius: 999px;
+    background: linear-gradient(90deg, #8fb2ff 0 var(--pct,0%), #b49bff var(--pct,0%) var(--pct,0%), rgba(255,255,255,.09) var(--pct,0%) 100%);
+}
+:where(.avx2) .avx-range::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; margin-top: -3.5px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.2);
+}
+:where(.avx2) .avx-range::-moz-range-track { height: 4px; border-radius: 999px; background: rgba(255,255,255,.09); }
+:where(.avx2) .avx-range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--grad); }
+:where(.avx2) .avx-range::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 50%; background: #fff; }
+
+
+:where(.avx2) .avx-btn {
+    border: 1px solid var(--line2); background: rgba(255,255,255,.045); color: #dbe3f0;
+    font-size: 11px; font-weight: 500; padding: 8px 12px; border-radius: 9px; transition: .15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+}
+:where(.avx2) .avx-btn:hover { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.2); }
+:where(.avx2) .avx-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+:where(.avx2) .avx-btn--primary { background: var(--grad2); color: #0b0e16; border-color: transparent; font-weight: 600; box-shadow: 0 6px 20px -8px rgba(150,170,255,.95), 0 1px 0 rgba(255,255,255,.3) inset; }
+:where(.avx2) .avx-btn--primary:hover { filter: brightness(1.06); }
+:where(.avx2) .avx-btn--ghost { background: transparent; border-color: var(--line); }
+:where(.avx2) .avx-btn--danger { color: #ff9aa6; border-color: rgba(255,122,138,.22); background: rgba(255,122,138,.055); }
+:where(.avx2) .avx-btn--sm { padding: 5px 9px; font-size: 10.5px; border-radius: 7px; }
+:where(.avx2) .avx-btn--block { width: 100%; }
+:where(.avx2) .avx-btns { display: flex; gap: 7px; }
+:where(.avx2) .avx-btns > .avx-btn { flex: 1; }
+
+
+:where(.avx2) .avx-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 11px; border-top: 1px solid rgba(255,255,255,.045); }
+:where(.avx2) .avx-card > .avx-chips:first-child, :where(.avx2) .avx-card-h + .avx-chips { border-top: 0; }
+:where(.avx2) .avx-chip {
+    border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.035); color: #c3cede;
+    font-size: 10.5px; padding: 5px 10px; border-radius: 7px; transition: .15s;
+    display: inline-flex; align-items: center; gap: 5px;
+}
+:where(.avx2) .avx-chip:hover { background: rgba(143,178,255,.13); border-color: rgba(143,178,255,.4); color: #fff; }
+:where(.avx2) .avx-chip.is-on { background: rgba(143,178,255,.16); border-color: rgba(143,178,255,.45); color: #eaf1ff; }
+:where(.avx2) .avx-chip i.dot { width: 4px; height: 4px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+:where(.avx2) .avx-chip small { color: var(--muted); font-size: 9.5px; }
+
+
+:where(.avx2) .avx-key {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; min-width: 22px; text-align: center;
+    padding: 3px 6px; border-radius: 5px; background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.1); border-bottom-width: 2px; color: #e6edf9;
+    cursor: pointer; transition: .15s; flex: 0 0 auto;
+}
+:where(.avx2) .avx-key:hover { background: rgba(143,178,255,.18); }
+:where(.avx2) .avx-key.cap { background: rgba(143,178,255,.22); border-color: rgba(143,178,255,.5); color: #fff; animation: avx-pulse 1.1s ease-in-out infinite; }
+@keyframes avx-pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+
+
+:where(.avx2) .avx-field { padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.045); }
+:where(.avx2) .avx-card > .avx-field:first-child, :where(.avx2) .avx-card-h + .avx-field { border-top: 0; }
+:where(.avx2) .avx-field label { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: var(--muted); margin-bottom: 6px; letter-spacing: .03em; }
+:where(.avx2) .avx-inp {
+    width: 100%; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px; color: #dbe3f0; font-size: 11px; padding: 7px 9px; outline: none; transition: .15s;
+}
+:where(.avx2) .avx-inp::placeholder { color: #57647a; }
+:where(.avx2) .avx-inp:focus { border-color: rgba(143,178,255,.55); background: rgba(143,178,255,.06); }
+
+
+:where(.avx2) .avx-foot {
+    display: flex; align-items: center; gap: 7px; padding: 8px 12px 9px;
+    border-top: 1px solid var(--line); font-size: 10px; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+:where(.avx2) .avx-foot .avx-t { color: #6f7c92; flex: 0 0 auto; }
+:where(.avx2) .avx-foot .avx-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8fa0b8; }
+:where(.avx2) .avx-foot .avx-ico { width: 18px; height: 18px; }
+:where(.avx2) .avx-foot .avx-ico svg { width: 10px; height: 10px; }
+:where(.avx2) .avx-log { max-height: 0; overflow: hidden; transition: max-height .22s ease; border-top: 1px solid transparent; }
+:where(.avx2) .avx-log.log-open { max-height: 120px; overflow-y: auto; border-top-color: rgba(255,255,255,.05); }
+:where(.avx2) .avx-log div { display: flex; gap: 8px; padding: 5px 12px; font-size: 10px; color: #7f8da3;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+:where(.avx2) .avx-log div span:first-child { color: #4d5769; flex: 0 0 auto; }
+
+
+:where(.avx2) .avx-capsule { display: none; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; position: relative; cursor: grab; user-select: none; }
+.avx2.panel-collapsed.is-drag > .avx-capsule { cursor: grabbing; }
+:where(.avx2) .avx-capsule .avx-logo { width: 20px; height: 20px; border-radius: 6px; }
+:where(.avx2) .avx-capsule .avx-logo svg { width: 11px; height: 11px; }
+:where(.avx2) .avx-capsule .avx-rate { font-size: 11px; font-weight: 500; color: #cfd9ea; font-variant-numeric: tabular-nums; }
+:where(.avx2) .avx-capsule .avx-sep { width: 1px; height: 12px; background: var(--line2); }
+:where(.avx2) .avx-capsule .avx-ico { width: 22px; height: 22px; border-radius: 50%; }
+:where(.avx2) .avx-capsule .avx-ico svg { width: 11px; height: 11px; stroke-width: 1.9; }
+.avx2.panel-collapsed { width: auto !important; border-radius: 999px; }
+.avx2.panel-collapsed > .avx-head > .avx-titles, .avx2.panel-collapsed > .avx-head > .avx-pill, .avx2.panel-collapsed > .avx-tabs, .avx2.panel-collapsed > .avx-body, .avx2.panel-collapsed > .avx-foot, .avx2.panel-collapsed > .avx-log { display: none; }
+.avx2.panel-collapsed > .avx-head { display: none; }
+.avx2.panel-collapsed > .avx-capsule { display: flex; }
+.avx2.panel-collapsed::before { display: none; }
+
+
+:where(.avx2) .avx-qj-main { display: inline-flex; align-items: center; gap: 3px; }
+:where(.avx2) .avx-qj-main b { font-size: 9.5px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+:where(.avx2) .avx-qj-caret {
+    display: grid; place-items: center; width: 14px; height: 20px; margin-left: 1px;
+    color: #6b7891; border-radius: 4px;
+}
+:where(.avx2) .avx-qj-caret svg { width: 9px; height: 9px; }
+
+.avx2 .av-check-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 11px; min-height: 38px; margin: 0;
+    border-top: 1px solid rgba(255,255,255,.045);
+    cursor: pointer; user-select: none;
+}
+.avx2 .av-check-row:first-child,
+.avx2 .avx-card-h + .av-check-row { border-top: 0; }
+.avx2 .av-check-row > span { flex: 1; min-width: 0; }
+.avx2 .av-check-row > span > span {
+    display: block; font-size: 11.5px; font-weight: 500; color: #dbe3f0; letter-spacing: .01em;
+}
+.avx2 .av-check-row .av-help {
+    display: block; font-size: 9.5px; color: var(--muted); margin-top: 2px; line-height: 1.35;
+}
+
+.avx2 .av-check-row input[type="checkbox"],
+.avx2 input[role="switch"] {
+    appearance: none; -webkit-appearance: none;
+    width: 32px; height: 18px; min-width: 32px; margin: 0; flex: 0 0 auto;
+    border-radius: 999px; background: rgba(255,255,255,.11);
+    border: 1px solid rgba(255,255,255,.06);
+    position: relative; cursor: pointer; transition: .2s; outline: none;
+}
+.avx2 .av-check-row input[type="checkbox"]::after,
+.avx2 input[role="switch"]::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    border-radius: 50%; background: #8b96a8; transition: .2s;
+}
+.avx2 .av-check-row input[type="checkbox"]:checked,
+.avx2 .av-check-row.is-on input[type="checkbox"],
+.avx2 input[role="switch"]:checked {
+    background: var(--grad2); border-color: transparent;
+    box-shadow: 0 0 14px -2px rgba(150,170,255,.6);
+}
+.avx2 .av-check-row input[type="checkbox"]:checked::after,
+.avx2 .av-check-row.is-on input[type="checkbox"]::after,
+.avx2 input[role="switch"]:checked::after { left: 16px; background: #fff; }
+.avx2 .input-group {
+    display: flex; align-items: center; justify-content: space-between; gap: 9px;
+    padding: 9px 11px; min-height: 38px;
+    border-top: 1px solid rgba(255,255,255,.045);
+}
+.avx2 .avx-card-h + .input-group,
+.avx2 .input-group:first-child { border-top: 0; }
+.avx2 .input-group > label {
+    flex: 1; min-width: 0; font-size: 11.5px; font-weight: 500; color: #dbe3f0; letter-spacing: .01em;
+}
+.avx2 .input-group > input {
+    flex: 0 0 auto; width: 62px; text-align: center;
+    font-size: 10.5px; font-weight: 500; color: #cfdaef;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 6px; padding: 3px 7px; outline: none;
+    font-variant-numeric: tabular-nums;
+}
+.avx2 .input-group > input:focus { border-color: rgba(143,178,255,.55); background: rgba(143,178,255,.08); }
+.avx2 .slider-group {
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 7px 8px;
+    padding: 10px 11px 9px; border-top: 1px solid rgba(255,255,255,.045);
+}
+.avx2 .avx-card-h + .slider-group,
+.avx2 .slider-group:first-child { border-top: 0; }
+.avx2 .slider-group > label {
+    grid-column: 1; grid-row: 1;
+    font-size: 11.5px; font-weight: 500; color: #dbe3f0; letter-spacing: .01em;
+}
+.avx2 .slider-group > .slider-value {
+    grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 3px; justify-self: end;
+}
+.avx2 .slider-group > input[type="range"] {
+    grid-column: 1 / -1; grid-row: 2;
+    -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 12px;
+    background: transparent; cursor: pointer; margin: 0;
+}
+.avx2 .slider-group > input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px; border: 0; border-radius: 999px;
+    background: linear-gradient(90deg, #8fb2ff 0 var(--av-range, 0%), #b49bff var(--av-range, 0%) var(--av-range, 0%), rgba(255,255,255,.09) var(--av-range, 0%) 100%);
+}
+.avx2 .slider-group > input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; margin-top: -3.5px; border: 0;
+    border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 6px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.2);
+}
+.avx2 .slider-group > input[type="range"]::-moz-range-track { height: 4px; border: 0; border-radius: 999px; background: rgba(255,255,255,.09); }
+.avx2 .slider-group > input[type="range"]::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--grad); }
+.avx2 .slider-group > input[type="range"]::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 50%; background: #fff; }
+.avx2 .slider-group .slider-num {
+    width: 52px; text-align: center; font-size: 10.5px; font-weight: 500; color: #cfdaef;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 6px; padding: 2px 6px; outline: none; font-variant-numeric: tabular-nums;
+}
+.avx2 .slider-group .slider-num:focus { border-color: rgba(143,178,255,.55); background: rgba(143,178,255,.08); }
+.avx2 .slider-group .slider-unit { font-size: 9.5px; color: var(--muted); }
+.avx2 .btn-group {
+    display: flex; flex-wrap: wrap; gap: 7px; padding: 9px 11px;
+    border-top: 1px solid rgba(255,255,255,.045); align-items: center;
+}
+.avx2 .btn-group:first-child, .avx2 .avx-card-h + .btn-group { border-top: 0; }
+.avx2 .btn-group > button {
+    flex: 1 1 auto; min-width: 0;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 12px; border-radius: 9px;
+    font-size: 11px; font-weight: 500; color: #dbe3f0;
+    background: rgba(255,255,255,.045); border: 1px solid var(--line2);
+    transition: .15s; white-space: nowrap; cursor: pointer;
+}
+.avx2 .btn-group > button:hover { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.2); }
+.avx2 .btn-group > .btn-primary {
+    background: var(--grad2); color: #0b0e16; border-color: transparent; font-weight: 600;
+    box-shadow: 0 6px 20px -8px rgba(150,170,255,.95), 0 1px 0 rgba(255,255,255,.3) inset;
+}
+.avx2 .btn-group > .btn-primary:hover { filter: brightness(1.06); background: var(--grad2); }
+.avx2 .btn-group > .btn-ghost { background: transparent; border-color: var(--line); }
+.avx2 .btn-group > .btn-danger,
+.avx2 .btn-group > button.is-danger {
+    color: #ff9aa6; border-color: rgba(255,122,138,.22); background: rgba(255,122,138,.055);
+}
+.avx2 .btn-group > button svg { width: 12px; height: 12px; }
+.avx2 .sub-panel { display: flex; flex-direction: column; }
+.avx2 .sub-src-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 9px 11px 8px;
+}
+.avx2 .sub-src-head > span:first-child {
+    font-size: 10px; font-weight: 600; color: #8e9bb0;
+    letter-spacing: .13em; text-transform: uppercase;
+}
+.avx2 .sub-src-status { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.avx2 .sub-src-grid {
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px; padding: 0 11px 10px;
+}
+.avx2 .sub-src-grid > button,
+.avx2 .sub-src-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 5px 4px; border-radius: 7px;
+    font-size: 10.5px; font-weight: 400; color: #c3cede;
+    background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.09);
+    transition: .15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.avx2 .sub-src-grid > button:hover,
+.avx2 .sub-src-btn:hover { background: rgba(143,178,255,.13); border-color: rgba(143,178,255,.4); color: #fff; }
+.avx2 .sub-src-btn.is-on,
+.avx2 .sub-src-btn.is-busy { background: rgba(143,178,255,.16); border-color: rgba(143,178,255,.45); color: #eaf1ff; }
+.avx2 .sub-panel > .btn-group { padding: 0 11px 10px; border-top: 0; }
+.avx2 .sub-style-box { display: flex; flex-direction: column; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .sub-style-box > .btn-group { border-top: 0; padding: 9px 11px 10px; }
+.avx2 .av-filter-panel, .avx2 .av-mobile-panel, .avx2 .av-login-panel {
+    display: flex; flex-direction: column; gap: 0;
+}
+.avx2 .av-filter-scroll { display: flex; flex-direction: column; }
+.avx2 .av-filter-strip { display: flex; flex-direction: column; }
+.avx2 .av-filter-strip > .av-check-row:first-child { border-top: 0; }
+.avx2 .av-filter-text-slide { display: flex; flex-direction: column; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .av-text-row { padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .av-text-row:first-child { border-top: 0; }
+.avx2 .av-text-row > label {
+    display: block; font-size: 10px; color: var(--muted);
+    margin-bottom: 6px; letter-spacing: .03em; font-weight: 400;
+}
+.avx2 .av-text-row > textarea {
+    width: 100%; min-height: 46px; resize: vertical;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px; color: #dbe3f0; font-size: 11px; line-height: 1.5;
+    padding: 7px 9px; outline: none; transition: .15s; font-family: inherit;
+}
+.avx2 .av-text-row > textarea::placeholder { color: #57647a; }
+.avx2 .av-text-row > textarea:focus { border-color: rgba(143,178,255,.55); background: rgba(143,178,255,.06); }
+.avx2 .av-text-row > small { display: block; font-size: 9.5px; color: var(--muted); margin-top: 5px; line-height: 1.35; }
+.avx2 .av-text-row > input[type="range"] {
+    -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 12px;
+    background: transparent; cursor: pointer; margin: 4px 0 0;
+}
+.avx2 .av-text-row > input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px; border: 0; border-radius: 999px;
+    background: linear-gradient(90deg, #8fb2ff 0 var(--av-range, 0%), #b49bff var(--av-range, 0%) var(--av-range, 0%), rgba(255,255,255,.09) var(--av-range, 0%) 100%);
+}
+.avx2 .av-text-row > input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; margin-top: -3.5px; border: 0;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.2);
+}
+.avx2 .av-filter-actions, .avx2 .av-login-panel > .av-filter-actions {
+    display: flex; gap: 7px; padding: 9px 11px 2px; border-top: 1px solid rgba(255,255,255,.045);
+}
+.avx2 .av-filter-actions > button {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 12px; border-radius: 9px; font-size: 11px; font-weight: 500; color: #dbe3f0;
+    background: rgba(255,255,255,.045); border: 1px solid var(--line2); transition: .15s;
+}
+.avx2 .av-filter-actions > button:hover { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.2); }
+.avx2 .av-filter-actions > .btn-primary {
+    background: var(--grad2); color: #0b0e16; border-color: transparent; font-weight: 600;
+    box-shadow: 0 6px 20px -8px rgba(150,170,255,.95), 0 1px 0 rgba(255,255,255,.3) inset;
+}
+.avx2 .av-filter-actions > .btn-danger { color: #ff9aa6; border-color: rgba(255,122,138,.22); background: rgba(255,122,138,.055); }
+.avx2 .av-login-field { display: block; padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .av-login-panel > .av-login-field:first-child { border-top: 0; }
+.avx2 .av-login-field > span {
+    display: block; font-size: 10px; color: var(--muted);
+    margin-bottom: 6px; letter-spacing: .03em;
+}
+.avx2 .av-login-field > input {
+    width: 100%; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px; color: #dbe3f0; font-size: 11px; padding: 7px 9px; outline: none; transition: .15s;
+}
+.avx2 .av-login-field > input::placeholder { color: #57647a; }
+.avx2 .av-login-field > input:focus { border-color: rgba(143,178,255,.55); background: rgba(143,178,255,.06); }
+.avx2 .av-login-status {
+    padding: 7px 11px 9px; font-size: 9.5px; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.avx2 .av-audio { display: flex; flex-direction: column; }
+.avx2 .av-audio-buttons { border-top: 0; }
+.avx2 .av-audio-buttons > .av-audio-btn {
+    justify-content: space-between; background: rgba(255,255,255,.045);
+}
+.avx2 .av-audio-label { font-size: 11px; }
+.avx2 .av-audio-caret { font-size: 9px; color: var(--muted); transition: .2s; }
+.avx2 .av-audio-btn.is-open .av-audio-caret { transform: rotate(180deg); }
+.avx2 .av-audio-panel { display: flex; flex-direction: column; }
+.avx2 .av-audio-panel.av-collapsed { display: none; }
+.avx2 .av-audio-line {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 11px 4px; font-size: 11.5px; font-weight: 500; color: #dbe3f0;
+}
+.avx2 .av-audio-scope { font-size: 9.5px; font-weight: 400; color: var(--muted); }
+.avx2 .av-audio-range { display: flex; align-items: center; gap: 9px; padding: 0 11px 8px; }
+.avx2 .av-audio-range > input[type="range"] {
+    -webkit-appearance: none; appearance: none; flex: 1; display: block; height: 12px;
+    background: transparent; cursor: pointer; margin: 0;
+}
+.avx2 .av-audio-range > input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px; border: 0; border-radius: 999px;
+    background: linear-gradient(90deg, #8fb2ff 0 var(--av-range, 0%), #b49bff var(--av-range, 0%) var(--av-range, 0%), rgba(255,255,255,.09) var(--av-range, 0%) 100%);
+}
+.avx2 .av-audio-range > input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; margin-top: -3.5px; border: 0;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.2);
+}
+.avx2 .av-audio-value {
+    flex: 0 0 auto; min-width: 52px; text-align: center;
+    font-size: 10.5px; color: #cfdaef; font-variant-numeric: tabular-nums;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 6px; padding: 2px 6px;
+}
+.avx2 .av-audio-presets { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 11px 10px; }
+.avx2 .av-audio-presets > button {
+    flex: 1 1 auto; padding: 5px 8px; border-radius: 7px;
+    font-size: 10.5px; color: #c3cede;
+    background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.09); transition: .15s;
+}
+.avx2 .av-audio-presets > button:hover { background: rgba(143,178,255,.13); border-color: rgba(143,178,255,.4); color: #fff; }
+.avx2 .av-audio-presets > button.is-on {
+    background: rgba(143,178,255,.16); border-color: rgba(143,178,255,.45); color: #eaf1ff;
+}
+.avx2 .av-audio-state {
+    padding: 7px 11px 9px; font-size: 9.5px; color: var(--muted); line-height: 1.4;
+}
+.avx2 .av-audio-state.is-on { color: #7ee0a8; }
+.avx2 .av-audio-state.is-warn { color: #f0c674; }
+.avx2 .av-audio-state.is-off { color: var(--muted); }
+.avx2 .panel-status-log { max-height: 120px; overflow-y: auto; }
+.avx2 .panel-status-log > div,
+.avx2 .log-entry {
+    display: flex; gap: 8px; padding: 5px 12px; font-size: 10px; color: #7f8da3;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.4;
+}
+.avx2 .log-entry .log-time { color: #4d5769; flex: 0 0 auto; }
+.avx2 .avx-card > *:last-child { margin-bottom: 0; }
+.avx2 .avx-card { padding-bottom: 0; }
+.avx2 .avx-card > .av-filter-panel:last-child,
+.avx2 .avx-card > .sub-panel:last-child,
+.avx2 .avx-card > .av-audio:last-child { padding-bottom: 2px; }
+.avx2 .avx-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.avx2 .avx-kpi {
+    background: rgba(255,255,255,.032); border: 1px solid rgba(255,255,255,.05);
+    border-radius: 10px; padding: 10px 11px; overflow: hidden;
+}
+.avx2 .avx-kpi b {
+    display: block; font-size: 17px; font-weight: 600; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(120deg,#eaf1ff,#a9bfff);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.avx2 .avx-kpi span { display: block; font-size: 9.5px; color: var(--muted); margin-top: 3px; letter-spacing: .03em; }
+.avx2 .avx-pill > span { font: inherit; color: inherit; letter-spacing: inherit; }
+.avx2 .avx-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 11px; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .avx-card-h + .avx-chips, .avx2 .avx-chips:first-child { border-top: 0; }
+.avx2 .avx-chips > .avx-chip { flex: 0 0 auto; }
+.avx2 .avx-range, .avx2 input.avx-range { margin: 0; }
+.avx2 input.avx-sw {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+.avx2 .slider-row-container {
+    display: contents;
+    gap: 0;
+    margin-top: 0;
+    padding: 0;
+    border-top: 0;
+}
+.avx2 .slider-row-container .avx-sl:first-child { border-top: 0; }
+.avx2 .av-filter-strip {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+.avx2 .av-filter-strip > .avx-row:first-child { border-top: 0; }
+.avx2 .av-filter-strip,
+.avx2 .av-filter-text-slide { display: contents; }
+.avx2 input.avx-sw { background: none; border: 0; color: #e9eef7; }
+.avx2 .avx-field .avx-hint { display: block; margin-top: 5px; font-size: 9.5px; color: var(--muted); }
+.avx2 .avx-field textarea.avx-inp { resize: vertical; min-height: 46px; }
+.avx2 .panel-status-log.avx-log {
+    max-height: 0;
+    height: auto;
+    overflow: hidden;
+    padding: 0;
+    margin: 0;
+    border-top: 1px solid transparent;
+    background: none;
+}
+.avx2 .panel-status-log.avx-log.log-open {
+    max-height: 120px;
+    overflow-y: auto;
+    border-top-color: rgba(255,255,255,.05);
+}
+.avx2 .panel-status-log.avx-log .log-entry {
+    display: flex;
+    gap: 8px;
+    padding: 5px 12px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: #7f8da3;
+    border: 0;
+    background: none;
+}
+.avx2 .panel-status-log.avx-log .log-entry .log-time { flex: 0 0 auto; color: #4d5769; }
+.avx2 .av-login-panel { display: contents; }
+.avx2 .av-login-field { padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .av-login-field:first-child { border-top: 0; }
+.avx2 .av-login-field label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+.avx2 .av-login-field input { width: 100%; height: 30px; padding: 0 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.035); color: var(--text); font-size: 11.5px; }
+.custom-control-panel.avx2 {
+    background: rgba(18, 21, 29, var(--ui-bg-opacity, .93));
+    -webkit-backdrop-filter: blur(var(--ui-blur, 26px)) saturate(1.35);
+    backdrop-filter: blur(var(--ui-blur, 26px)) saturate(1.35);
+}
+.custom-control-panel.avx2:hover {
+    background: rgba(18, 21, 29, var(--ui-hover-opacity, .96));
+}
+.avx2::before {
+    content: "";
+    position: absolute; inset: 0; height: auto; border-radius: inherit;
+    pointer-events: none;
+    background:
+        radial-gradient(120% 92% at 50% -12%, rgba(140,165,255,.14), rgba(140,165,255,.055) 42%, rgba(180,155,255,.03) 68%, rgba(180,155,255,0) 88%);
+}
+.avx2.panel-collapsed::before {
+    display: block;
+    background: radial-gradient(130% 150% at 50% 0%, rgba(140,165,255,.16), rgba(150,160,255,.06) 58%, rgba(180,155,255,.02) 100%);
+}
+.avx2.panel-collapsed:hover::before {
+    background: radial-gradient(130% 150% at 50% 0%, rgba(150,175,255,.22), rgba(150,160,255,.08) 58%, rgba(180,155,255,.03) 100%);
+}
+@keyframes avxExpandIn {
+    from { opacity: 0; transform: translateY(-4px) scale(.994); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes avxCapsuleIn {
+    from { opacity: 0; transform: scale(.94); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes avxPaneIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: none; }
+}
+.avx2:not(.panel-collapsed) > .avx-tabs,
+.avx2:not(.panel-collapsed) > .avx-body {
+    animation: avxExpandIn .22s cubic-bezier(.22,.8,.3,1) both;
+}
+.avx2.panel-collapsed > .avx-capsule { animation: avxCapsuleIn .2s cubic-bezier(.22,.8,.3,1) both; }
+.avx2 .avx-pane.is-on { animation: avxPaneIn .18s ease both; }
+@media (prefers-reduced-motion: reduce) {
+    .avx2:not(.panel-collapsed) > .avx-tabs, .avx2:not(.panel-collapsed) > .avx-body,
+    .avx2.panel-collapsed > .avx-capsule, .avx2 .avx-pane.is-on { animation: none; }
+}
+.avx2 input.avx-sw[type="checkbox"] {
+    -webkit-appearance: none; appearance: none; margin: 0;
+    width: 32px; height: 18px; border-radius: 999px; position: relative; flex: 0 0 auto;
+    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.07);
+    box-shadow: 0 1px 2px rgba(0,0,0,.35) inset;
+    transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
+    cursor: pointer;
+}
+.avx2 input.avx-sw[type="checkbox"]::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    border-radius: 50%; background: linear-gradient(180deg,#c7d0de,#8b96a8);
+    box-shadow: 0 1px 3px rgba(0,0,0,.45);
+    transition: left .2s cubic-bezier(.22,.8,.3,1), background .2s ease;
+}
+.avx2 input.avx-sw[type="checkbox"]:checked,
+.avx2 input.avx-sw[type="checkbox"].is-on {
+    background: var(--grad2); border-color: rgba(255,255,255,.10);
+    box-shadow: 0 1px 2px rgba(0,0,0,.2) inset, 0 2px 10px -4px rgba(140,165,255,.75);
+}
+.avx2 input.avx-sw[type="checkbox"]:checked::after,
+.avx2 input.avx-sw[type="checkbox"].is-on::after { left: 16px; background: #fff; }
+.avx2 button.avx-sw {
+    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.07);
+    box-shadow: 0 1px 2px rgba(0,0,0,.35) inset;
+}
+.avx2 button.avx-sw::after { background: linear-gradient(180deg,#c7d0de,#8b96a8); box-shadow: 0 1px 3px rgba(0,0,0,.45); }
+.avx2 button.avx-sw.is-on {
+    border-color: rgba(255,255,255,.10);
+    box-shadow: 0 1px 2px rgba(0,0,0,.2) inset, 0 2px 10px -4px rgba(140,165,255,.75);
+}
+.avx2 button.avx-sw.is-on::after { background: #fff; }
+.avx2 .avx-body::-webkit-scrollbar { width: 5px; }
+.avx2 .avx-body::-webkit-scrollbar-track { background: transparent; }
+.avx2 .avx-body::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.12); border-radius: 999px;
+}
+.avx2 .avx-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+.avx2 .avx-tabs { border-bottom: 1px solid rgba(255,255,255,.055); }
+.avx2 .avx-card { transition: border-color .18s ease, background .18s ease; }
+.avx2 .avx-card:hover { border-color: rgba(255,255,255,.075); }
+.custom-control-panel.avx2 { font-size: 12px; line-height: 1.4; }
+
+.avx2 .avx-btns .avx-btn,
+.avx2 .avx-row .avx-btn,
+.avx2 .avx-chips .avx-chip {
+    border: 0; padding: 0; background: transparent; border-radius: 7px;
+    font-size: inherit; font-weight: 500; color: #dfe7f5;
+    box-shadow: none; transition: background .15s ease, color .15s ease;
+}
+.avx2 .avx-btns .avx-btn--primary { background: transparent; color: #eaf1ff; font-weight: 600; }
+.avx2 .avx-btns .avx-btn:hover,
+.avx2 .avx-row .avx-btn:hover { background: rgba(255,255,255,.06); }
+.avx2 .avx-chips .avx-chip { color: var(--muted); }
+.avx2 .avx-chips .avx-chip.is-on { background: rgba(143,178,255,.16); color: #eaf1ff; }
+.avx2 .avx-chips .avx-chip:hover { background: rgba(143,178,255,.1); color: #dfe7f5; }
+.avx2 .avx-btns { align-items: center; }
+.custom-control-panel.avx2.avx-preview-rest { background: rgba(18, 21, 29, var(--ui-bg-opacity, .93)); }
+.custom-control-panel.avx2.avx-preview-hover { background: rgba(18, 21, 29, var(--ui-hover-opacity, .96)); }
+.avx2 .avx-note {
+    padding: 2px 11px 11px;
+    font-size: 9.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+.avx2 .avx-note + .avx-btns { margin-top: 2px; }
+
+.avx2 button.avx-sw.is-on,
+.avx2 input.avx-sw[type="checkbox"]:checked,
+.avx2 input.avx-sw[type="checkbox"].is-on {
+    background: linear-gradient(135deg, #4f8dff, #3a6fe6);
+    border-color: rgba(255,255,255,.12);
+    box-shadow: 0 1px 2px rgba(0,0,0,.2) inset, 0 2px 10px -4px rgba(64,130,255,.85);
+}
+.avx2 .avx-actions { display: flex; gap: 8px; padding: 10px 11px 0; }
+.avx2 .avx-actions .avx-btn {
+    flex: 1; height: 38px; min-width: 0; padding: 0 10px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
+    border: 1px solid var(--line2); border-radius: 10px;
+    background: rgba(255,255,255,.05); color: #dbe3f0;
+    box-shadow: 0 1px 0 rgba(255,255,255,.05) inset;
+    transition: background .16s ease, border-color .16s ease, transform .1s ease;
+}
+.avx2 .avx-actions .avx-btn svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.avx2 .avx-actions .avx-btn:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.2); }
+.avx2 .avx-actions .avx-btn:active { transform: translateY(1px); }
+.avx2 .avx-actions .avx-btn--primary {
+    background: linear-gradient(135deg,#4f8dff,#3a6fe6); color: #fff; border-color: transparent;
+    box-shadow: 0 8px 22px -10px rgba(64,130,255,.95), 0 1px 0 rgba(255,255,255,.25) inset;
+}
+.avx2 .avx-actions .avx-btn--primary:hover { filter: brightness(1.06); background: linear-gradient(135deg,#5b96ff,#4176ee); }
+.avx2 .avx-card > .avx-note { padding: 8px 11px 11px; }
+        `);
     }
     function setCollapsed(node, collapsed) {
         if (!node) return;
@@ -2932,22 +4447,39 @@
         node.classList.toggle('av-collapsed', Boolean(collapsed));
         node.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
     }
+    function avxSvg(path, extra) {
+        return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${(extra && extra.w) || 1.7}" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+    }
+    const AVX_LOGO_PATH = '<path d="M4 19V7l8 6 8-6v12"/>';
     function buildPanelHeader(panelTitleText) {
         const header = document.createElement('div');
-        header.className = 'panel-header';
+        header.className = 'avx-head';
         header.title = '按住可拖动面板';
-        const panelTitle = document.createElement('span');
-        panelTitle.className = 'panel-title';
-        panelTitle.textContent = panelTitleText;
+        const logo = document.createElement('div');
+        logo.className = 'avx-logo';
+        logo.innerHTML = avxSvg(AVX_LOGO_PATH, { w: 2.1 });
+        const titles = document.createElement('div');
+        titles.className = 'avx-titles';
+        const title = document.createElement('b');
+        title.textContent = panelTitleText;
+        const sub = document.createElement('small');
+        const modeName = AV_PLATFORM.mode === 'mobile' ? '移动端' : '桌面端';
+        sub.textContent = `${IS_JABLE ? 'Jable' : 'MissAV'} · ${modeName} · ${AV_PLATFORM.forced === 'auto' ? '自动识别' : '手动强制'}`;
+        titles.append(title, sub);
+        const pill = document.createElement('span');
+        pill.className = 'avx-pill';
+        const pillDot = document.createElement('i');
+        const pillText = document.createTextNode('已就绪');
+        pill.append(pillDot, pillText);
         const gearBtn = document.createElement('button');
         gearBtn.type = 'button';
-        gearBtn.className = 'panel-gear';
+        gearBtn.className = 'avx-ico panel-gear';
         gearBtn.setAttribute('aria-label', '展开或折叠设置面板');
         gearBtn.setAttribute('aria-expanded', settings.isMinimized ? 'false' : 'true');
         gearBtn.title = settings.isMinimized ? '展开设置面板' : '折叠设置面板';
-        setMarkup(gearBtn, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>');
-        header.append(gearBtn, panelTitle);
-        return { header, gearBtn };
+        gearBtn.innerHTML = avxSvg('<path d="m6 15 6-6 6 6"/>', { w: 1.9 });
+        header.append(logo, titles, pill, gearBtn);
+        return { header, gearBtn, pill, pillText };
     }
     function createCockpitLink() {
         const link = document.createElement('a');
@@ -2965,33 +4497,49 @@
     }
 
     function buildPanelKeysRow() {
-        const keysRow = document.createElement('div');
-        keysRow.className = 'panel-row';
-        keysRow.append(
-            createInputGroup('加速键:', 'text', settings.keys.accelerate, input => {
-                settings.keys.accelerate = normalizeKey(input.value, 'z');
-            }, { onBlur: input => { input.value = settings.keys.accelerate; } }),
-            createInputGroup('快进键:', 'text', settings.keys.forward, input => {
-                settings.keys.forward = normalizeKey(input.value, 'x');
-            }, { onBlur: input => { input.value = settings.keys.forward; } }),
-            createInputGroup('倒退键:', 'text', settings.keys.backward, input => {
-                settings.keys.backward = normalizeKey(input.value, 'c');
-            }, { onBlur: input => { input.value = settings.keys.backward; } }),
-            createInputGroup('加速倍数:', 'number', settings.accelerationRate, input => {
-                settings.accelerationRate = clamp(Number.parseFloat(input.value) || 1, SPEED_MIN, SPEED_MAX);
-            }, {
-                min: SPEED_MIN, max: SPEED_MAX, step: 0.1,
-                onBlur: input => { input.value = settings.accelerationRate; }
-            }),
-            createInputGroup('快进(秒):', 'number', settings.skipTime, input => {
-                settings.skipTime = clamp(Number.parseFloat(input.value) || 5, SKIP_MIN, SKIP_MAX);
-            }, {
-                min: SKIP_MIN, max: SKIP_MAX, step: 1,
-                onBlur: input => { input.value = settings.skipTime; }
-            }),
-            createCockpitLink()
-        );
-        return { keysRow };
+        const row = document.createElement('div');
+        row.className = 'avx-row avx-row--tight';
+        const lbl = document.createElement('div');
+        lbl.className = 'avx-lbl';
+        const b = document.createElement('b');
+        b.textContent = '加速 / 快进 / 倒退';
+        const small = document.createElement('small');
+        small.textContent = '点击键位可重新绑定';
+        lbl.append(b, small);
+        row.appendChild(lbl);
+        const makeChip = (slot, name) => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'avx-key';
+            chip.textContent = String(settings.keys[slot] || '').toUpperCase();
+            chip.title = name;
+            chip.addEventListener('click', event => {
+                event.stopPropagation();
+                if (chip.classList.contains('cap')) return;
+                chip.dataset.prev = chip.textContent;
+                chip.classList.add('cap');
+                chip.textContent = '…';
+                const finish = e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const raw = e.key === ' ' ? 'space' : String(e.key || '').toLowerCase();
+                    const next = normalizeKey(raw, settings.keys[slot]);
+                    settings.keys[slot] = next;
+                    store.set({ accelerate: 'keyAccelerate', forward: 'keyForward', backward: 'keyBackward' }[slot], next);
+                    chip.textContent = next.toUpperCase();
+                    chip.classList.remove('cap');
+                    log(`⌨️ ${name}快捷键已改为 ${next.toUpperCase()}`);
+                    document.removeEventListener('keydown', finish, true);
+                };
+                document.addEventListener('keydown', finish, true);
+            });
+            return chip;
+        };
+        const chipAcc = makeChip('accelerate', '加速');
+        const chipFwd = makeChip('forward', '快进');
+        const chipBack = makeChip('backward', '倒退');
+        row.append(chipAcc, chipFwd, chipBack);
+        return { keysRow: row, chipAcc, chipFwd, chipBack };
     }
     function setMenuHidden(hidden) {
         settings.hideMenu = hidden;
@@ -3013,59 +4561,37 @@
         }
     }
     function buildPanelActionRow(panel, layoutPanel) {
-        const actionRow = document.createElement('div');
-        actionRow.className = 'btn-group';
         const btnSave = createButton('保存设置', 'btn-primary');
-        btnSave.style.gridColumn = 'span 2';
         btnSave.addEventListener('click', () => {
             persistSettings();
             log('💾 设置已保存');
         });
-        const resetPosBtn = createButton('重置面板位置', 'btn-ghost');
+        const resetPosBtn = createButton('重置位置', 'btn-ghost');
         resetPosBtn.addEventListener('click', () => {
             settings.panelX = 20;
             settings.panelY = 88;
             panel.style.left = '20px';
+            panel.style.top = '88px';
             store.set('panelX', 20);
             store.set('panelY', 88);
             layoutPanel();
             log('面板已复位到左上角');
         });
-        const btnClearLib = createButton('清空已看库');
+        const btnClearLib = createButton('清空', 'btn-danger');
         btnClearLib.title = '只清空当前站点的已看标记，不影响另一个站点';
         btnClearLib.addEventListener('click', () => {
             clearWatched();
             log('本站已看库已清空');
             refreshFilters();
         });
-        const btnBackup = createButton('收藏批量备份');
-        btnBackup.style.gridColumn = 'span 2';
+        const btnBackup = createButton('备份');
         btnBackup.title = '把收藏的名称、缩略图、番号、女优、类型、发行商批量打包下载到本地';
         btnBackup.addEventListener('click', openFavoriteBackup);
-        const btnFrames = createButton('');
-        btnFrames.classList.add('av-frames-btn');
-        btnFrames.style.gridColumn = '1 / -1';
-        const framesLabel = () => `关键帧预览：${settings.framesPreview ? '已开启' : '已关闭'}`;
-        btnFrames.textContent = framesLabel();
-        btnFrames.title = '在进度条上显示关键帧刻度与悬停缩略图（数据来自 whos.tv）。关闭后不再请求 whos.tv';
-        btnFrames.addEventListener('click', () => {
-            settings.framesPreview = !settings.framesPreview;
-            store.set('whosFrames', settings.framesPreview ? '1' : '0');
-            btnFrames.textContent = framesLabel();
-            removeFramePreview();
-            if (settings.framesPreview) {
-                setupFramePreview(document.querySelector('video'));
-                log('🎞️ 关键帧预览已开启');
-            } else {
-                log('🎞️ 关键帧预览已关闭');
-            }
-        });
         const btnPlatform = createButton('');
         btnPlatform.classList.add('av-platform-btn');
-        btnPlatform.style.gridColumn = '1 / -1';
         const platformLabel = () => {
             const modeName = AV_PLATFORM.mode === 'mobile' ? '移动端' : '桌面端';
-            return AV_PLATFORM.forced === 'auto' ? `识别：${modeName}` : `强制：${modeName}`;
+            return AV_PLATFORM.forced === 'auto' ? `自动识别 · ${AV_PLATFORM.score} 分` : `强制：${modeName}`;
         };
         btnPlatform.textContent = platformLabel();
         btnPlatform.title = '点击切换：自动识别 → 强制移动端 → 强制桌面端（切换后自动刷新页面）';
@@ -3082,59 +4608,55 @@
             log(`🔄 平台档位已切换为「${nextName}」，正在刷新…`);
             location.reload();
         });
-        actionRow.append(resetPosBtn, btnClearLib, btnFrames, btnPlatform, btnSave, btnBackup);
-        return actionRow;
+        return { resetPosBtn, btnClearLib, btnPlatform, btnSave, btnBackup };
     }
     function createSettingSlider(labelText, key, min, max, step, onApply = applyUiStyles, format = String) {
-        const group = document.createElement('div');
-        group.className = 'slider-group';
-        const label = document.createElement('label');
-        label.textContent = labelText;
+        const wrap = document.createElement('div');
+        wrap.className = 'avx-sl';
+        const head = document.createElement('div');
+        head.className = 'avx-sl-h';
+        const title = document.createElement('b');
+        title.textContent = labelText;
+        const unitText = String(format(1)).replace(/^-?[\d.]+/, '');
+        if (unitText) {
+            title.appendChild(document.createTextNode(' '));
+            const unit = document.createElement('span');
+            unit.className = 'avx-unit';
+            unit.textContent = unitText;
+            title.appendChild(unit);
+        }
+        const num = document.createElement('span');
+        num.className = 'avx-num';
         const slider = document.createElement('input');
         slider.type = 'range';
+        slider.className = 'avx-range';
         slider.min = min;
         slider.max = max;
         slider.step = step;
         slider.value = settings[key];
-        const valueBox = document.createElement('span');
-        valueBox.className = 'slider-value';
-        const valueInput = document.createElement('input');
-        valueInput.type = 'number';
-        valueInput.className = 'slider-num';
-        valueInput.min = min;
-        valueInput.max = max;
-        valueInput.step = step;
-        valueInput.value = settings[key];
-        valueInput.autocomplete = 'off';
-        valueInput.spellcheck = false;
-        valueInput.setAttribute('aria-label', `${labelText}数值`);
-        const unit = document.createElement('i');
-        unit.className = 'slider-unit';
-        unit.textContent = String(format(1)).replace(/^-?[\d.]+/, '');
-        valueBox.append(valueInput, unit);
-        const commitValue = () => {
-            const raw = Number.parseFloat(valueInput.value);
-            const next = Number.isFinite(raw) ? clamp(raw, min, max) : settings[key];
-            settings[key] = next;
-            slider.value = String(next);
-            valueInput.value = String(next);
-            onApply(next);
+        const paint = value => {
+            num.textContent = format(value);
+            const pct = ((Number(value) - Number(min)) / (Number(max) - Number(min))) * 100;
+            slider.style.setProperty('--pct', `${Math.max(0, Math.min(100, pct))}%`);
         };
+        paint(settings[key]);
         slider.addEventListener('input', event => {
             settings[key] = Number.parseFloat(event.target.value);
-            valueInput.value = String(settings[key]);
+            paint(settings[key]);
             onApply(settings[key]);
         });
-        valueInput.addEventListener('change', commitValue);
-        valueInput.addEventListener('blur', commitValue);
-        valueInput.addEventListener('keydown', event => {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            commitValue();
-            valueInput.blur();
-        });
-        group.append(label, slider, valueBox);
-        return group;
+        if (key === 'opacity' || key === 'hoverOpacity') {
+            const flip = key === 'opacity' ? 'avx-preview-rest' : 'avx-preview-hover';
+            const on = () => { if (state.panel) state.panel.classList.add(flip); };
+            const off = () => { if (state.panel) state.panel.classList.remove(flip); };
+            slider.addEventListener('pointerdown', on);
+            slider.addEventListener('focus', on);
+            slider.addEventListener('blur', off);
+            window.addEventListener('pointerup', off);
+        }
+        head.append(title, num);
+        wrap.append(head, slider);
+        return wrap;
     }
     function buildPanelSliderRow() {
         const sliderRow = document.createElement('div');
@@ -3216,113 +4738,566 @@
         wrap.append(head, grid, localRow, styleBox);
         return wrap;
     }
-    function buildPanelCollapseToggles(sliderRow, subtitlePanel) {
-        const loginToggleBtn = createButton('隐藏/显示自动登录', 'btn-primary panel-full-btn');
+    function buildPanelCollapseToggles() {
         const loginPanel = buildLoginPanel();
-        loginToggleBtn.addEventListener('click', () => {
-            const collapsed = !loginPanel.classList.contains('av-collapsed');
-            setCollapsed(loginPanel, collapsed);
-            settings.loginPanelOpen = !collapsed;
-            store.set('loginPanelOpen', settings.loginPanelOpen);
-        });
-        const subToggleBtn = createButton('隐藏/显示字幕设置', 'btn-primary panel-full-btn');
-        subToggleBtn.addEventListener('click', () => {
-            const collapsed = !subtitlePanel.classList.contains('av-collapsed');
-            setCollapsed(subtitlePanel, collapsed);
-            settings.subPanelOpen = !collapsed;
-            store.set('subPanelOpen', settings.subPanelOpen);
-        });
-        const toggleSliderBtn = createButton('隐藏/显示透明UI设置', 'btn-primary panel-full-btn');
-        toggleSliderBtn.addEventListener('click', () => {
-            setCollapsed(sliderRow, !sliderRow.classList.contains('av-collapsed'));
-        });
-        const filterToggleBtn = createButton('隐藏/显示内容过滤与屏蔽', 'btn-primary panel-full-btn');
         const filterPanel = buildFilterPanel();
-        filterToggleBtn.addEventListener('click', () => {
-            const collapsed = !filterPanel.classList.contains('av-collapsed');
-            setCollapsed(filterPanel, collapsed);
-            settings.filterPanelOpen = !collapsed;
-            store.set('filterPanelOpen', settings.filterPanelOpen);
-        });
-        const mobileToggleBtn = createButton('隐藏/显示移动端增强', 'btn-primary panel-full-btn');
         const mobilePanel = buildMobilePanel();
-        mobileToggleBtn.addEventListener('click', () => {
-            const collapsed = !mobilePanel.classList.contains('av-collapsed');
-            setCollapsed(mobilePanel, collapsed);
-            settings.mobilePanelOpen = !collapsed;
-            store.set('mobilePanelOpen', settings.mobilePanelOpen);
-        });
-        return { loginToggleBtn, loginPanel, subToggleBtn, toggleSliderBtn, filterToggleBtn, filterPanel, mobileToggleBtn, mobilePanel };
+        setCollapsed(loginPanel, false);
+        setCollapsed(filterPanel, false);
+        setCollapsed(mobilePanel, false);
+        return { loginPanel, filterPanel, mobilePanel };
+    }
+    const AVX_TABS = [
+        { key: 'play', label: '播放', icon: '<path d="M8 5v14l11-7z"/>' },
+        { key: 'sub', label: '字幕', icon: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M7 11h3"/>' },
+        { key: 'audio', label: '音频', icon: '<path d="M4 14v-4M8 17V7M12 20V4M16 16V8M20 13v-2"/>' },
+        { key: 'filter', label: '过滤', icon: '<path d="M13 2 4 14h7l-2 8 11-12h-7z"/>' },
+        { key: 'data', label: '数据', icon: '<path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 5-6"/>' },
+        { key: 'setup', label: '设置', icon: '<path d="M4 21v-6M4 11V3M12 21v-9M12 8V3M20 21v-4M20 13V3M2 15h4M10 8h4M18 17h4"/>' }
+    ];
+    function avxEl(tag, cls, html) {
+        const node = document.createElement(tag);
+        if (cls) node.className = cls;
+        if (html !== undefined) node.innerHTML = html;
+        return node;
+    }
+    function avxCard(title, meta) {
+        const card = avxEl('div', 'avx-card');
+        if (title) {
+            const head = avxEl('div', 'avx-card-h');
+            head.append(avxEl('b', '', title), avxEl('span', '', meta || ''));
+            card.appendChild(head);
+        }
+        return card;
+    }
+    function avxBtn(label, opts = {}) {
+        const cls = ['avx-btn'];
+        if (opts.variant === 'primary') cls.push('avx-btn--primary');
+        else if (opts.variant === 'ghost') cls.push('avx-btn--ghost');
+        else if (opts.variant === 'danger') cls.push('avx-btn--danger');
+        if (opts.small) cls.push('avx-btn--sm');
+        if (opts.block) cls.push('avx-btn--block');
+        const node = avxEl('button', cls.join(' '));
+        node.type = 'button';
+        node.textContent = label;
+        if (opts.title) node.title = opts.title;
+        if (opts.onClick) node.addEventListener('click', opts.onClick);
+        return node;
+    }
+    function avxKpis(items) {
+        const grid = avxEl('div', 'avx-kpis');
+        for (const [value, label] of items) {
+            const k = avxEl('div', 'avx-kpi');
+            k.append(avxEl('b', '', value), avxEl('span', '', label));
+            grid.appendChild(k);
+        }
+        return grid;
     }
     function createPanel() {
         if (state.panel || document.querySelector('.custom-control-panel')) return;
         const panel = document.createElement('div');
-        panel.className = 'custom-control-panel';
+        panel.className = 'custom-control-panel avx2';
         panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
         panel.style.top = `${clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60))}px`;
         state.panel = panel;
-        const { header, gearBtn } = buildPanelHeader('综合增强助手');
-        const body = document.createElement('div');
-        body.className = 'panel-body';
-        const footer = document.createElement('div');
-        footer.className = 'panel-footer';
-        const collapsible = document.createElement('div');
-        collapsible.className = 'panel-collapse';
-        const collapsibleInner = document.createElement('div');
-        collapsibleInner.className = 'panel-collapse-inner';
-        collapsible.appendChild(collapsibleInner);
-        if (settings.isMinimized) panel.classList.add('panel-collapsed');
+        const { header, gearBtn, pill, pillText } = buildPanelHeader('综合增强助手');
+        state.panelPill = pillText;
+
+        const capsule = document.createElement('div');
+        capsule.className = 'avx-capsule';
+        const capLogo = avxEl('div', 'avx-logo', avxSvg(AVX_LOGO_PATH, { w: 2.1 }));
+        const capRate = avxEl('button', 'avx-rate');
+        capRate.type = 'button';
+        capRate.title = '打开播放设置';
+        const paintCapRate = () => { capRate.textContent = `${Number(settings.accelerationRate).toFixed(1)}×`; };
+        paintCapRate();
+        capRate.addEventListener('click', () => {
+            togglePanel(false);
+            selectTab('play');
+        });
+        const capSep = avxEl('span', 'avx-sep');
+        const capPlay = avxEl('button', 'avx-ico');
+        capPlay.type = 'button';
+        capPlay.title = '播放 / 暂停';
+        capPlay.innerHTML = avxSvg(isPaused() ? '<path d="M8 5v14l11-7z"/>' : '<path d="M9 5v14M15 5v14"/>', { w: 1.9 });
+        state.capPlay = capPlay;
+        capPlay.addEventListener('click', togglePlayPause);
+        const capSub = avxEl('button', 'avx-ico');
+        capSub.type = 'button';
+        capSub.title = '字幕';
+        capSub.innerHTML = avxSvg('<rect x="3" y="5" width="18" height="14" rx="4"/><path d="M7 14h4M13 14h4M7 10h2"/>', { w: 1.9 });
+        capSub.addEventListener('click', () => {
+            togglePanel(false);
+            selectTab('sub');
+        });
+        const capOpen = avxEl('button', 'avx-ico');
+        capOpen.type = 'button';
+        capOpen.title = '展开面板';
+        capOpen.innerHTML = avxSvg('<path d="m6 9 6 6 6-6"/>', { w: 1.9 });
+        capOpen.addEventListener('click', () => togglePanel(false));
+        capsule.append(capLogo, capRate, capSep, capPlay, capSub, capOpen);
+        state.panelCapsule = capsule;
+        state.panelPaintRate = paintCapRate;
+
+        const logEl = document.createElement('div');
+        logEl.className = 'panel-status-log avx-log';
+        state.logEl = logEl;
+        flushPendingLogs(logEl);
+        const foot = document.createElement('div');
+        foot.className = 'avx-foot';
+        const footDot = avxEl('span', '', '●');
+        footDot.style.color = '#4ade80';
+        const footTime = avxEl('span', 'avx-t', '--:--:--');
+        const footMsg = avxEl('span', 'avx-msg', '系统已就绪');
+        const footChev = avxEl('button', 'avx-ico', avxSvg('<path d="m6 9 6 6 6-6"/>', { w: 2 }));
+        footChev.type = 'button';
+        footChev.title = '展开 / 收起日志';
+        footChev.addEventListener('click', event => {
+            event.stopPropagation();
+            const open = logEl.classList.toggle('log-open');
+            footChev.innerHTML = avxSvg(open ? '<path d="m6 9 6 6 6-6"/>' : '<path d="m6 15 6-6 6 6"/>', { w: 2 });
+        });
+        foot.append(footDot, footTime, footMsg, footChev);
+
+        const tabs = document.createElement('nav');
+        tabs.className = 'avx-tabs';
+        const body = avxEl('div', 'avx-body');
+        const paneOf = key => {
+            const pane = avxEl('section', 'avx-pane');
+            pane.dataset.pane = key;
+            body.appendChild(pane);
+            return pane;
+        };
+        let currentTab = '';
+        let tabPickedByUser = false;
+        const paintKpis = key => {
+            const kpi = body.querySelector('.avx-pane[data-pane="' + key + '"]');
+            const holder = kpi.querySelector('.avx-kpis');
+            if (!holder) return;
+            if (key === 'filter') {
+                const stats = state.filterStats || {};
+                const total = Number(stats.total) || 0;
+                const filtered = Number(stats.filtered) || 0;
+                holder.children[0].firstChild.textContent = String(total);
+                holder.children[1].firstChild.textContent = String(filtered);
+                holder.children[2].firstChild.textContent = String(Math.max(0, total - filtered));
+            } else if (key === 'data') {
+                let records = [];
+                try {
+                    if (typeof analyticsRecords === 'function') records = analyticsRecords() || [];
+                } catch (_) {
+                    records = [];
+                }
+                const seconds = records.reduce((sum, item) => sum + (Number(item && (item.seconds || item.duration)) || 0), 0);
+                const unfinished = records.filter(item => item && item.finished === false).length;
+                holder.children[0].firstChild.textContent = String(records.length);
+                holder.children[1].firstChild.textContent = seconds > 0 ? (seconds / 3600).toFixed(1) : '0';
+                holder.children[2].firstChild.textContent = String(unfinished);
+            }
+        };
+        const measurePlayHeight = () => {
+            const pane = body.querySelector('.avx-pane[data-pane="play"]');
+            if (!pane) return 0;
+            const wasOn = pane.classList.contains('is-on');
+            if (!wasOn) {
+                pane.style.position = 'absolute';
+                pane.style.visibility = 'hidden';
+                pane.classList.add('is-on');
+            }
+            const h = Math.ceil(pane.getBoundingClientRect().height);
+            if (!wasOn) {
+                pane.classList.remove('is-on');
+                pane.style.position = '';
+                pane.style.visibility = '';
+            }
+            return h;
+        };
+        const lockBodyHeight = () => {
+            const h = measurePlayHeight();
+            if (!h) return;
+            const cs = window.getComputedStyle(body);
+            const pad = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0);
+            const total = Math.ceil(h + pad);
+            body.style.minHeight = total + 'px';
+            body.style.maxHeight = total + 'px';
+        };
+        const selectTab = key => {
+            if (!AVX_TABS.some(tab => tab.key === key)) return;
+            currentTab = key;
+            for (const button of tabs.children) button.classList.toggle('is-on', button.dataset.tab === key);
+            for (const pane of body.children) pane.classList.toggle('is-on', pane.dataset.pane === key);
+            body.scrollTop = 0;
+            syncRangeFills(body);
+            paintKpis(key);
+            lockBodyHeight();
+        };
+        state.panelSelectTab = selectTab;
+        for (const tab of AVX_TABS) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'avx-tab';
+            button.dataset.tab = tab.key;
+            button.innerHTML = `<svg viewBox="0 0 24 24">${tab.icon}</svg><span>${tab.label}</span>`;
+            button.addEventListener('click', () => {
+                tabPickedByUser = true;
+                selectTab(tab.key);
+            });
+            tabs.appendChild(button);
+        }
         const layoutPanel = () => {
             const box = viewportBox();
-            const panelWidth = panel.offsetWidth || PANEL_WIDTH;
-            const maxLeft = Math.max(0, box.w - panelWidth);
-            const currentLeft = Number.isFinite(panel.offsetLeft) ? panel.offsetLeft : Number(settings.panelX) || 0;
-            const left = clamp(currentLeft, 0, maxLeft);
-            panel.style.left = `${left}px`;
-            settings.panelX = left;
-            const anchor = clamp(settings.panelY, 0, Math.max(0, box.h - 60));
-            const headerHeight = header.offsetHeight || 34;
-            const contentHeight = settings.isMinimized ? 0 : collapsibleInner.scrollHeight;
-            const maxTop = Math.max(0, box.h - (headerHeight + contentHeight) - 4);
+            const width = panel.offsetWidth || PANEL_WIDTH;
+            const height = panel.offsetHeight || 60;
             panel.style.bottom = 'auto';
-            panel.style.top = `${clamp(anchor, 0, maxTop)}px`;
+            panel.style.left = `${clamp(Number(settings.panelX) || 0, 0, Math.max(0, box.w - width))}px`;
+            panel.style.top = `${clamp(Number(settings.panelY) || 0, 0, Math.max(0, box.h - height))}px`;
         };
         state.layoutPanel = layoutPanel;
+        window.addEventListener('resize', () => { lockBodyHeight(); });
         const togglePanel = collapsed => {
             settings.isMinimized = collapsed;
             panel.classList.toggle('panel-collapsed', collapsed);
             gearBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
             gearBtn.title = collapsed ? '展开设置面板' : '折叠设置面板';
+            if (!collapsed) {
+                panel.style.minWidth = '';
+                panel.style.width = '';
+            }
             store.set('isMinimized', collapsed);
             layoutPanel();
+            syncRangeFills(panel);
         };
         gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
-        const { keysRow } = buildPanelKeysRow();
-        const audioRow = buildPanelAudioRow();
-        const actionRow = buildPanelActionRow(panel, layoutPanel);
+
+        const keysInfo = buildPanelKeysRow();
+        const { resetPosBtn, btnClearLib, btnPlatform, btnSave, btnBackup } = buildPanelActionRow(panel, layoutPanel);
         const subtitlePanel = buildSubtitlePanel(panel);
+        setCollapsed(subtitlePanel, false);
         const sliderRow = buildPanelSliderRow();
-        const { loginToggleBtn, loginPanel, subToggleBtn, toggleSliderBtn, filterToggleBtn, filterPanel, mobileToggleBtn, mobilePanel } = buildPanelCollapseToggles(sliderRow, subtitlePanel);
-        state.logEl = document.createElement('div');
-        state.logEl.className = 'panel-status-log';
-        footer.appendChild(state.logEl);
-        flushPendingLogs(state.logEl);
-        body.append(keysRow, audioRow, actionRow, loginToggleBtn, loginPanel, subToggleBtn, subtitlePanel, toggleSliderBtn, sliderRow, filterToggleBtn, filterPanel);
-        if (AV_PLATFORM.isMobile) body.append(mobileToggleBtn, mobilePanel);
-        const hint = document.createElement('div');
-        hint.className = 'panel-hint';
-        hint.textContent = '（点标题栏的齿轮可显示 / 隐藏本菜单）';
-        collapsibleInner.append(hint, body, footer);
-        panel.append(header, collapsible);
+        setCollapsed(sliderRow, false);
+        const { loginPanel, filterPanel, mobilePanel } = buildPanelCollapseToggles();
+
+        panel.append(capsule, header, tabs, body, foot, logEl);
+        if (settings.isMinimized) panel.classList.add('panel-collapsed');
         if (settings.hideMenu) panel.classList.add('panel-menu-hidden');
+
+    const avxLbl = (label, help) => {
+        const lbl = avxEl('div', 'avx-lbl');
+        lbl.appendChild(avxEl('b', '', label));
+        if (help) lbl.appendChild(avxEl('small', '', help));
+        return lbl;
+    };
+    const avxSwitchRow = (label, help, on, cb, tight) => {
+        const row = avxEl('div', tight ? 'avx-row avx-row--tight' : 'avx-row');
+        row.appendChild(avxLbl(label, help));
+        const sw = avxEl('button', 'avx-sw');
+        sw.type = 'button';
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-checked', on ? 'true' : 'false');
+        sw.classList.toggle('is-on', Boolean(on));
+        sw.addEventListener('click', event => {
+            event.stopPropagation();
+            const next = !sw.classList.contains('is-on');
+            sw.classList.toggle('is-on', next);
+            sw.setAttribute('aria-checked', next ? 'true' : 'false');
+            cb(next);
+        });
+        row.appendChild(sw);
+        return row;
+    };
+    const avxSlider = (label, unit, value, min, max, step, format, onInput) => {
+        const wrap = avxEl('div', 'avx-sl');
+        const head = avxEl('div', 'avx-sl-h');
+        const title = avxEl('b', '', unit ? label + ' <span class="avx-unit">' + unit + '</span>' : label);
+        const num = avxEl('span', 'avx-num', format(value));
+        const range = document.createElement('input');
+        range.type = 'range';
+        range.className = 'avx-range';
+        range.min = min;
+        range.max = max;
+        range.step = step;
+        range.value = value;
+        const paint = v => {
+            const pct = ((Number(v) - Number(min)) / (Number(max) - Number(min))) * 100;
+            range.style.setProperty('--pct', `${Math.max(0, Math.min(100, pct))}%`);
+            num.textContent = format(v);
+        };
+        paint(value);
+        range.addEventListener('input', () => {
+            const v = Number.parseFloat(range.value);
+            paint(v);
+            onInput(v);
+        });
+        head.append(title, num);
+        wrap.append(head, range);
+        return { wrap, range, num, paint };
+    };
+    const playPane = paneOf('play');
+    const rateBox = avxSlider('加速倍率', '×', settings.accelerationRate, SPEED_MIN, SPEED_MAX, 0.1,
+        value => `${Number(value).toFixed(1)}×`,
+        value => {
+            settings.accelerationRate = clamp(Number(value) || 1, SPEED_MIN, SPEED_MAX);
+            paintCapRate();
+        });
+    state.panelPaintRate = paintCapRate;
+    const speedCard = avxCard('临时加速', `按住 ${String(settings.keys.accelerate || 'z').toUpperCase()}`);
+    speedCard.append(
+        avxSwitchRow('按住加速键提速', '松开立即恢复原速度', settings.holdAccelerate, on => {
+            settings.holdAccelerate = on;
+            store.set('holdAccelerate', on);
+        }),
+        rateBox.wrap,
+        keysInfo.keysRow
+    );
+    playPane.appendChild(speedCard);
+
+    const behaveCard = avxCard('播放行为', '');
+    const skipBox = avxSlider('快进步长', 's', settings.skipTime, SKIP_MIN, SKIP_MAX, 1,
+        value => `${Math.round(Number(value))}s`,
+        value => {
+            settings.skipTime = clamp(Number(value) || 5, SKIP_MIN, SKIP_MAX);
+        });
+    behaveCard.append(
+        avxSwitchRow('自动最高清晰度', '仅 Wi-Fi / 宽带下生效', autoMaxQualityEnabled(), on => {
+            store.set(AUTO_QUALITY_KEY, on ? '1' : '0');
+            if (on) setupAutoMaxQuality(document.querySelector('video'));
+            log(on ? '🎚️ 自动最高清晰度已开启' : '🎚️ 自动最高清晰度已关闭');
+        }),
+        avxSwitchRow('进度条关键帧预览', '数据来自 whos.tv', settings.framesPreview, on => {
+            settings.framesPreview = on;
+            store.set('whosFrames', on ? '1' : '0');
+            removeFramePreview();
+            if (on) {
+                setupFramePreview(document.querySelector('video'));
+                log('🎞️ 关键帧预览已开启');
+            } else {
+                log('🎞️ 关键帧预览已关闭');
+            }
+        }),
+        skipBox.wrap
+    );
+    playPane.appendChild(behaveCard);
+
+        const subPane = paneOf('sub');
+        const srcCard = avxCard('在线字幕源', `${SUBTITLE_SOURCES.length} 个源`);
+        const srcChips = avxEl('div', 'avx-chips');
+        for (const source of SUBTITLE_SOURCES) {
+            const chip = avxEl('button', 'avx-chip', source.label);
+            chip.type = 'button';
+            chip.dataset.source = source.key;
+            chip.title = `在 ${source.label} 搜索当前番号`;
+            chip.addEventListener('click', () => searchSubtitleSource(source.key, chip));
+            srcChips.appendChild(chip);
+        }
+        srcCard.appendChild(srcChips);
+        subPane.appendChild(srcCard);
+
+        const styleCard = avxCard('样式与时间轴', '按站点独立记忆');
+        styleCard.append(
+            createSettingSlider('字幕偏移', 'subtitleOffset', OFFSET_MIN, OFFSET_MAX, 0.5, applySubtitleOffset, value => `${value}s`),
+            createSettingSlider('字幕字号', 'subtitleFontSize', FONT_SIZE_MIN, FONT_SIZE_MAX, 1, applySubtitleStyle, value => `${value}px`),
+            createSettingSlider('字幕高度', 'subtitleBottom', SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX, 1, applySubtitleStyle, value => `${value}%`)
+        );
+        subPane.appendChild(styleCard);
+
+        const subBtns = avxEl('div', 'avx-btns');
+        const localInput = panel.querySelector('input[type="file"]');
+        const btnLocal = avxBtn('加载本地', { variant: 'ghost', block: true, onClick: () => { if (localInput) localInput.click(); } });
+        const btnClear = avxBtn('清除字幕', { variant: 'ghost', block: true, onClick: () => clearSubtitles() });
+        const btnResetOffset = avxBtn('重置偏移', {
+            variant: 'ghost',
+            block: true,
+            onClick: () => {
+                applySubtitleOffset(0);
+                store.remove(siteOffsetKey());
+                log(`🧹 已重置 ${IS_JABLE ? 'Jable' : 'MissAV'} 本站偏移为 0`);
+                selectTab('sub');
+            }
+        });
+        subBtns.append(btnLocal, btnClear, btnResetOffset);
+        subPane.appendChild(subBtns);
+
+        const audioPane = paneOf('audio');
+        const gainCard = avxCard('音量增益', audioGainText(settings.audioGain));
+        const gainMeta = gainCard.querySelector('.avx-card-h span');
+        const gainSlider = avxSlider('增益倍数', '%', settings.audioGain, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX, AUDIO_GAIN_STEP,
+            value => audioGainText(value),
+            value => {
+                settings.audioGain = clamp(Number(value) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
+                if (gainMeta) gainMeta.textContent = audioGainText(settings.audioGain);
+                audioPaintPanel();
+                if (typeof audioApplyGainLive === 'function' && !audioApplyGainLive()) scheduleAudioGainApply();
+            });
+        gainCard.appendChild(gainSlider.wrap);
+        const presetRow = avxEl('div', 'avx-chips av-audio-presets');
+        for (const preset of AUDIO_GAIN_PRESETS) {
+            const chip = avxEl('button', 'avx-chip', audioGainText(preset));
+            chip.type = 'button';
+            chip.dataset.gain = String(preset);
+            chip.addEventListener('click', () => {
+                settings.audioGain = preset;
+                store.set(siteAudioKey('Gain'), preset);
+                if (gainMeta) gainMeta.textContent = audioGainText(preset);
+                audioPaintPanel();
+                applyAudioGainFromUI();
+            });
+            presetRow.appendChild(chip);
+        }
+        gainCard.appendChild(presetRow);
+        audioPane.appendChild(gainCard);
+        state.audioSlider = gainSlider.range;
+        state.audioSliderValue = gainSlider.num;
+        state.audioSliderWrap = presetRow;
+
+        const routeCard = avxCard('声音设备路由', 'Chrome 110+');
+        routeCard.appendChild(avxSwitchRow('启用路由', '切换站点互不影响', Boolean(settings.audioRoute), on => {
+            settings.audioRoute = on;
+            audioApplySink(audioActiveVideo(), { silent: true });
+            audioSetStatus(audioDefaultStatus(), on ? '点「保存」写入本站配置' : '已停用声音设备路由');
+        }));
+        const devRow = avxEl('div', 'avx-row');
+        devRow.appendChild(avxLbl('当前设备', settings.audioRoute ? '跟随本站配置' : '系统默认输出'));
+        devRow.appendChild(avxBtn('选择', { variant: 'ghost', small: true, block: false, onClick: () => openAudioWindow() }));
+        routeCard.appendChild(devRow);
+        routeCard.appendChild(avxEl('div', 'avx-note', '音频增益按站点独立保存；设备路由需浏览器支持 setSinkId。'));
+        audioPane.appendChild(routeCard);
+        const audioState = avxEl('div', 'av-audio-state');
+        audioState.style.display = 'none';
+        audioPane.appendChild(audioState);
+        state.audioStateEl = audioState;
+
+        const audioBtns = avxEl('div', 'avx-btns');
+        audioBtns.append(
+            avxBtn('授权设备', { variant: 'ghost', block: true, onClick: () => audioRequestPermission() }),
+            avxBtn('测试音', { variant: 'ghost', block: true, onClick: () => audioTestTone() }),
+            avxBtn('保存', { variant: 'primary', block: true, onClick: () => audioSaveSettings() })
+        );
+        audioPane.appendChild(audioBtns);
+
+        const filterPane = paneOf('filter');
+        const filterKpis = avxKpis([['0', '本页条目'], ['0', '已过滤'], ['0', '剩余可见']]);
+        filterPane.appendChild(filterKpis);
+        const switchCard = avxCard('过滤开关', '');
+        const strip = filterPanel.querySelector('.av-filter-strip');
+        if (strip) switchCard.appendChild(strip);
+        filterPane.appendChild(switchCard);
+        const blackCard = avxCard('黑名单规则', '逗号或换行分隔');
+        const textSlide = filterPanel.querySelector('.av-filter-text-slide');
+        const durationRow = filterPanel.querySelector('.av-filter-scroll > .av-text-row');
+        if (textSlide) blackCard.appendChild(textSlide);
+        if (durationRow) {
+            durationRow.className = 'avx-field';
+            const dRange = durationRow.querySelector('input[type="range"]');
+            if (dRange) dRange.className = 'avx-range';
+            blackCard.appendChild(durationRow);
+        }
+        filterPane.appendChild(blackCard);
+        const rescanBtn = filterPanel.querySelector('.av-filter-actions > button');
+        if (rescanBtn) {
+            const rescanWrap = avxEl('div', 'avx-btns');
+            rescanBtn.classList.remove('btn-ghost');
+            rescanBtn.textContent = '立即重新过滤';
+            rescanWrap.appendChild(rescanBtn);
+            filterPane.appendChild(rescanWrap);
+        }
+
+        const dataPane = paneOf('data');
+        dataPane.appendChild(avxKpis([['0', '本月观看'], ['0', '累计小时'], ['0', '记录条目']]));
+        const cockpit = typeof createCockpitLink === 'function' ? createCockpitLink() : null;
+        if (cockpit) {
+            cockpit.classList.add('avx-btn', 'avx-btn--primary', 'avx-btn--block');
+            cockpit.textContent = '打开观影数据大屏';
+            const cockpitWrap = avxEl('div', 'avx-btns');
+            cockpitWrap.appendChild(cockpit);
+            dataPane.appendChild(cockpitWrap);
+        }
+        const favCard = avxCard('收藏与备份', '');
+        const mkActionRow = (label, desc, btnLabel, node) => {
+            const row = avxEl('div', 'avx-row avx-row--tight');
+            const lbl = avxEl('div', 'avx-lbl');
+            lbl.append(avxEl('b', '', label), avxEl('small', '', desc));
+            node.textContent = btnLabel;
+            node.classList.add('avx-btn', 'avx-btn--sm');
+            row.append(lbl, node);
+            return row;
+        };
+        const favBtn = btnFavFromKeys();
+        favCard.append(
+            mkActionRow('女优收藏', `${IS_JABLE ? 'Jable' : 'MissAV'} 站内收藏页`, '打开', favBtn),
+            mkActionRow('收藏批量备份', '名称 / 番号 / 封面打包下载', '备份', btnBackup),
+            mkActionRow('清空本站已看库', '只影响当前站点', '清空', btnClearLib)
+        );
+        dataPane.appendChild(favCard);
+
+        const setupPane = paneOf('setup');
+        const lookCard = avxCard('面板外观', '实时预览');
+        lookCard.appendChild(sliderRow);
+        setupPane.appendChild(lookCard);
+        const platCard = avxCard('运行平台', '');
+        const platRow = avxEl('div', 'avx-chips');
+        const mkPlat = (label, mode) => {
+            const chip = avxEl('button', 'avx-chip' + (AV_PLATFORM.forced === mode ? ' is-on' : ''), label);
+            chip.type = 'button';
+            chip.addEventListener('click', () => {
+                try {
+                    if (mode === 'auto') localStorage.removeItem(PLATFORM_MODE_KEY);
+                    else localStorage.setItem(PLATFORM_MODE_KEY, mode);
+                } catch (_) {
+                    log('⚠️ 当前环境无法写入本地存储，平台档位未保存');
+                    return;
+                }
+                log('🔄 平台档位已切换，正在刷新…');
+                location.reload();
+            });
+            return chip;
+        };
+        platRow.append(mkPlat('自动识别', 'auto'), mkPlat('强制移动端', 'mobile'), mkPlat('强制桌面端', 'desktop'));
+        platCard.appendChild(platRow);
+        setupPane.appendChild(platCard);
+        const loginCard = avxCard('站点账号', settings.autoLogin ? '自动登录 开' : '自动登录 关');
+        loginCard.appendChild(loginPanel);
+        setupPane.appendChild(loginCard);
+        if (AV_PLATFORM.isMobile) {
+            const mobileCard = avxCard('移动端增强', '桌面端隐藏');
+            mobileCard.appendChild(mobilePanel);
+            setupPane.appendChild(mobileCard);
+        }
+        const quickCard = avxCard('快捷操作', '设置随改随存');
+        const actionRow = avxEl('div', 'avx-actions');
+        resetPosBtn.classList.add('avx-btn', 'avx-btn--lg', 'avx-btn--ghost');
+        btnSave.classList.add('avx-btn', 'avx-btn--lg', 'avx-btn--primary');
+        resetPosBtn.innerHTML = avxSvg('<path d="M3 12a9 9 0 1 0 2.6-6.4"/><path d="M3 4v5h5"/>', { w: 1.9 }) + '<span>重置位置</span>';
+        btnSave.innerHTML = avxSvg('<path d="m5 12 5 5 9-10"/>', { w: 1.9 }) + '<span>保存设置</span>';
+        actionRow.append(resetPosBtn, btnSave);
+        quickCard.appendChild(actionRow);
+        quickCard.appendChild(avxEl('div', 'avx-note', '保存设置：把当前所有开关与数值写入浏览器存储，下次打开自动恢复。重置位置：面板回到左上角默认位置。'));
+        setupPane.insertBefore(quickCard, setupPane.firstChild);
+
+        foot.addEventListener('click', () => logEl.classList.toggle('log-open'));
+        if (typeof MutationObserver === 'function') {
+            const logWatch = new MutationObserver(() => {
+                const last = logEl.lastElementChild;
+                if (!last) return;
+                const time = last.querySelector('.log-time');
+                if (time) footTime.textContent = time.textContent || '';
+                const body2 = (last.textContent || '').replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+                footMsg.textContent = body2;
+            });
+            logWatch.observe(logEl, { childList: true });
+            pageLifecycle.push(() => logWatch.disconnect());
+        }
+
         getUiLayer().appendChild(panel);
         applyUiStyles();
         const persistAnchor = () => {
-            settings.panelY = Math.max(0, Math.round(header.getBoundingClientRect().top));
+            settings.panelX = panel.offsetLeft;
+            settings.panelY = Math.max(0, Math.round(panel.offsetTop));
+            store.set('panelX', settings.panelX);
             store.set('panelY', settings.panelY);
             layoutPanel();
         };
         makeDraggable(panel, header, { x: 'panelX', y: 'panelY' }, persistAnchor);
+        makeDraggable(panel, capsule, { x: 'panelX', y: 'panelY' }, persistAnchor);
         clampPanelPosition(panel);
         layoutPanel();
         registerPanelMenus();
@@ -3339,21 +5314,36 @@
                     layoutPanel();
                 }));
             });
-            state.panelLayoutObserver.observe(collapsibleInner);
+            state.panelLayoutObserver.observe(panel);
             pageLifecycle.push(() => state.panelLayoutObserver?.disconnect());
         }
         window.addEventListener('resize', () => {
-            const box = viewportBox();
-            panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, box.w - PANEL_WIDTH))}px`;
+            viewportInvalidate();
             layoutPanel();
         });
         panel.addEventListener('input', event => {
             const target = event.target;
             if (target && target.type === 'range') syncRangeFill(target);
         });
+        const hasVideoNow = Boolean(document.querySelector('video') || state.video);
+        selectTab(hasVideoNow ? 'play' : 'filter');
+        const tabTimer = setTimeout(() => {
+            if (tabPickedByUser) return;
+            if (currentTab === 'filter' && (document.querySelector('video') || state.video)) selectTab('play');
+        }, 2600);
+        pageLifecycle.push(() => clearTimeout(tabTimer));
         syncRangeFills(panel);
         log(`▶️ 系统初始化完成（${AV_PLATFORM.mode === 'mobile' ? '移动端' : '桌面端'}档位 · ${AV_PLATFORM.forced === 'auto' ? `自动识别 评分${AV_PLATFORM.score}` : '手动强制'}）`);
         autoLogin();
+
+        function btnFavFromKeys() {
+            const node = avxEl('button', 'avx-btn avx-btn--sm');
+            node.type = 'button';
+            node.textContent = '打开';
+            node.title = '在新标签页打开本网站的女优收藏页';
+            node.addEventListener('click', openActressPage);
+            return node;
+        }
     }
     const isLoopMenuOpen = () => openQuickMenus().length > 0;
     let quickMetricsVideo = null;
@@ -7119,6 +9109,1323 @@
         clampBackupPosition(win);
         backupLog(`📌 当前收藏页猜测：${favoriteSourceGuess()}`);
     }
+    function actressEntryUrl(item) {
+        const url = String(item && item.url ? item.url : '');
+        if (url && /\/(?:actresses|models)\//i.test(url)) return url;
+        return actressSiteUrl(item);
+    }
+    function actressApplyAvatar(avatarEl, name, dataUrl) {
+        if (!avatarEl || !dataUrl) return;
+        avatarEl.classList.add('has-photo');
+        avatarEl.replaceChildren();
+        const img = document.createElement('img');
+        img.alt = name;
+        img.src = dataUrl;
+        img.decoding = 'async';
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        avatarEl.appendChild(img);
+    }
+    function actressAvatarHeaders(url) {
+        return /javbus\.com/i.test(String(url || '')) ? { Referer: 'https://www.javbus.com/' } : null;
+    }
+    function actressAvatarSource(profile) {
+        if (!profile) return '';
+        if (profile.avatar) return profile.avatar;
+        return profile.busAvatar ? profile.busAvatar : '';
+    }
+    function actressPaintAvatar(avatarEl, name) {
+        const profile = actressProfileOf(name);
+        const url = actressAvatarSource(profile);
+        if (!url) return Promise.resolve('');
+        const cached = actressAvatarCached(url);
+        if (cached) {
+            actressApplyAvatar(avatarEl, name, cached);
+            return Promise.resolve(cached);
+        }
+        return actressAvatarFind(url, actressAvatarHeaders(url)).then(dataUrl => {
+            if (dataUrl) actressApplyAvatar(avatarEl, name, dataUrl);
+            return dataUrl;
+        });
+    }
+    function actressStarRow(name, onChange) {
+        const wrap = document.createElement('div');
+        wrap.className = 'av-actress-stars';
+        const paint = value => {
+            [...wrap.children].forEach((star, index) => star.classList.toggle('is-on', index < value));
+        };
+        for (let index = 1; index <= 5; index += 1) {
+            const star = document.createElement('span');
+            star.className = 'av-star';
+            star.textContent = '★';
+            star.title = `${index} 星`;
+            star.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const prev = actressMetaOf(name).rating;
+                const next = prev === index ? 0 : index;
+                actressMetaPatch(name, { rating: next });
+                paint(next);
+                if (onChange) onChange(next);
+            });
+            wrap.appendChild(star);
+        }
+        paint(actressMetaOf(name).rating);
+        return wrap;
+    }
+    function actressTagLine(name) {
+        const tags = actressMetaOf(name).tags;
+        if (!tags.length) return null;
+        const wrap = document.createElement('div');
+        wrap.className = 'av-actress-tagline';
+        for (const tag of tags.slice(0, 3)) {
+            const chip = document.createElement('span');
+            chip.className = 'av-actress-tag';
+            chip.textContent = tag;
+            wrap.appendChild(chip);
+        }
+        if (tags.length > 3) {
+            const more = document.createElement('span');
+            more.className = 'av-actress-tag is-more';
+            more.textContent = `+${tags.length - 3}`;
+            wrap.appendChild(more);
+        }
+        return wrap;
+    }
+    function actressMetaLine(item) {
+        const parts = [];
+        const added = Number(item.addAt) || 0;
+        parts.push(added ? `${actressFavAgo(added)}加入` : '已收藏');
+        const stats = actressWatchStats(item.name);
+        if (stats.works > 0) {
+            parts.push(`已看 ${stats.works} 部`);
+            if (stats.seconds >= 60) parts.push(formatDuration(stats.seconds));
+        } else {
+            parts.push('未看过');
+        }
+        const profile = actressProfileOf(item.name);
+        if (profile && profile.busWorks) parts.push(`JavBus ${profile.busWorks} 部`);
+        else if (profile && profile.works) parts.push(`收录 ${profile.works} 部`);
+        return parts.join(' · ');
+    }
+    function actressFavRow(site, item) {
+        const row = document.createElement('div');
+        row.className = 'av-actress-row';
+        const folded = foldActressName(item.name);
+        row.dataset.fold = folded;
+        row.dataset.name = item.name;
+        row.dataset.addat = String(Number(item.addAt) || 0);
+        row.dataset.tags = actressMetaOf(item.name).tags.map(tag => tag.toLowerCase()).join(',');
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'av-actress-check';
+        check.dataset.fold = folded;
+        check.title = '选择这位女优，以便批量操作';
+        check.setAttribute('aria-label', `选择 ${item.name}`);
+        const avatar = document.createElement('span');
+        avatar.className = 'av-actress-avatar';
+        avatar.dataset.fold = folded;
+        avatar.textContent = (item.name || '?').slice(0, 1).toUpperCase();
+        actressPaintAvatar(avatar, item.name);
+        const info = document.createElement('div');
+        info.className = 'av-actress-info';
+        const name = document.createElement('a');
+        name.className = 'av-actress-name';
+        name.textContent = item.name;
+        name.href = actressEntryUrl(item);
+        name.target = '_blank';
+        name.rel = 'noopener noreferrer';
+        name.title = `打开 ${item.name} 的女优作品列表`;
+        const meta = document.createElement('div');
+        meta.className = 'av-actress-meta';
+        meta.textContent = actressMetaLine(item);
+        info.append(name, meta, actressStarRow(item.name));
+        const tagLine = actressTagLine(item.name);
+        if (tagLine) info.appendChild(tagLine);
+        const social = document.createElement('span');
+        social.className = 'av-actress-social';
+        social.dataset.name = item.name;
+        const idle = document.createElement('span');
+        idle.className = 'av-actress-social-idle';
+        idle.textContent = '···';
+        social.appendChild(idle);
+        const actions = document.createElement('span');
+        actions.className = 'av-actress-actions';
+        const detail = document.createElement('button');
+        detail.type = 'button';
+        detail.className = 'av-actress-detail';
+        detail.textContent = '详情';
+        detail.title = `查看 ${item.name} 的档案与观看记录`;
+        detail.addEventListener('click', () => openActressSheet(site, item));
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'av-actress-del';
+        del.textContent = '移除';
+        del.title = `从${itemLabel(site)}收藏中移除`;
+        del.addEventListener('click', () => {
+            actressFavRemove(site, item.name);
+            log(`🗑 已移除女优收藏：${item.name}`);
+        });
+        actions.append(detail, del);
+        row.append(check, avatar, info, social, actions);
+        return row;
+    }
+    function actressSheetStat(labelText, valueText) {
+        const cell = document.createElement('div');
+        cell.className = 'av-sheet-stat';
+        const value = document.createElement('b');
+        value.textContent = valueText;
+        const label = document.createElement('span');
+        label.textContent = labelText;
+        cell.append(value, label);
+        return cell;
+    }
+    function actressSheetSection(labelText) {
+        const wrap = document.createElement('div');
+        wrap.className = 'av-sheet-section';
+        const label = document.createElement('div');
+        label.className = 'av-sheet-label';
+        label.textContent = labelText;
+        wrap.appendChild(label);
+        return wrap;
+    }
+    function actressSheetLinks(item) {
+        const profile = actressProfileOf(item.name) || {};
+        const wrap = document.createElement('div');
+        wrap.className = 'av-sheet-links';
+        const local = document.createElement('a');
+        local.className = 'av-sheet-link';
+        local.href = actressEntryUrl(item);
+        local.target = '_blank';
+        local.rel = 'noopener noreferrer';
+        local.textContent = `${itemLabel(item.site || SITE_TAG)} 作品列表`;
+        wrap.appendChild(local);
+        for (const link of actressExternalLinks(item.name, profile)) {
+            const anchor = document.createElement('a');
+            anchor.className = 'av-sheet-link';
+            anchor.href = link.href;
+            anchor.target = '_blank';
+            anchor.rel = 'noopener noreferrer';
+            anchor.textContent = link.label;
+            wrap.appendChild(anchor);
+        }
+        if (profile.twitter) wrap.appendChild(makeSocialIcon(profile.twitter, 'social-badge social-x', `Twitter / X: ${item.name}`, socialIconXDataUrl, '𝕏'));
+        if (profile.instagram) wrap.appendChild(makeSocialIcon(profile.instagram, 'social-badge social-ig', `Instagram: ${item.name}`, () => SOCIAL_ICON_IG, '📷'));
+        return wrap;
+    }
+    function actressSheetTags(name, host) {
+        const chips = document.createElement('div');
+        chips.className = 'av-sheet-tags';
+        const input = document.createElement('input');
+        input.className = 'av-sheet-input';
+        input.type = 'text';
+        input.placeholder = '输入标签后回车（如：短发 / 演技派）';
+        input.maxLength = 16;
+        host.append(chips, input);
+        const paint = () => {
+            chips.replaceChildren();
+            const tags = actressMetaOf(name).tags;
+            for (const tag of tags) {
+                const chip = document.createElement('span');
+                chip.className = 'av-sheet-tag';
+                const text = document.createElement('span');
+                text.textContent = tag;
+                const kill = document.createElement('button');
+                kill.type = 'button';
+                kill.textContent = '×';
+                kill.title = `移除标签 ${tag}`;
+                kill.addEventListener('click', () => {
+                    const next = actressMetaOf(name).tags.filter(item => item !== tag);
+                    actressMetaPatch(name, { tags: next });
+                    paint();
+                    refreshActressRows(name);
+                });
+                chip.append(text, kill);
+                chips.appendChild(chip);
+            }
+        };
+        input.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            const value = input.value.trim();
+            if (!value) return;
+            const tags = actressMetaOf(name).tags.concat([value]);
+            actressMetaPatch(name, { tags });
+            input.value = '';
+            paint();
+            refreshActressRows(name);
+        });
+        paint();
+    }
+    function refreshActressRows(name) {
+        const folded = foldActressName(name);
+        if (!folded) return;
+        for (const row of document.querySelectorAll('.av-actress-row')) {
+            if (row.dataset.fold !== folded) continue;
+            const meta = row.querySelector('.av-actress-meta');
+            const item = { name: row.dataset.name || name, addAt: Number(row.dataset.addat) || 0 };
+            if (meta) meta.textContent = actressMetaLine(item);
+        }
+    }
+    function actressSheetTimeline(item) {
+        const stats = actressWatchStats(item.name);
+        const wrap = document.createElement('div');
+        wrap.className = 'av-sheet-timeline';
+        if (!stats.items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'av-actress-meta';
+            empty.textContent = '本机还没有这位女优的观看记录。看完一部后会自动出现在这里。';
+            wrap.appendChild(empty);
+            return wrap;
+        }
+        for (const work of stats.items) {
+            const link = document.createElement('a');
+            link.className = 'av-sheet-work';
+            link.href = work.url || '#';
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            const code = document.createElement('b');
+            code.textContent = work.code || '无番号';
+            const title = document.createElement('span');
+            title.textContent = work.title || '';
+            title.style.whiteSpace = 'normal';
+            title.style.flex = '1 1 auto';
+            title.style.minWidth = '0';
+            title.style.color = '#cbd5e1';
+            const when = document.createElement('span');
+            when.textContent = formatRecordDate(work.watchedAt);
+            link.append(code, title, when);
+            wrap.appendChild(link);
+        }
+        return wrap;
+    }
+    function closeActressSheet() {
+        const sheet = state.actressSheet;
+        if (!sheet) return;
+        state.actressSheet = null;
+        sheet.remove();
+        document.removeEventListener('keydown', closeActressSheet.onKey, true);
+    }
+    function openActressSheet(site, item) {
+        closeActressSheet();
+        const sheet = document.createElement('div');
+        sheet.className = 'av-actress-sheet';
+        const card = document.createElement('div');
+        card.className = 'av-actress-sheet-card';
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-modal', 'true');
+        sheet.appendChild(card);
+        sheet.addEventListener('click', event => {
+            if (event.target === sheet) closeActressSheet();
+        });
+        const onKey = event => {
+            if (event.key !== 'Escape') return;
+            event.stopPropagation();
+            event.preventDefault();
+            closeActressSheet();
+        };
+        closeActressSheet.onKey = onKey;
+        document.addEventListener('keydown', onKey, true);
+        const profile = actressProfileOf(item.name);
+        const stats = actressWatchStats(item.name);
+        const head = document.createElement('div');
+        head.className = 'av-sheet-head';
+        const avatar = document.createElement('span');
+        avatar.className = 'av-sheet-avatar';
+        avatar.textContent = (item.name || '?').slice(0, 1).toUpperCase();
+        const avatarUrl = actressAvatarSource(profile);
+        if (avatarUrl) actressPaintAvatarTo(avatar, item.name, avatarUrl);
+        const names = document.createElement('div');
+        names.style.minWidth = '0';
+        names.style.flex = '1 1 auto';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'av-sheet-name';
+        nameEl.textContent = item.name;
+        const sub = document.createElement('div');
+        sub.className = 'av-sheet-sub';
+        const added = Number(item.addAt) || 0;
+        const paintSub = () => {
+            const info = actressProfileOf(item.name);
+            const aliases = info && Array.isArray(info.aliases) ? info.aliases : [];
+            const parts = [];
+            if (aliases.length) parts.push(`别名：${aliases.join(' / ')}`);
+            if (info && info.busWorks) parts.push(`JavBus ${info.busWorks} 部`);
+            else if (info && info.works) parts.push(`JavDB 收录 ${info.works} 部`);
+            if (added) parts.push(`${actressFavAgo(added)}加入收藏`);
+            sub.textContent = parts.join(' · ') || '本地档案，暂无站外数据';
+        };
+        paintSub();
+        names.append(nameEl, sub, actressStarRow(item.name));
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'av-sheet-close';
+        close.textContent = '✕';
+        close.title = '关闭';
+        close.addEventListener('click', () => closeActressSheet());
+        head.append(avatar, names, close);
+        card.appendChild(head);
+        const profileSection = actressSheetSection('女优信息');
+        const profileGrid = document.createElement('div');
+        profileGrid.className = 'av-sheet-stats';
+        profileSection.appendChild(profileGrid);
+        const profileHint = document.createElement('div');
+        profileHint.className = 'av-sheet-hint';
+        profileSection.appendChild(profileHint);
+        const profileRefresh = document.createElement('button');
+        profileRefresh.type = 'button';
+        profileRefresh.className = 'av-sheet-retry';
+        profileRefresh.textContent = '刷新档案';
+        profileRefresh.title = '重新从 JavBus 拉取生日、身型与影片数';
+        profileSection.appendChild(profileRefresh);
+        card.appendChild(profileSection);
+        const paintProfile = () => {
+            const info = actressProfileOf(item.name) || {};
+            profileGrid.replaceChildren();
+            const born = [info.birthday, info.age ? `${info.age} 岁` : ''].filter(Boolean).join(' · ');
+            if (born) {
+                const cell = actressSheetStat('出生', born);
+                cell.classList.add('is-wide');
+                profileGrid.appendChild(cell);
+            }
+            const shape = [info.height, info.cup ? `${info.cup} 杯` : '', info.bust, info.waist, info.hip].filter(Boolean).join(' · ');
+            if (shape) {
+                const cell = actressSheetStat('身型', shape);
+                cell.classList.add('is-wide');
+                profileGrid.appendChild(cell);
+            }
+            if (info.busWorks) profileGrid.appendChild(actressSheetStat('JavBus 影片', `${info.busWorks} 部`));
+            if (info.works) profileGrid.appendChild(actressSheetStat('JavDB 收录', `${info.works} 部`));
+            if (info.hobby) {
+                const cell = actressSheetStat('爱好', info.hobby);
+                cell.classList.add('is-wide');
+                profileGrid.appendChild(cell);
+            }
+            if (!profileGrid.children.length) {
+                const cell = actressSheetStat('档案', '暂未获取');
+                cell.classList.add('is-wide');
+                const strong = cell.querySelector('b');
+                if (strong) strong.classList.add('is-quiet');
+                profileGrid.appendChild(cell);
+            }
+            const faded = !info.busFetchedAt || Date.now() - info.busFetchedAt > INFO_CACHE_TTL * 7;
+            profileHint.textContent = info.busPath && !faded
+                ? `来源 JavBus · ${formatRecordDate(info.busFetchedAt)}更新`
+                : '数据来自 JavBus，含生日、年龄、身高、罩杯、三围与影片数；没有档案时点「刷新档案」。';
+        };
+        paintProfile();
+        const runProfileFetch = () => {
+            if (profileRefresh.dataset.busy === '1') return;
+            profileRefresh.dataset.busy = '1';
+            profileRefresh.disabled = true;
+            profileRefresh.textContent = '正在获取…';
+            Promise.allSettled([fetchActressBus(item.name)]).then(results => {
+                profileRefresh.dataset.busy = '';
+                profileRefresh.disabled = false;
+                profileRefresh.textContent = '刷新档案';
+                const info = actressProfileOf(item.name) || {};
+                if (info.busAvatar) actressPaintAvatarTo(avatar, item.name, info.busAvatar);
+                paintSub();
+                paintProfile();
+                if (state.actressPage) {
+                    const row = state.actressPage.querySelector(`.av-actress-row[data-fold="${CSS.escape(foldActressName(item.name))}"]`);
+                    if (row) respondActressRow(row, item.name);
+                }
+                const hit = results.some(entry => entry.status === 'fulfilled' && entry.value && (entry.value.busPath || entry.value.birthday || entry.value.works));
+                log(hit ? `📇 已更新 ${item.name} 的档案` : `⚠️ 未取到 ${item.name} 的档案`);
+            });
+        };
+        profileRefresh.addEventListener('click', runProfileFetch);
+        const knownBus = actressProfileOf(item.name) || {};
+        if (!knownBus.busFetchedAt) setTimeout(runProfileFetch, 140);
+        const statSection = actressSheetSection('观看统计');
+        const statGrid = document.createElement('div');
+        statGrid.className = 'av-sheet-stats';
+        statGrid.append(
+            actressSheetStat('已看部数', stats.works ? `${stats.works} 部` : '0 部'),
+            actressSheetStat('累计时长', stats.seconds >= 60 ? formatDuration(stats.seconds) : '—'),
+            actressSheetStat('最近观看', stats.lastAt ? formatRecordDate(stats.lastAt) : '—'),
+            actressSheetStat('本站收藏', added ? actressFavAgo(added) : '—')
+        );
+        statSection.appendChild(statGrid);
+        card.appendChild(statSection);
+        const linkSection = actressSheetSection('直达');
+        linkSection.appendChild(actressSheetLinks(item));
+        card.appendChild(linkSection);
+        const tagSection = actressSheetSection('标签');
+        const tagHost = document.createElement('div');
+        tagHost.className = 'av-sheet-tags';
+        tagSection.appendChild(tagHost);
+        const note = document.createElement('textarea');
+        note.className = 'av-sheet-input';
+        note.rows = 2;
+        note.maxLength = 240;
+        note.placeholder = '备注（只保存在本机）';
+        note.value = actressMetaOf(item.name).note;
+        note.addEventListener('change', () => {
+            actressMetaPatch(item.name, { note: note.value });
+        });
+        tagSection.appendChild(note);
+        card.appendChild(tagSection);
+        actressSheetTags(item.name, tagHost);
+        const workSection = actressSheetSection('最近观看');
+        workSection.appendChild(actressSheetTimeline(item));
+        card.appendChild(workSection);
+        state.actressSheet = sheet;
+        (state.actressPage || document.body).appendChild(sheet);
+        return sheet;
+    }
+    function actressPaintAvatarTo(host, name, url) {
+        if (!host || !url) return;
+        const cached = actressAvatarCached(url);
+        if (cached) {
+            actressApplyAvatar(host, name, cached);
+            host.classList.add('has-photo');
+            return;
+        }
+        actressAvatarFind(url, actressAvatarHeaders(url)).then(dataUrl => {
+            if (!dataUrl) return;
+            actressApplyAvatar(host, name, dataUrl);
+            host.classList.add('has-photo');
+        });
+    }
+    function actressFavAgo(stamp) {
+        const diff = Date.now() - Number(stamp || 0);
+        if (!Number.isFinite(diff) || diff < 0) return '刚刚';
+        const minute = 60000;
+        if (diff < minute) return '刚刚';
+        if (diff < 60 * minute) return `${Math.floor(diff / minute)} 分钟前`;
+        if (diff < 24 * 60 * minute) return `${Math.floor(diff / (60 * minute))} 小时前`;
+        return `${Math.floor(diff / (24 * 60 * minute))} 天前`;
+    }
+    function actressFavSyncKey(site) {
+        return `actressSyncAt@${site}`;
+    }
+    function actressFavSyncAt(site) {
+        const value = Number.parseFloat(historyStorageGet(actressFavSyncKey(site)) || '0');
+        return Number.isFinite(value) ? value : 0;
+    }
+    function actressFavMarkSync(site) {
+        historyStorageSet(actressFavSyncKey(site), String(Date.now()));
+    }
+    function actressSyncReturn() {
+        let target = '';
+        try {
+            target = sessionStorage.getItem('avSub:actressSyncReturn') || '';
+            sessionStorage.removeItem('avSub:actressSyncReturn');
+        } catch (error) {
+            debugLog(error);
+        }
+        if (!target) return false;
+        try {
+            const url = new URL(target);
+            url.hash = '#av-actress';
+            location.replace(url.href);
+            return true;
+        } catch (error) {
+            debugLog(error);
+            return false;
+        }
+    }
+    function fillActressSocial(host, name) {
+        if (!host || host.dataset.done === '1') return Promise.resolve();
+        host.dataset.done = '1';
+        return fetchActressSocial(name)
+            .then(social => {
+                const hasX = Boolean(social && social.twitter);
+                const hasIg = Boolean(social && social.instagram);
+                host.replaceChildren();
+                if (!hasX && !hasIg) {
+                    const idle = document.createElement('span');
+                    idle.className = 'av-actress-social-idle';
+                    idle.textContent = '无社交';
+                    idle.title = '未在 JavDB 找到这位女优的社交账号';
+                    host.appendChild(idle);
+                    return false;
+                }
+                if (hasX) host.appendChild(makeSocialIcon(social.twitter, 'social-badge social-x', `Twitter / X: ${name}`, socialIconXDataUrl, '𝕏'));
+                if (hasIg) host.appendChild(makeSocialIcon(social.instagram, 'social-badge social-ig', `Instagram: ${name}`, () => SOCIAL_ICON_IG, '📷'));
+                const row = host.closest ? host.closest('.av-actress-row') : null;
+                if (row) {
+                    respondActressRow(row, name);
+                }
+                return true;
+            })
+            .catch(error => {
+                debugLog(error, 'actress-social');
+                host.replaceChildren();
+                const idle = document.createElement('span');
+                idle.className = 'av-actress-social-idle';
+                idle.textContent = '无社交';
+                host.appendChild(idle);
+                return false;
+            });
+    }
+    function respondActressRow(row, name) {
+        if (!row || row.dataset.tags === undefined) return;
+        const tags = actressMetaOf(name).tags.map(tag => tag.toLowerCase()).join(',');
+        if (row.dataset.tags !== tags) row.dataset.tags = tags;
+        const avatarEl = row.querySelector('.av-actress-avatar');
+        if (avatarEl) actressPaintAvatar(avatarEl, name);
+        const metaEl = row.querySelector('.av-actress-meta');
+        if (metaEl) metaEl.textContent = actressMetaLine({ name, addAt: Number(row.dataset.addat) || 0 });
+    }
+    function loadActressSocials(host, onChange) {
+        const cells = [...host.querySelectorAll('.av-actress-social')];
+        if (!cells.length) return;
+        let index = 0;
+        let found = 0;
+        let settled = 0;
+        const lanes = 2;
+        const step = () => {
+            if (index >= cells.length) return;
+            const cell = cells[index];
+            index += 1;
+            fillActressSocial(cell, cell.dataset.name || '').then(hit => {
+                if (hit) found += 1;
+                settled += 1;
+                if (onChange) onChange(found, settled);
+                step();
+            });
+        };
+        for (let lane = 0; lane < lanes; lane += 1) step();
+    }
+    function actressPageMain() {
+        if (!state.actressPage) return null;
+        return state.actressPage.querySelector('.av-actress-main');
+    }
+    function refreshActressPage() {
+        const host = actressPageMain();
+        if (!host) return;
+        const site = SITE_TAG;
+        const list = actressFavRepair(site);
+        const label = itemLabel(site);
+        host.replaceChildren();
+        const card = document.createElement('section');
+        card.className = 'av-cockpit-card';
+        const head = document.createElement('div');
+        head.className = 'av-card-head';
+        const titleRow = document.createElement('div');
+        titleRow.className = 'av-card-title';
+        titleRow.append(iconSvg('<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>'));
+        const titleText = document.createElement('span');
+        titleText.textContent = `${label} 已收藏 ${list.length} 位女优`;
+        titleRow.appendChild(titleText);
+        const sub = document.createElement('div');
+        sub.className = 'av-card-subtitle';
+        sub.textContent = site === 'jable'
+            ? '打开任意 Jable 女优页，点女优名右侧的「收藏女优」即可加入。'
+            : '打开 MissAV 的女优收藏页后，脚本会自动把该页女优同步到这里。';
+        head.append(titleRow, sub);
+        const ops = document.createElement('div');
+        ops.className = 'av-actress-ops';
+        if (site === 'missav') {
+            const sync = document.createElement('button');
+            sync.type = 'button';
+            sync.className = 'av-btn';
+            sync.textContent = '重新同步收藏页';
+            sync.addEventListener('click', () => {
+                try {
+                    sessionStorage.setItem('avSub:actressSyncReturn', actressUrl());
+                } catch (error) {
+                    debugLog(error);
+                }
+                openCockpitTab('https://missav.ws/saved/actresses');
+            });
+            ops.appendChild(sync);
+        }
+        const openSite = document.createElement('button');
+        openSite.type = 'button';
+        openSite.className = 'av-btn';
+        openSite.textContent = site === 'jable' ? '打开 Jable' : '打开 MissAV';
+        openSite.addEventListener('click', () => openCockpitTab(site === 'jable' ? 'https://jable.tv/models/' : 'https://missav.ws/'));
+        ops.appendChild(openSite);
+        const status = document.createElement('div');
+        status.className = 'av-actress-status';
+        const syncAt = actressFavSyncAt(site);
+        if (site === 'missav') {
+            status.textContent = syncAt
+                ? `收藏列表已于 ${actressFavAgo(syncAt)}从 MissAV 收藏页同步。每次打开本页都会自动同步一次。`
+                : '正在等待首次同步。打开 MissAV 女优收藏页后，脚本会自动把该页女优同步过来。';
+            if (!syncAt) status.classList.add('is-warn');
+        } else {
+            status.textContent = 'Jable 没有官方女优收藏。请在任意 Jable 女优页点「收藏女优」加入，数据保存在本地。';
+        }
+        const kpis = document.createElement('div');
+        kpis.className = 'av-actress-kpis';
+        const kpiTotal = document.createElement('div');
+        kpiTotal.className = 'av-actress-kpi';
+        const kpiSocial = document.createElement('div');
+        kpiSocial.className = 'av-actress-kpi';
+        const kpiLatest = document.createElement('div');
+        kpiLatest.className = 'av-actress-kpi';
+        const kpiWatched = document.createElement('div');
+        kpiWatched.className = 'av-actress-kpi';
+        const mkKpi = (node, labelText, valueText) => {
+            node.replaceChildren();
+            const lb = document.createElement('div');
+            lb.className = 'av-actress-kpi-label';
+            lb.textContent = labelText;
+            const vv = document.createElement('div');
+            vv.className = 'av-actress-kpi-value';
+            vv.textContent = valueText;
+            node.append(lb, vv);
+        };
+        const newest = list.reduce((acc, item) => Math.max(acc, Number(item.addAt) || 0), 0);
+        mkKpi(kpiTotal, '收藏总数', String(list.length));
+        mkKpi(kpiSocial, '有社交账号', list.length ? '…' : '0');
+        mkKpi(kpiLatest, '最近添加', newest ? actressFavAgo(newest) : '—');
+        let watchedCount = 0;
+        let watchedSeconds = 0;
+        for (const item of list) {
+            const stats = actressWatchStats(item.name);
+            if (stats.works > 0) watchedCount += 1;
+            watchedSeconds += stats.seconds;
+        }
+        mkKpi(kpiWatched, '已看女优', watchedCount ? `${watchedCount} / ${list.length}` : '0');
+        kpis.append(kpiTotal, kpiWatched, kpiSocial, kpiLatest);
+        if (watchedSeconds >= 60) {
+            const watchedNote = document.createElement('div');
+            watchedNote.className = 'av-actress-meta';
+            watchedNote.style.marginTop = '6px';
+            watchedNote.style.gridColumn = '1 / -1';
+            watchedNote.textContent = `这些女优的影片在本机累计观看 ${formatDuration(watchedSeconds)}`;
+            kpis.appendChild(watchedNote);
+        }
+        card.append(head, ops, status, kpis);
+        if (!list.length) {
+            const empty = document.createElement('div');
+            empty.className = 'av-actress-empty';
+            empty.textContent = site === 'jable'
+                ? '还没有收藏。打开任意 Jable 女优页，点女优名右侧的「收藏女优」即可加入。'
+                : '还没有收藏。点上方「重新同步收藏页」，在弹出的 MissAV 收藏页里登录后，脚本会自动同步。';
+            card.appendChild(empty);
+            host.appendChild(card);
+            runActressAutoSync(card, site, (result, total) => {
+                if (result && result.ok && total > 0) refreshActressPage();
+            });
+            return;
+        }
+        let viewMode = String(store.getKeyName('actressView', 'list') || 'list');
+        if (!['list', 'grid', 'wall'].includes(viewMode)) viewMode = 'list';
+        let sortMode = String(store.getKeyName('actressSort', 'recent') || 'recent');
+        const toolbar = document.createElement('div');
+        toolbar.className = 'av-actress-toolbar';
+        const search = document.createElement('input');
+        search.className = 'av-actress-search';
+        search.type = 'search';
+        search.placeholder = '搜索女优或标签（简体 / 繁体 / 日文均可）';
+        search.setAttribute('aria-label', '搜索女优');
+        const SORT_LABELS = { recent: '最近添加', name: '名字', watch: '观看部数', rating: '我的评分' };
+        const SORT_ORDER = ['recent', 'name', 'watch', 'rating'];
+        if (!SORT_ORDER.includes(sortMode)) sortMode = 'recent';
+        const sortBtn = document.createElement('button');
+        sortBtn.type = 'button';
+        sortBtn.className = 'av-actress-sort';
+        sortBtn.textContent = `排序：${SORT_LABELS[sortMode]}`;
+        const viewWrap = document.createElement('div');
+        viewWrap.className = 'av-actress-view';
+        viewWrap.setAttribute('role', 'group');
+        viewWrap.setAttribute('aria-label', '视图切换');
+        const VIEW_LABELS = { list: '列表', grid: '网格', wall: '大图' };
+        const VIEW_ICONS = {
+            list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1.2"/><circle cx="3.5" cy="12" r="1.2"/><circle cx="3.5" cy="18" r="1.2"/>',
+            grid: '<rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/>',
+            wall: '<rect x="3" y="4" width="5" height="16" rx="1.4"/><rect x="9.5" y="4" width="5" height="16" rx="1.4"/><rect x="16" y="4" width="5" height="16" rx="1.4"/>'
+        };
+        const viewButtons = new Map();
+        for (const key of ['list', 'grid', 'wall']) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.appendChild(iconSvg(VIEW_ICONS[key]));
+            const label = document.createElement('span');
+            label.textContent = VIEW_LABELS[key];
+            btn.appendChild(label);
+            btn.setAttribute('aria-label', `${VIEW_LABELS[key]}视图`);
+            btn.title = `切换到${VIEW_LABELS[key]}视图`;
+            btn.classList.toggle('is-on', viewMode === key);
+            btn.addEventListener('click', () => {
+                viewMode = key;
+                store.set('actressView', viewMode);
+                for (const [name, node] of viewButtons) node.classList.toggle('is-on', name === viewMode);
+                grid.dataset.view = viewMode;
+            });
+            viewButtons.set(key, btn);
+            viewWrap.appendChild(btn);
+        }
+        const exportBtn = document.createElement('button');
+        exportBtn.type = 'button';
+        exportBtn.className = 'av-actress-sort';
+        exportBtn.textContent = '导出';
+        exportBtn.title = '导出女优收藏为 JSON（含评分、标签、备注、档案）';
+        const importBtn = document.createElement('button');
+        importBtn.type = 'button';
+        importBtn.className = 'av-actress-sort';
+        importBtn.textContent = '导入';
+        importBtn.title = '从 JSON 恢复女优收藏（同名合并，不会删除现有条目）';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'application/json,.json';
+        fileInput.style.display = 'none';
+        const bulk = document.createElement('button');
+        bulk.type = 'button';
+        bulk.className = 'av-actress-bulk is-danger';
+        bulk.textContent = '清空全部';
+        bulk.title = `清空${label}的全部女优收藏`;
+        toolbar.append(search, sortBtn, viewWrap, exportBtn, importBtn, fileInput, bulk);
+        const tagBar = document.createElement('div');
+        tagBar.className = 'av-actress-tagbar';
+        const batchBar = document.createElement('div');
+        batchBar.className = 'av-actress-batch';
+        const batchCount = document.createElement('span');
+        const batchTag = document.createElement('button');
+        batchTag.type = 'button';
+        batchTag.className = 'av-actress-sort';
+        batchTag.textContent = '批量打标签';
+        const batchRemove = document.createElement('button');
+        batchRemove.type = 'button';
+        batchRemove.className = 'av-actress-bulk is-danger';
+        batchRemove.textContent = '批量移除';
+        const batchClear = document.createElement('button');
+        batchClear.type = 'button';
+        batchClear.className = 'av-actress-sort';
+        batchClear.textContent = '取消选择';
+        batchBar.append(batchCount, batchTag, batchRemove, batchClear);
+        const grid = document.createElement('div');
+        grid.className = 'av-actress-grid';
+        grid.dataset.view = viewMode;
+        let tagFilter = '';
+        let sorted = list.slice();
+        const selected = new Set();
+        const sortValue = item => {
+            if (sortMode === 'watch') return actressWatchStats(item.name).works;
+            if (sortMode === 'rating') return actressMetaOf(item.name).rating;
+            return 0;
+        };
+        const applySort = () => {
+            sorted = list.slice();
+            if (sortMode === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+            else if (sortMode === 'watch') sorted.sort((a, b) => sortValue(b) - sortValue(a) || (Number(b.addAt) || 0) - (Number(a.addAt) || 0));
+            else if (sortMode === 'rating') sorted.sort((a, b) => sortValue(b) - sortValue(a) || a.name.localeCompare(b.name, 'ja'));
+            else sorted.sort((a, b) => (Number(b.addAt) || 0) - (Number(a.addAt) || 0));
+        };
+        const paintBatch = () => {
+            batchBar.classList.toggle('is-on', selected.size > 0);
+            batchCount.textContent = `已选 ${selected.size} 位`;
+        };
+        const paintTagBar = () => {
+            tagBar.replaceChildren();
+            const tags = actressMetaTags();
+            if (!tags.length) {
+                tagBar.hidden = true;
+                return;
+            }
+            tagBar.hidden = false;
+            const all = document.createElement('button');
+            all.type = 'button';
+            all.className = 'av-tag-chip';
+            all.classList.toggle('is-on', !tagFilter);
+            all.textContent = `全部 ${list.length}`;
+            all.addEventListener('click', () => {
+                tagFilter = '';
+                paintTagBar();
+                applyFilter();
+            });
+            tagBar.appendChild(all);
+            for (const [tag, count] of tags) {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'av-tag-chip';
+                chip.classList.toggle('is-on', tagFilter === tag);
+                chip.textContent = `${tag} ${count}`;
+                chip.addEventListener('click', () => {
+                    tagFilter = tagFilter === tag ? '' : tag;
+                    paintTagBar();
+                    applyFilter();
+                });
+                tagBar.appendChild(chip);
+            }
+        };
+        const renderGrid = () => {
+            applySort();
+            grid.replaceChildren();
+            for (const item of sorted) {
+                const row = actressFavRow(site, item);
+                const check = row.querySelector('.av-actress-check');
+                if (check) {
+                    check.checked = selected.has(row.dataset.fold);
+                    check.addEventListener('change', () => {
+                        if (check.checked) selected.add(row.dataset.fold);
+                        else selected.delete(row.dataset.fold);
+                        row.classList.toggle('is-picked', check.checked);
+                        paintBatch();
+                    });
+                }
+                row.classList.toggle('is-picked', selected.has(row.dataset.fold));
+                grid.appendChild(row);
+            }
+            mkKpi(kpiTotal, '收藏总数', String(list.length));
+            applyFilter();
+            loadActressSocials(grid, (found, settled) => {
+                mkKpi(kpiSocial, '有社交账号', settled >= list.length ? String(found) : `${found}`);
+            });
+            paintBatch();
+            paintTagBar();
+        };
+        const applyFilter = () => {
+            const raw = search.value.trim();
+            const folded = raw ? foldActressName(raw) : '';
+            const needle = raw.toLowerCase();
+            let shown = 0;
+            for (const row of grid.children) {
+                const textHit = !folded || (row.dataset.fold || '').includes(folded) || (row.dataset.name || '').toLowerCase().includes(needle);
+                const tagHit = !tagFilter || (row.dataset.tags || '').split(',').includes(tagFilter.toLowerCase());
+                const hit = textHit && tagHit;
+                row.hidden = !hit;
+                if (hit) {
+                    shown += 1;
+                }
+            }
+            search.dataset.shown = String(shown);
+        };
+        const runExport = () => {
+            const current = actressFavList(site);
+            const meta = {};
+            const profile = {};
+            for (const item of current) {
+                const folded = foldActressName(item.name);
+                const info = actressMetaOf(item.name);
+                if (info.rating || info.tags.length || info.note) meta[folded] = info;
+                const prof = actressProfileOf(item.name);
+                if (prof) profile[folded] = prof;
+            }
+            const payload = {
+                format: 'av-actress-fav',
+                version: 1,
+                site,
+                exportedAt: new Date().toISOString(),
+                favorites: current,
+                meta,
+                profile
+            };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            triggerBlobDownload(blob, `${site}-actress-${backupStamp()}.json`);
+            log(`📦 已导出 ${current.length} 位女优收藏`);
+        };
+        const runImport = file => {
+            if (!file) return;
+            const reader = new FileReader();
+            reader.addEventListener('load', () => {
+                let payload = null;
+                try {
+                    payload = JSON.parse(String(reader.result || ''));
+                } catch (error) {
+                    debugLog(error, 'actress-import');
+                }
+                if (!payload || !Array.isArray(payload.favorites)) {
+                    window.alert('导入失败：文件不是有效的女优收藏导出文件。');
+                    return;
+                }
+                let added = 0;
+                for (const entry of payload.favorites) {
+                    if (!entry || !entry.name) continue;
+                    if (actressFavAdd(site, entry) === 'added') added += 1;
+                }
+                const metaMap = payload.meta && typeof payload.meta === 'object' ? payload.meta : {};
+                for (const key of Object.keys(metaMap)) {
+                    const info = metaMap[key];
+                    if (!info || typeof info !== 'object') continue;
+                    const current = actressMetaStore().get(key) || {};
+                    actressMetaPatch(key, {
+                        rating: info.rating || current.rating || 0,
+                        tags: Array.isArray(info.tags) ? info.tags : current.tags || [],
+                        note: info.note || current.note || ''
+                    });
+                }
+                const profileMap = payload.profile && typeof payload.profile === 'object' ? payload.profile : {};
+                for (const key of Object.keys(profileMap)) {
+                    const prof = profileMap[key];
+                    if (!prof || typeof prof !== 'object') continue;
+                    const current = actressProfileStore().get(key) || {};
+                    actressProfileStore().set(key, Object.assign({}, current, prof));
+                }
+                if (Object.keys(profileMap).length) {
+                    const plain = {};
+                    for (const [key, value] of actressProfileStore()) plain[key] = value;
+                    actressJsonWrite(ACTRESS_PROFILE_KEY, plain);
+                }
+                log(`📥 导入完成：新增 ${added} 位女优`);
+                refreshActressPage();
+            });
+            reader.readAsText(file);
+        };
+        exportBtn.addEventListener('click', runExport);
+        importBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+            runImport(fileInput.files && fileInput.files[0]);
+            fileInput.value = '';
+        });
+        search.addEventListener('input', applyFilter);
+        sortBtn.addEventListener('click', () => {
+            const next = SORT_ORDER[(SORT_ORDER.indexOf(sortMode) + 1) % SORT_ORDER.length];
+            sortMode = next;
+            store.set('actressSort', sortMode);
+            sortBtn.textContent = `排序：${SORT_LABELS[sortMode]}`;
+            renderGrid();
+        });
+        batchClear.addEventListener('click', () => {
+            selected.clear();
+            renderGrid();
+        });
+        batchTag.addEventListener('click', () => {
+            if (!selected.size) return;
+            const raw = window.prompt(`给选中的 ${selected.size} 位女优打上标签（多个用逗号分隔）`, '');
+            if (raw === null) return;
+            const tags = raw.split(/[,，、\s]+/).map(item => item.trim()).filter(Boolean);
+            if (!tags.length) return;
+            const names = sorted.filter(item => selected.has(foldActressName(item.name))).map(item => item.name);
+            for (const name of names) {
+                const current = actressMetaOf(name).tags;
+                actressMetaPatch(name, { tags: current.concat(tags) });
+            }
+            log(`🏷 已给 ${names.length} 位女优添加标签：${tags.join('、')}`);
+            selected.clear();
+            paintTagBar();
+            renderGrid();
+        });
+        batchRemove.addEventListener('click', () => {
+            if (!selected.size) return;
+            if (!window.confirm(`确定从${label}收藏中移除选中的 ${selected.size} 位女优？`)) return;
+            const names = sorted.filter(item => selected.has(foldActressName(item.name))).map(item => item.name);
+            let removed = 0;
+            for (const name of names) {
+                if (actressFavRemove(site, name)) removed += 1;
+            }
+            selected.clear();
+            log(`🗑 已批量移除 ${removed} 位女优收藏`);
+            refreshActressPage();
+        });
+        bulk.addEventListener('click', () => {
+            if (!window.confirm(`确定清空${label}的全部 ${list.length} 位女优收藏？此操作不可撤销。`)) return;
+            const removed = actressFavClear(site);
+            log(`🗑 已清空 ${label} 女优收藏（${removed} 位）`);
+            refreshActressPage();
+        });
+        card.append(toolbar, tagBar, batchBar, grid);
+        host.appendChild(card);
+        renderGrid();
+        runActressAutoSync(card, site, (result, total) => {
+            if (!result || !result.ok) return;
+            status.textContent = `收藏列表已于 ${actressFavAgo(actressFavSyncAt(site))}从 MissAV 收藏页同步。每次打开本页都会自动同步一次。`;
+            status.classList.remove('is-warn');
+            mkKpi(kpiTotal, '收藏总数', String(total));
+            const latest = actressFavList(site).reduce((acc, item) => Math.max(acc, Number(item.addAt) || 0), 0);
+            mkKpi(kpiLatest, '最近添加', latest ? actressFavAgo(latest) : '—');
+            if (result.added > 0) refreshActressPage();
+        });
+    }
+    function itemLabel(site) {
+        return site === 'jable' ? 'Jable' : 'MissAV';
+    }
+    function actressUrl() {
+        try {
+            const url = new URL(location.href);
+            url.hash = '#av-actress';
+            return url.href;
+        } catch (error) {
+            return '#av-actress';
+        }
+    }
+    function openActressPage() {
+        openCockpitTab(actressUrl());
+    }
+    function buildActressPage() {
+        silenceMedia();
+        document.body.replaceChildren();
+        document.body.style.margin = '0';
+        document.body.style.padding = '0';
+        document.body.style.background = '#090a0f';
+        document.documentElement.style.background = '#090a0f';
+        document.documentElement.style.colorScheme = 'dark';
+        const page = document.createElement('div');
+        page.className = 'av-analytics-page av-actress-page av-cockpit-page';
+        const cockpit = document.createElement('div');
+        cockpit.className = 'av-cockpit';
+        const header = document.createElement('header');
+        header.className = 'av-cockpit-header';
+        const brand = document.createElement('div');
+        brand.className = 'av-brand';
+        const logo = iconSvg('<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>');
+        logo.classList.add('av-brand-logo');
+        const brandText = document.createElement('div');
+        brandText.className = 'av-brand-text';
+        const heading = document.createElement('h1');
+        heading.textContent = '女优收藏';
+        const badge = document.createElement('span');
+        badge.className = 'av-brand-badge';
+        badge.textContent = itemLabel(SITE_TAG);
+        brandText.append(heading, badge);
+        brand.append(logo, brandText);
+        const site = SITE_TAG;
+        const actions = document.createElement('div');
+        actions.className = 'av-cockpit-actions';
+        const refresh = buildCockpitAction('<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/>', AV_PLATFORM.isMobile ? '刷新' : '', 'av-btn', '刷新', () => refreshActressPage());
+        const close = buildCockpitAction('<path d="M18 6 6 18M6 6l12 12"/>', AV_PLATFORM.isMobile ? '关闭' : '', 'av-btn av-btn-close', '关闭女优收藏', closeActressPage);
+        actions.append(refresh, close);
+        header.append(brand, actions);
+        const main = document.createElement('main');
+        main.className = 'av-cockpit-main av-actress-main';
+        cockpit.append(header, main);
+        page.appendChild(cockpit);
+        document.body.appendChild(page);
+        state.actressPage = page;
+        watchAnalyticsBody();
+        hookActressFocus();
+        applyUiStyles();
+        refreshActressPage();
+    }
+    let actressFocusHooked = false;
+    function hookActressFocus() {
+        if (actressFocusHooked) return;
+        actressFocusHooked = true;
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && state.actressPage && !state.actressSheet) closeActressPage();
+        });
+    }
+    function quitActressMode() {
+        actressRequested = false;
+        actressSticky = false;
+        if (actressGuard) {
+            clearInterval(actressGuard);
+            actressGuard = 0;
+        }
+        actressFlagClear();
+        if (analyticsObserver) {
+            analyticsObserver.disconnect();
+            analyticsObserver = null;
+        }
+        closeActressSheet();
+        if (state.actressPage) {
+            state.actressPage.remove();
+            state.actressPage = null;
+        }
+        disarmMediaKiller();
+        releaseCockpitGuard();
+    }
+    function closeActressPage() {
+        const exitUrl = actressUrl().replace('#av-actress', '');
+        quitActressMode();
+        window.close();
+        setTimeout(() => {
+            if (window.closed || state.actressPage) return;
+            leaveCockpitFor(exitUrl);
+        }, 160);
+    }
+    function mountActressPage() {
+        actressRequested = true;
+        engageCockpitGuard();
+        armMediaKiller();
+        document.title = ACTRESS_TITLE;
+        actressFlagSet();
+        if (!/^#av-actress\b/.test(location.hash)) {
+            try {
+                if (typeof history.replaceState === 'function') history.replaceState(null, '', actressUrl());
+            } catch (error) {
+                debugLog(error);
+            }
+        }
+        const boot = () => {
+            if (!document.body) {
+                if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+                else setTimeout(boot, 60);
+                return;
+            }
+            if (document.querySelector('.av-actress-page')) return;
+            buildActressPage();
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+        else boot();
+        if (!actressGuard) {
+            const guardTimer = setInterval(() => {
+                if (!actressRequested) {
+                    clearInterval(guardTimer);
+                    actressGuard = 0;
+                    return;
+                }
+                if (!state.actressPage || !state.actressPage.isConnected) {
+                    state.actressPage = null;
+                    if (document.body) buildActressPage();
+                }
+            }, 500);
+            actressGuard = trackInterval(guardTimer);
+        }
+    }
+    const isActressRoute = () => actressSticky || actressRequested || /^#av-actress\b/.test(location.hash);
+    function jableModelHeader() {
+        const titleBox = document.querySelector('.content-header .title-box, .title-with-avatar .title-box');
+        if (!titleBox) return null;
+        const nameEl = titleBox.querySelector('h2, h1');
+        const name = nameEl ? (nameEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        if (!name) return null;
+        return { box: titleBox, nameEl, name };
+    }
+    function injectJableModelFavButton() {
+        if (!IS_JABLE) return;
+        const header = jableModelHeader();
+        if (!header) return;
+        if (header.box.querySelector('.av-actress-fav-btn')) return;
+        const slug = (location.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();
+        const url = `${location.origin}${location.pathname}`;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'av-actress-fav-btn';
+        const syncLabel = () => {
+            const has = actressFavHas('jable', header.name);
+            btn.textContent = has ? '已收藏女优' : '收藏女优';
+            btn.classList.toggle('is-on', has);
+            btn.title = has ? '点击取消收藏' : '把这位女优加入 Jable 女优收藏';
+        };
+        syncLabel();
+        btn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (actressFavHas('jable', header.name)) {
+                actressFavRemove('jable', header.name);
+                log(`🗑 已取消收藏女优：${header.name}`);
+            } else {
+                actressFavAdd('jable', { name: header.name, url, slug });
+                log(`⭐ 已收藏女优：${header.name}`);
+            }
+            syncLabel();
+        });
+        header.nameEl.insertAdjacentElement('afterend', btn);
+    }
+    function ingestSavedActressAnchors(anchors) {
+        const seen = new Set();
+        let added = 0;
+        for (const anchor of anchors) {
+            if (anchor.closest && anchor.closest('.av-actress-page, .custom-control-panel')) continue;
+            const href = anchor.getAttribute('href') || '';
+            const slug = (href.split('/').filter(Boolean).pop() || '').toLowerCase();
+            if (!slug || META_BLOCKED_SLUGS.has(slug)) continue;
+            const sources = [
+                anchor.querySelector('img[alt]')?.getAttribute('alt') || '',
+                anchor.getAttribute('title') || '',
+                anchor.querySelector('[title]')?.getAttribute('title') || '',
+                anchor.textContent || ''
+            ];
+            let name = '';
+            for (const source of sources) {
+                const candidate = cleanActressName(source);
+                if (candidate && candidate.length >= 2 && candidate.length <= 40) {
+                    name = candidate;
+                    break;
+                }
+            }
+            name = cleanActressName(name);
+            if (!name || name.length < 2) continue;
+            if (/^(?:打开|打開)/.test(name) || name.includes('的女优页') || name.includes('的女優頁')) continue;
+            const folded = foldActressName(name);
+            if (!folded || seen.has(folded)) continue;
+            seen.add(folded);
+            let url = '';
+            try {
+                url = new URL(href, location.origin).href;
+            } catch (error) {
+                debugLog(error);
+            }
+            if (actressFavAdd('missav', { name, url, slug }) === 'added') added += 1;
+        }
+        return added;
+    }
+    let actressSyncToken = 0;
+    let actressAutoSyncDone = false;
+    function runActressAutoSync(card, site, onResult) {
+        if (!card || actressAutoSyncDone) return;
+        actressAutoSyncDone = true;
+        const note = document.createElement('div');
+        note.className = 'av-actress-status';
+        note.textContent = '正在同步最新收藏…';
+        card.appendChild(note);
+        autoSyncActressFav(site, result => {
+            if (!note.isConnected) return;
+            const total = actressFavList(site).length;
+            if (result && result.ok) {
+                note.textContent = `已同步最新收藏：当前共 ${total} 位女优${result.added ? `（新增 ${result.added} 位）` : '，没有新增'}`;
+            } else {
+                note.classList.add('is-warn');
+                note.textContent = site === 'missav'
+                    ? '自动同步需要在浏览器里能打开 MissAV 女优收藏页（需登录）。若没拿到数据，请点上方「重新同步收藏页」手动同步。'
+                    : 'Jable 没有官方女优收藏接口，列表只保存在本地。';
+            }
+            if (onResult) onResult(result, total);
+        });
+    }
+    function autoSyncActressFav(site, onDone) {
+        if (site !== 'missav') {
+            if (onDone) onDone({ ok: false, reason: 'na' });
+            return;
+        }
+        actressSyncToken += 1;
+        const token = actressSyncToken;
+        const frame = document.createElement('iframe');
+        frame.setAttribute('aria-hidden', 'true');
+        frame.tabIndex = -1;
+        frame.title = 'actress-sync';
+        frame.style.cssText = 'position:fixed;left:-9999px;top:0;width:1024px;height:768px;opacity:0;pointer-events:none;border:0;';
+        let settled = false;
+        const finish = result => {
+            if (settled) return;
+            settled = true;
+            frame.remove();
+            if (token !== actressSyncToken) return;
+            if (onDone) onDone(result);
+        };
+        const readFrame = () => {
+            if (settled) return false;
+            let doc = null;
+            try {
+                doc = frame.contentDocument;
+            } catch (error) {
+                debugLog(error, 'actress-sync-frame');
+            }
+            if (!doc || !doc.querySelectorAll) return false;
+            if (doc === document) return false;
+            let frameUrl = '';
+            try {
+                frameUrl = String(doc.location && doc.location.href ? doc.location.href : doc.URL || '');
+            } catch (error) {
+                frameUrl = '';
+            }
+            if (!/\/saved\/actresses/i.test(frameUrl)) return false;
+            const anchors = doc.querySelectorAll('a[href*="/actresses/"]');
+            if (!anchors.length) return false;
+            const added = ingestSavedActressAnchors(anchors);
+            actressFavMarkSync('missav');
+            finish({ ok: true, added });
+            return true;
+        };
+        frame.addEventListener('load', () => {
+            if (readFrame()) return;
+            trackTimeout(setTimeout(readFrame, 700));
+            trackTimeout(setTimeout(readFrame, 1600));
+        });
+        trackTimeout(setTimeout(() => finish({ ok: false, reason: 'timeout' }), 7000));
+        frame.src = 'https://missav.ws/saved/actresses';
+        const hostEl = state.actressPage || document.body;
+        if (!hostEl) return;
+        hostEl.appendChild(frame);
+    }
+    function scanMissavSavedActresses() {
+        if (IS_JABLE) return 0;
+        if (!/\/saved\/actresses/i.test(location.pathname)) return 0;
+        actressFavRepair('missav');
+        const added = ingestSavedActressAnchors(document.querySelectorAll('a[href*="/actresses/"]'));
+        actressFavMarkSync('missav');
+        if (added) log(`⭐ 已从 MissAV 女优收藏页同步 ${added} 位女优`);
+        actressSyncReturn();
+        return added;
+    }
+
     function parseJavBusHtml(html) {
         const stills = [];
         const reviews = [];
@@ -7323,8 +10630,12 @@
         const actorPath = paths.find(path => !BLOCKED_ACTOR_PATHS.has(path.toLowerCase())) ?? '';
         let twitter;
         let instagram;
-        if (actorPath) {
-            const actorHtml = await fetchHtml(`https://javdb.com${actorPath}`, { headers: cookie, timeout: 4500 });
+        let aliases = [];
+        let works = 0;
+        let avatar = '';
+        let actorHtml = '';
+        if (actorPath) actorHtml = await fetchHtml(`https://javdb.com${actorPath}`, { headers: cookie, timeout: 4500 }).catch(() => '');
+        if (actorHtml) {
             const twitterMatch = actorHtml.match(JD_TWITTER_RE);
             const igMatch = actorHtml.match(JD_INSTAGRAM_RE);
             if (twitterMatch?.[1] && !twitterMatch[1].includes('/share') && !twitterMatch[1].includes('/intent')) {
@@ -7332,9 +10643,94 @@
             }
             if (igMatch?.[1]) instagram = igMatch[1];
         }
-        const result = { name: trimmed, twitter, instagram };
+        if (actorHtml) {
+            const nameMatch = actorHtml.match(JD_ACTOR_NAME_RE);
+            if (nameMatch?.[1]) {
+                aliases = nameMatch[1]
+                    .split(/[,、\/]/)
+                    .map(item => cleanActressName(item))
+                    .filter(item => item && item.length >= 2);
+            }
+            const worksMatch = actorHtml.match(JD_ACTOR_WORKS_RE);
+            if (worksMatch?.[1]) works = Number.parseInt(worksMatch[1], 10) || 0;
+            const avatarMatch = actorHtml.match(JD_ACTOR_AVATAR_RE);
+            if (avatarMatch?.[1]) avatar = avatarMatch[1].replace(/&amp;/g, '&');
+        }
+        const result = { name: trimmed, twitter, instagram, actorPath, aliases, works, avatar };
         writeCache(cacheKey, result, twitter || instagram ? INFO_CACHE_TTL * 7 : INFO_CACHE_TTL);
+        if (actorPath || aliases.length || works || avatar) {
+            actressProfileSave(trimmed, {
+                name: trimmed,
+                aliases: aliases.length > 1 ? aliases : [],
+                works,
+                avatar,
+                twitter: twitter || '',
+                instagram: instagram || '',
+                actorPath
+            });
+        }
         return result;
+    }
+    function parseJavBusActor(name, starHtml) {
+        const fields = {};
+        for (const match of starHtml.matchAll(JB_ACTOR_LABEL_RE)) {
+            const key = String(match[1] || '').trim();
+            const value = String(match[2] || '').replace(/<[^>]*>/g, '').trim();
+            if (!key || !value) continue;
+            if (key === '生日' || key === '出生') fields.birthday = value;
+            else if (key === '年齡' || key === '年龄') fields.age = value;
+            else if (key === '身高') fields.height = value;
+            else if (key === '罩杯') fields.cup = value;
+            else if (key === '胸圍' || key === '胸围') fields.bust = value;
+            else if (key === '腰圍' || key === '腰围') fields.waist = value;
+            else if (key === '臀圍' || key === '臀围') fields.hip = value;
+            else if (key === '愛好' || key === '爱好') fields.hobby = value;
+        }
+        const worksMatch = starHtml.match(JB_ACTOR_WORKS_RE);
+        if (worksMatch?.[1]) fields.busWorks = Number.parseInt(String(worksMatch[1]).replace(/,/g, ''), 10) || 0;
+        const imgMatch = starHtml.match(JB_ACTOR_IMG_RE);
+        if (imgMatch?.[1]) {
+            const src = String(imgMatch[1]).trim();
+            if (src && !/nowprinting/i.test(src)) fields.busAvatar = /^https?:/i.test(src) ? src : `https://www.javbus.com${src.startsWith('/') ? '' : '/'}${src}`;
+        }
+        fields.name = name;
+        return fields;
+    }
+    async function fetchActressBus(name) {
+        const trimmed = String(name ?? '').trim();
+        if (!trimmed || trimmed.length < 2) return null;
+        const wanted = foldActressName(trimmed);
+        let starHtml = '';
+        let busPath = '';
+        try {
+            const searchHtml = await gmRequest(`https://www.javbus.com/searchstar/${encodeURIComponent(trimmed)}`, { headers: JB_PAGE_HEADERS, timeout: 7000 });
+            const hits = [];
+            for (const match of searchHtml.matchAll(JB_SEARCH_HIT_RE)) {
+                const path = String(match[1] || '');
+                const src = String(match[2] || '');
+                const title = String(match[3] || '');
+                if (!path || !src || !title || /nowprinting/i.test(src)) continue;
+                hits.push({ path, src, title });
+            }
+            const exact = hits.find(hit => foldActressName(hit.title) === wanted) || hits[0];
+            if (exact) busPath = exact.path;
+        } catch (error) {
+            debugLog(error, 'actress-bus-search');
+        }
+        if (busPath) {
+            try {
+                starHtml = await gmRequest(`https://www.javbus.com${busPath}`, { headers: JB_PAGE_HEADERS, timeout: 7000 });
+            } catch (error) {
+                debugLog(error, 'actress-bus-star');
+                starHtml = '';
+            }
+        }
+        const fields = starHtml ? parseJavBusActor(trimmed, starHtml) : {};
+        if (busPath) fields.busPath = busPath;
+        fields.busFetchedAt = Date.now();
+        if (fields.busPath || fields.birthday || fields.height || fields.busAvatar) actressProfileSave(trimmed, fields);
+        if (starHtml) writeCache(`busActor:${trimmed}`, fields, INFO_CACHE_TTL * 30);
+        return fields;
     }
     async function loadVideoInfo() {
         const code = getPageVideoCode();
@@ -8610,12 +12006,23 @@
             mountAnalyticsPage();
             return;
         }
+        if (isActressRoute()) {
+            mountActressPage();
+            return;
+        }
         cleanAds();
         createPanel();
         initPlayer();
         clickPlayEntry();
         startAdObserver();
         initContentFilter();
+        injectJableModelFavButton();
+        scanMissavSavedActresses();
+        for (const delay of [800, 1800, 3200]) {
+            trackTimeout(setTimeout(() => {
+                injectJableModelFavButton();
+            }, delay));
+        }
     }
     GM_addStyle(`
         .av-card-hidden { display: none !important; }
@@ -8952,6 +12359,7 @@
         .av-rank-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin-bottom: 5px; }
         .av-actress-link { color: #e2e8f0; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .av-actress-link:hover { color: #7dd3fc; text-decoration: underline; }
+        .av-rank-head .av-actress-link:not(.av-open-record) { flex: 1 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.4; }
         .av-rank-meta { color: #64748b; flex: 0 0 auto; }
         .av-genre-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; }
         .av-genre-name { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; }
@@ -9181,6 +12589,8 @@
         }
     }
     function historyGmGet(key) {
+        const pending = persistPeek(STORAGE_PREFIX + key);
+        if (pending !== null) return pending;
         if (!historyHasGmStorage()) return null;
         try {
             const value = GM_getValue(STORAGE_PREFIX + key, null);
@@ -9191,25 +12601,13 @@
     }
     function historyGmSet(key, value) {
         if (!historyHasGmStorage()) return;
-        try {
-            GM_setValue(STORAGE_PREFIX + key, String(value));
-        } catch (error) {
-            debugLog(error);
-        }
+        persistWrite(STORAGE_PREFIX + key, value, 'gm');
     }
     function historyLocalGet(key) {
-        try {
-            return localStorage.getItem(STORAGE_PREFIX + key);
-        } catch (_) {
-            return null;
-        }
+        return persistRead(STORAGE_PREFIX + key);
     }
     function historyLocalSet(key, value) {
-        try {
-            localStorage.setItem(STORAGE_PREFIX + key, String(value));
-        } catch (error) {
-            debugLog(error);
-        }
+        persistWrite(STORAGE_PREFIX + key, value);
     }
     function historyParseJson(raw, fallback) {
         if (raw === null || raw === void 0 || raw === '') return fallback;
@@ -9450,6 +12848,7 @@
     function resetHistoryCaches() {
         watchedCache = null;
         state.analyticsRecords = null;
+        state.actressWatchIndex = null;
         resumeCache = null;
         bumpAnalyticsVersion();
     }
@@ -10014,6 +13413,9 @@
         }
         return blacklistCache;
     }
+    function hasBlacklistRules() {
+        return Boolean(String(settings.filterKeywords || '').trim() || String(settings.filterPrefixes || '').trim() || String(settings.filterActressBlacklist || '').trim());
+    }
     function matchesBlacklist(meta) {
         const { keywordList, prefixList } = blacklistLists();
         if (keywordList.length && meta.title) {
@@ -10028,7 +13430,90 @@
                 if (code.startsWith(prefix) || code.includes(prefix)) return true;
             }
         }
+        const actressList = actressBlacklistList();
+        if (actressList.length) {
+            const samples = [meta.title].concat(actressNamesForCode(meta.code));
+            for (const sample of samples) {
+                const folded = foldActressName(sample);
+                if (!folded) continue;
+                for (const target of actressList) {
+                    if (folded.includes(target)) return true;
+                }
+            }
+        }
         return false;
+    }
+    let actressBlacklistCache = { raw: null, list: [] };
+    function actressBlacklistList() {
+        const raw = String(settings.filterActressBlacklist || '');
+        if (actressBlacklistCache.raw !== raw) {
+            const list = [];
+            for (const item of raw.split(/[,，\n]/)) {
+                const folded = foldActressName(item);
+                if (folded.length >= 2) list.push(folded);
+            }
+            actressBlacklistCache = { raw, list };
+        }
+        return actressBlacklistCache.list;
+    }
+    const ACTRESS_INDEX_KEY = 'actressIndex_v1';
+    const ACTRESS_INDEX_LIMIT = 4000;
+    let actressIndexCache = null;
+    function actressIndexMap() {
+        if (actressIndexCache) return actressIndexCache;
+        const parsed = historyParseJson(historyStorageGet(ACTRESS_INDEX_KEY) || '{}', {});
+        const map = new Map();
+        if (parsed && typeof parsed === 'object') {
+            for (const key of Object.keys(parsed)) {
+                const list = parsed[key];
+                if (!Array.isArray(list) || !list.length) continue;
+                map.set(String(normalizeVideoCode(key)), list.map(item => String(item)));
+            }
+        }
+        actressIndexCache = map;
+        return map;
+    }
+    function actressIndexSet(code, names) {
+        const key = normalizeVideoCode(code);
+        if (!key) return;
+        const list = (Array.isArray(names) ? names : []).map(item => String(item || '').trim()).filter(Boolean);
+        if (!list.length) return;
+        const map = actressIndexMap();
+        const prev = map.get(key) || [];
+        const foldedPrev = new Set(prev.map(item => foldActressName(item)));
+        let changed = false;
+        for (const name of list) {
+            const folded = foldActressName(name);
+            if (!folded || foldedPrev.has(folded)) continue;
+            prev.push(name);
+            foldedPrev.add(folded);
+            changed = true;
+        }
+        if (!changed) return;
+        map.set(key, prev);
+        if (map.size > ACTRESS_INDEX_LIMIT) {
+            const keys = [...map.keys()].slice(0, map.size - ACTRESS_INDEX_LIMIT);
+            for (const oldKey of keys) map.delete(oldKey);
+        }
+        const plain = {};
+        for (const [mapKey, value] of map) plain[mapKey] = value;
+        historyStorageSet(ACTRESS_INDEX_KEY, JSON.stringify(plain));
+    }
+    function actressNamesForCode(code) {
+        const key = normalizeVideoCode(code);
+        if (!key) return [];
+        const indexed = actressIndexMap().get(key);
+        if (indexed && indexed.length) return indexed;
+        let found = [];
+        for (const record of analyticsRecords()) {
+            if (normalizeVideoCode(record.code) !== key) continue;
+            const names = Array.isArray(record.actresses) ? record.actresses.filter(Boolean) : [];
+            if (names.length) {
+                found = names;
+                break;
+            }
+        }
+        return found;
     }
     function evaluateCard(meta) {
         if (!settings.filterEnabled) return false;
@@ -10110,7 +13595,7 @@
             blacklist.classList.toggle('is-on', settings.filterEnabled && settings.filterEnableBlacklist);
             blacklist.disabled = !settings.filterEnabled;
             if (parts.fab) {
-                const hidden = !(settings.filterKeywords.trim() || settings.filterPrefixes.trim());
+                const hidden = !hasBlacklistRules();
                 if (parts.fab.hidden !== hidden) parts.fab.hidden = hidden;
             }
         }
@@ -10501,25 +13986,26 @@
     const FILTER_SETTING_KEYS = ['filterDimMode', 'filterHideWatched', 'filterEnableBlacklist'];
     function createCheckRow(labelText, key, onChange, helpText) {
         const row = document.createElement('label');
-        row.className = 'av-check-row';
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.role = 'switch';
-        input.checked = !!settings[key];
-        state.filterChecks[key] = input;
-        const span = document.createElement('span');
-        const text = document.createElement('span');
-        text.textContent = labelText;
-        span.appendChild(text);
+        row.className = 'avx-row';
+        const lbl = document.createElement('div');
+        lbl.className = 'avx-lbl';
+        const b = document.createElement('b');
+        b.textContent = labelText;
+        lbl.appendChild(b);
         if (helpText) {
             const help = document.createElement('small');
-            help.className = 'av-help';
             help.textContent = helpText;
-            span.appendChild(help);
+            lbl.appendChild(help);
         }
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'avx-sw';
+        input.setAttribute('role', 'switch');
+        input.checked = !!settings[key];
+        state.filterChecks[key] = input;
         const sync = () => {
             const on = input.checked;
-            if (row.classList.contains('is-on') !== on) row.classList.toggle('is-on', on);
+            if (input.classList.contains('is-on') !== on) input.classList.toggle('is-on', on);
         };
         state.filterCheckSync[key] = sync;
         sync();
@@ -10530,7 +14016,7 @@
             if (onChange) onChange(input.checked);
         });
         row.addEventListener('change', () => syncFilterPanel(key));
-        row.append(span, input);
+        row.append(lbl, input);
         return row;
     }
     function syncFilterPanel(changedKey) {
@@ -10543,7 +14029,7 @@
             if (sync) sync();
         }
         if (state.filterPanel) {
-            const hasBlacklist = Boolean(settings.filterKeywords.trim() || settings.filterPrefixes.trim());
+            const hasBlacklist = hasBlacklistRules();
             if (state.filterPanel.classList.contains('av-has-blacklist') !== hasBlacklist) state.filterPanel.classList.toggle('av-has-blacklist', hasBlacklist);
         }
         if (state.filterDepends) {
@@ -10555,10 +14041,11 @@
     }
     function createTextRow(labelText, key, placeholder, helpText, rows) {
         const row = document.createElement('div');
-        row.className = 'av-text-row';
+        row.className = 'avx-field';
         const label = document.createElement('label');
         label.textContent = labelText;
         const input = document.createElement('textarea');
+        input.className = 'avx-inp';
         input.rows = rows || 3;
         input.spellcheck = false;
         input.placeholder = placeholder;
@@ -10573,7 +14060,7 @@
         row.append(label, input);
         if (helpText) {
             const help = document.createElement('small');
-            help.className = 'av-help';
+            help.className = 'avx-hint';
             help.textContent = helpText;
             row.appendChild(help);
         }
@@ -10828,7 +14315,8 @@
         textSlide.className = 'av-filter-text-slide';
         const textKeywords = createTextRow('标题关键词黑名单', 'filterKeywords', '例如：VR, 熟女, 动画, 3D（逗号或换行分隔）', '标题中包含任意关键词的视频将被过滤', 2);
         const textPrefixes = createTextRow('番号前缀黑名单', 'filterPrefixes', '例如：FC2, SIRO, LUXU（逗号或换行分隔）', '以这些前缀开头的番号将被过滤', 2);
-        textSlide.append(textKeywords, textPrefixes);
+        const textActress = createTextRow('女优黑名单', 'filterActressBlacklist', '例如：三上悠亚, 神木麗, 河北彩花（逗号或换行分隔）', '简体、繁体、日文写法都能识别，命中任一形态即过滤', 2);
+        textSlide.append(textKeywords, textPrefixes, textActress);
         const durationRow = document.createElement('div');
         durationRow.className = 'av-text-row';
         const durationLabel = document.createElement('label');
@@ -10855,7 +14343,7 @@
             log(`🛡 过滤完成：共 ${state.filterStats.total} 个条目，屏蔽 ${state.filterStats.filtered} 个`);
         });
         actions.append(rescan);
-        state.filterDepends = [rowDim, rowHideWatched, rowTrack, rowBlacklist, textKeywords, textPrefixes, durationRow];
+        state.filterDepends = [rowDim, rowHideWatched, rowTrack, rowBlacklist, textKeywords, textPrefixes, textActress, durationRow];
         const scroll = document.createElement('div');
         scroll.className = 'av-filter-scroll';
         scroll.append(strip, textSlide, durationRow);
@@ -10921,14 +14409,28 @@
         state.filterObserver = observer;
         pageLifecycle.push(() => observer.disconnect());
     }
+    const ANALYTICS_NORM_VERSION = 2;
+    function analyticsNormStamp(list) {
+        return `${ANALYTICS_NORM_VERSION}:${list.length}`;
+    }
     function analyticsRecords() {
         if (state.analyticsRecords) return state.analyticsRecords;
         const raw = historyStorageGet(ANALYTICS_KEY) || '[]';
         const parsed = historyParseJson(raw, []);
         const normalized = historyNormalizeRecordList(parsed, true);
         state.analyticsRecords = normalized;
+        const stamp = analyticsNormStamp(normalized);
+        if (store.get('analyticsNormStamp') === stamp) return state.analyticsRecords;
         const repaired = repairAnalyticsTitles(normalized);
-        if (repaired || JSON.stringify(normalized) !== raw) persistAnalyticsRecords(true);
+        let mismatch = false;
+        try {
+            mismatch = JSON.stringify(normalized) !== raw;
+        } catch (error) {
+            debugLog(error, 'analytics-compare');
+            mismatch = true;
+        }
+        store.set('analyticsNormStamp', stamp);
+        if (repaired || mismatch) persistAnalyticsRecords(true);
         return state.analyticsRecords;
     }
     function bumpAnalyticsVersion() {
@@ -10944,7 +14446,32 @@
         state.analyticsSavedAt = Date.now();
         state.analyticsSavePending = false;
         bumpAnalyticsVersion();
-        historyStorageSet(ANALYTICS_KEY, JSON.stringify(list));
+        scheduleAnalyticsFlush();
+    }
+    const ANALYTICS_FLUSH_DELAY = 240;
+    let analyticsFlushTimer = 0;
+    function scheduleAnalyticsFlush() {
+        if (analyticsFlushTimer) return;
+        analyticsFlushTimer = setTimeout(() => {
+            analyticsFlushTimer = 0;
+            flushAnalyticsStorage();
+        }, ANALYTICS_FLUSH_DELAY);
+    }
+    function flushAnalyticsStorage() {
+        if (analyticsFlushTimer) {
+            clearTimeout(analyticsFlushTimer);
+            analyticsFlushTimer = 0;
+        }
+        const list = state.analyticsRecords;
+        if (!Array.isArray(list)) return;
+        let text = '';
+        try {
+            text = JSON.stringify(list);
+        } catch (error) {
+            debugLog(error, 'analytics-encode');
+            return;
+        }
+        historyStorageSet(ANALYTICS_KEY, text);
     }
     function persistAnalyticsRecords(force) {
         if (!state.analyticsRecords && !state.analyticsSavePending) return;
@@ -11134,6 +14661,7 @@
         }
         const video = state.video;
         if (video && isFinite(video.duration)) meta.duration = Math.round(video.duration);
+        if (meta.actresses.length) actressIndexSet(code, meta.actresses);
         if (meta.title || meta.actresses.length || meta.genres.length || meta.maker) {
             pageMetaCache = { code, gen: state.domGen, meta };
         }
@@ -11254,6 +14782,8 @@
     function flushAnalyticsRecords() {
         commitAnalyticsSession(true);
         if (state.analyticsSavePending) persistAnalyticsRecords(true);
+        flushAnalyticsStorage();
+        persistFlush();
     }
     document.addEventListener('visibilitychange', resyncAnalyticsClock, { passive: true });
     window.addEventListener('pagehide', flushAnalyticsRecords, { passive: true });
@@ -13724,6 +17254,7 @@
             target = null;
         }
         quitCockpitMode();
+        quitActressMode();
         if (!target) {
             location.assign(url);
             return;
@@ -13782,7 +17313,9 @@
             syncCockpit();
         });
         window.addEventListener('keydown', event => {
-            if (event.key === 'Escape' && state.analyticsPage) closeCockpit();
+            if (event.key !== 'Escape') return;
+            if (state.analyticsPage) closeCockpit();
+            else if (state.actressPage) closeActressPage();
         });
     }
     function analyticsUrl() {
@@ -13817,7 +17350,10 @@
         }
     }
     const ANALYTICS_TITLE = '观影行为数据 — 增强助手';
+    const ACTRESS_TITLE = '女优收藏 — 增强助手';
     let analyticsGuard = 0;
+    let actressGuard = 0;
+    let actressRequested = false;
     let analyticsObserver = null;
     let analyticsRequested = false;
     let analyticsSweeping = false;
@@ -13826,12 +17362,13 @@
         analyticsSweeping = true;
         try {
             if (!document.documentElement.classList.contains('av-cockpit-mode')) engageCockpitGuard();
-            if (state.analyticsPage && !state.analyticsPage.isConnected && document.body) {
-                document.body.appendChild(state.analyticsPage);
+            const active = state.analyticsPage || state.actressPage;
+            if (active && !active.isConnected && document.body) {
+                document.body.appendChild(active);
             }
-            if (!state.analyticsPage) return;
+            if (!active) return;
             for (const node of Array.from(document.body.children)) {
-                if (node === state.analyticsPage) continue;
+                if (node === active) continue;
                 if (node.style && typeof node.style.setProperty === 'function') node.style.setProperty('display', 'none', 'important');
                 else if (node.style) node.style.display = 'none';
                 node.setAttribute('aria-hidden', 'true');
@@ -13887,7 +17424,7 @@
         document.documentElement.style.background = '#090a0f';
         document.documentElement.style.colorScheme = 'dark';
         const page = document.createElement('div');
-        page.className = 'av-analytics-page';
+        page.className = 'av-analytics-page av-cockpit-page';
         const cockpit = document.createElement('div');
         cockpit.className = 'av-cockpit';
         const header = document.createElement('header');
@@ -14006,6 +17543,10 @@
                 mountAnalyticsPage();
                 return;
             }
+            if (isActressRoute()) {
+                mountActressPage();
+                return;
+            }
             log('🔀 页面已切换，重新初始化播放器');
             closeSubtitlePicker();
             closeInfoSection();
@@ -14030,6 +17571,8 @@
                 initPlayer();
                 clickPlayEntry();
                 syncFilterBar();
+                injectJableModelFavButton();
+                scanMissavSavedActresses();
             }, 600);
         };
         const onRouteChange = debounce(handleRouteChange, 400);
@@ -14077,7 +17620,7 @@
     } else {
         initPage();
     }
-    if (!isAnalyticsRoute()) installSpaWatch();
+    if (!isAnalyticsRoute() && !isActressRoute()) installSpaWatch();
     for (const type of ['click', 'auxclick', 'pointerdown', 'mousedown']) {
         document.addEventListener(type, event => {
             const target = event.target;
@@ -14100,6 +17643,7 @@
                 if (type !== 'click' && type !== 'auxclick') return;
                 if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
                     if (state.analyticsPage) quitCockpitMode();
+                    if (state.actressPage) closeActressPage();
                     return;
                 }
                 event.preventDefault();
@@ -14109,6 +17653,8 @@
             }
             const cockpitAnchor = (type === 'click' || type === 'auxclick') && state.analyticsPage && target.closest('.av-analytics-page') && target.closest('a[href]:not([target="_blank"])');
             if (cockpitAnchor) quitCockpitMode();
+            const actressAnchor = (type === 'click' || type === 'auxclick') && state.actressPage && target.closest('.av-actress-page') && target.closest('a[href]:not([target="_blank"])');
+            if (actressAnchor) closeActressPage();
         }, true);
     }
     document.addEventListener('keydown', event => {
