@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.01
+// @version      15.02
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -3769,7 +3769,7 @@
     backdrop-filter: blur(26px) saturate(1.3);
     -webkit-tap-highlight-color: transparent;
     overflow: hidden;
-    transition: box-shadow .2s ease, width .24s cubic-bezier(.16,1,.3,1), border-radius .24s cubic-bezier(.16,1,.3,1), border-color .2s ease;
+    transition: box-shadow .2s ease, border-color .2s ease;
 }
 .avx2.is-drag { transition: none; }
 .avx2:hover { border-color: rgba(255,255,255,.11); }
@@ -3957,7 +3957,7 @@
 :where(.avx2) .avx-capsule .avx-ico { width: 22px; height: 22px; border-radius: 50%; }
 :where(.avx2) .avx-capsule .avx-ico svg { width: 11px; height: 11px; stroke-width: 1.9; }
 .avx2.panel-collapsed {
-    width: auto !important; border-radius: 999px;
+    width: max-content; border-radius: 999px;
     box-shadow: 0 14px 34px -18px rgba(0,0,0,.84), 0 3px 10px -6px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.05);
 }
 .avx2.panel-collapsed:hover { border-color: rgba(255,255,255,.14); }
@@ -4351,11 +4351,11 @@
     background: rgba(18, 21, 29, var(--ui-hover-opacity, .96));
 }
 @keyframes avxExpandIn {
-    from { opacity: 0; transform: translateY(-7px) scale(.968); }
+    from { opacity: 0; transform: translateY(-6px); }
     to { opacity: 1; transform: none; }
 }
 @keyframes avxCapsuleIn {
-    from { opacity: 0; transform: scale(.88); }
+    from { opacity: 0; transform: scale(.92); }
     to { opacity: 1; transform: none; }
 }
 @keyframes avxPaneIn {
@@ -4365,17 +4365,20 @@
 .avx2:not(.panel-collapsed) > .avx-tabs,
 .avx2:not(.panel-collapsed) > .avx-body {
     transform-origin: top center;
-    animation: avxExpandIn .26s cubic-bezier(.16,1,.3,1) both;
+    animation: avxExpandIn .28s cubic-bezier(.22,1,.36,1) both;
 }
 .avx2.panel-collapsed > .avx-capsule {
     transform-origin: center;
-    animation: avxCapsuleIn .24s cubic-bezier(.16,1,.3,1) both;
+    animation: avxCapsuleIn .2s cubic-bezier(.22,1,.36,1) both;
 }
-.avx2 .avx-pane.is-on { animation: avxPaneIn .2s cubic-bezier(.16,1,.3,1) both; }
-.avx2.is-switching { transition-timing-function: cubic-bezier(.16,1,.3,1); }
+.avx2 .avx-pane.is-on { animation: avxPaneIn .22s cubic-bezier(.22,1,.36,1) both; }
+.avx2.is-switching { transition: none !important; will-change: width, height; }
+.avx2.is-closing { pointer-events: none; }
+.avx2.is-closing > .avx-capsule { display: none; }
 @media (prefers-reduced-motion: reduce) {
     .avx2:not(.panel-collapsed) > .avx-tabs, .avx2:not(.panel-collapsed) > .avx-body,
     .avx2.panel-collapsed > .avx-capsule, .avx2 .avx-pane.is-on { animation: none; }
+    .avx2.is-switching { will-change: auto; }
 }
 .avx2 input.avx-sw[type="checkbox"] {
     -webkit-appearance: none; appearance: none; margin: 0;
@@ -4991,32 +4994,106 @@
         };
         state.layoutPanel = layoutPanel;
         window.addEventListener('resize', () => { lockBodyHeight(); });
-        let toggleSwitchTimer = 0;
-        const togglePanel = collapsed => {
-            const flipFrom = panel.getBoundingClientRect().height;
-            settings.isMinimized = collapsed;
-            panel.classList.add('is-switching');
-            if (toggleSwitchTimer) clearTimeout(toggleSwitchTimer);
-            toggleSwitchTimer = setTimeout(() => panel.classList.remove('is-switching'), 280);
+        const PANEL_MOTION_MS = 300;
+        const PANEL_MOTION_CLOSE_MS = 280;
+        const PANEL_MOTION_EASE = 'cubic-bezier(.4,0,.2,1)';
+        const panelMotionCalm = () => Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        const panelMotionBox = () => {
+            const rect = panel.getBoundingClientRect();
+            return { w: rect.width, h: rect.height };
+        };
+        let panelMotion = null;
+        let panelMotionToken = 0;
+        const commitPanelState = collapsed => {
+            panel.classList.remove('is-closing');
             panel.classList.toggle('panel-collapsed', collapsed);
-            gearBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-            gearBtn.title = collapsed ? '展开设置面板' : '折叠设置面板';
-            if (!collapsed) {
+            if (collapsed) {
+                panel.style.width = 'max-content';
+            } else {
                 panel.style.minWidth = '';
                 panel.style.width = '';
                 if (state.applyPanelSkin) state.applyPanelSkin();
             }
-            store.set('isMinimized', collapsed);
             layoutPanel();
             syncRangeFills(panel);
-            const flipTo = panel.getBoundingClientRect().height;
-            const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-            if (typeof panel.animate === 'function' && !calm && Math.abs(flipTo - flipFrom) > 4) {
-                panel.animate(
-                    [{ height: `${flipFrom}px` }, { height: `${flipTo}px` }],
-                    { duration: 260, easing: 'cubic-bezier(.16,1,.3,1)' }
-                );
+        };
+        const panelMotions = [];
+        const cancelPanelMotion = () => {
+            while (panelMotions.length) {
+                const anim = panelMotions.pop();
+                try { anim.cancel(); } catch (e) {}
             }
+            panelMotion = null;
+        };
+        const runPanelMotion = (from, to, done) => {
+            const frozenWidth = Math.max(from.w, to.w);
+            const frozen = [tabs, body, foot, logEl, header];
+            for (const node of frozen) node.style.width = `${frozenWidth}px`;
+            panel.classList.add('is-switching');
+            const token = panelMotionToken;
+            const expanding = to.w > from.w + 1;
+            const heightMs = expanding ? PANEL_MOTION_MS : PANEL_MOTION_CLOSE_MS;
+            panelMotions.push(panel.animate(
+                [{ width: `${from.w}px` }, { width: `${to.w}px` }],
+                { duration: expanding ? 170 : heightMs - 40, easing: 'cubic-bezier(.33,1,.68,1)', fill: 'forwards' }
+            ));
+            panelMotion = panel.animate(
+                [{ height: `${from.h}px` }, { height: `${to.h}px` }],
+                { duration: heightMs, easing: PANEL_MOTION_EASE, fill: 'none' }
+            );
+            panelMotions.push(panelMotion);
+            let settled = false;
+            const settle = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(fallbackTimer);
+                if (token !== panelMotionToken) return;
+                cancelPanelMotion();
+                for (const node of frozen) node.style.width = '';
+                if (done) done();
+                panel.classList.remove('is-switching');
+            };
+            const fallbackTimer = setTimeout(settle, heightMs + 140);
+            panelMotion.onfinish = settle;
+        };
+        const togglePanel = collapsed => {
+            panelMotionToken += 1;
+            cancelPanelMotion();
+            for (const node of [tabs, body, foot, logEl, header]) node.style.width = '';
+            panel.classList.remove('is-closing');
+            const calm = panelMotionCalm();
+            const first = panelMotionBox();
+            settings.isMinimized = collapsed;
+            gearBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            gearBtn.title = collapsed ? '展开设置面板' : '折叠设置面板';
+            store.set('isMinimized', collapsed);
+            if (calm || typeof panel.animate !== 'function') {
+                commitPanelState(collapsed);
+                panel.classList.remove('is-switching');
+                return;
+            }
+            if (collapsed) {
+                panel.classList.add('panel-collapsed');
+                panel.style.width = 'max-content';
+                const target = panelMotionBox();
+                panel.classList.remove('panel-collapsed');
+                panel.style.width = '';
+                if (state.applyPanelSkin) state.applyPanelSkin();
+                if (first.h - target.h < 2) {
+                    commitPanelState(true);
+                    return;
+                }
+                panel.classList.add('is-closing');
+                runPanelMotion(first, target, () => {
+                    panel.classList.remove('is-closing');
+                    commitPanelState(true);
+                });
+                return;
+            }
+            commitPanelState(false);
+            const target = panelMotionBox();
+            if (Math.abs(target.h - first.h) < 2 && Math.abs(target.w - first.w) < 2) return;
+            runPanelMotion(first, target, null);
         };
         gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
 
