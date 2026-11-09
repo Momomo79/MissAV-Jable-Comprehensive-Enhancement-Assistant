@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.02
+// @version      15.03
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -3821,7 +3821,8 @@
 
 :where(.avx2) .avx-body {
     padding: 12px 11px 11px; display: flex; flex-direction: column; gap: 10px;
-    max-height: min(64vh, 560px); overflow-y: auto; overscroll-behavior: contain;
+    max-height: clamp(196px, 48vh, 410px) !important;
+    overflow-y: auto !important; overscroll-behavior: contain !important;
 }
 :where(.avx2) .avx-body::-webkit-scrollbar { width: 4px; }
 :where(.avx2) .avx-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 4px; }
@@ -4375,6 +4376,27 @@
 .avx2.is-switching { transition: none !important; will-change: width, height; }
 .avx2.is-closing { pointer-events: none; }
 .avx2.is-closing > .avx-capsule { display: none; }
+
+.av-theater-host {
+    max-width: 100% !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    background: #000 !important;
+    border-radius: 10px !important;
+    box-shadow: 0 18px 46px -22px rgba(0, 0, 0, .6) !important;
+}
+.av-theater-host video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    border-radius: inherit !important;
+}
+html.av-theater-mode {
+    overflow-x: hidden;
+}
+@media (max-width: 720px) {
+    .av-theater-host { border-radius: 0 !important; }
+}
 @media (prefers-reduced-motion: reduce) {
     .avx2:not(.panel-collapsed) > .avx-tabs, .avx2:not(.panel-collapsed) > .avx-body,
     .avx2.panel-collapsed > .avx-capsule, .avx2 .avx-pane.is-on { animation: none; }
@@ -4953,13 +4975,17 @@
             return h;
         };
         const lockBodyHeight = () => {
-            const h = measurePlayHeight();
-            if (!h) return;
             const cs = window.getComputedStyle(body);
             const pad = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0);
-            const total = Math.ceil(h + pad);
-            body.style.minHeight = total + 'px';
-            body.style.maxHeight = total + 'px';
+            const box = viewportBox();
+            const viewH = box.h || window.innerHeight || 0;
+            const floor = Math.round(Math.min(300, Math.max(196, viewH * 0.3))) + pad;
+            const ceil = Math.round(Math.min(410, Math.max(240, viewH * 0.48))) + pad;
+            const h = measurePlayHeight();
+            const total = clamp(h > 0 ? Math.ceil(h + pad) : ceil, floor, ceil);
+            body.style.setProperty('min-height', total + 'px', 'important');
+            body.style.setProperty('max-height', total + 'px', 'important');
+            body.style.setProperty('overflow-y', 'auto', 'important');
         };
         const selectTab = key => {
             if (!AVX_TABS.some(tab => tab.key === key)) return;
@@ -4969,7 +4995,8 @@
             body.scrollTop = 0;
             syncRangeFills(body);
             paintKpis(key);
-            lockBodyHeight();
+            try { lockBodyHeight(); } catch (e) { debugLog('panel-lock-height', e); }
+            requestAnimationFrame(() => { try { lockBodyHeight(); } catch (e) {} });
         };
         state.panelSelectTab = selectTab;
         for (const tab of AVX_TABS) {
@@ -5014,6 +5041,7 @@
                 panel.style.width = '';
                 if (state.applyPanelSkin) state.applyPanelSkin();
             }
+            if (!collapsed) lockBodyHeight();
             layoutPanel();
             syncRangeFills(panel);
         };
@@ -5211,6 +5239,11 @@
         }),
         skipBox.wrap
     );
+    const theaterRow = avxSwitchRow('剧场模式', '放大播放器、收起右侧栏目（T 键切换）', !!theaterState, on => {
+        setTheater(on);
+    });
+    state.theaterSwitch = theaterRow.querySelector('.avx-sw');
+    behaveCard.appendChild(theaterRow);
     playPane.appendChild(behaveCard);
 
         const subPane = paneOf('sub');
@@ -6518,6 +6551,200 @@
         return key ? key.slice(0, 1) : fallback;
     }
     let shortcutsBound = false;
+    const THEATER_CLASS = 'av-theater-mode';
+    const THEATER_HOST_CLASS = 'av-theater-host';
+    let theaterState = null;
+    let theaterWatch = false;
+    function theaterRatio() {
+        const video = state.video;
+        const surface = video ? videoSurfaceSize(video) : { width: 0, height: 0 };
+        return surface.width > 0 && surface.height > 0 ? surface.width / surface.height : 16 / 9;
+    }
+    function theaterVideoHost() {
+        const video = state.video;
+        if (!video || !video.isConnected) return null;
+        const base = video.getBoundingClientRect();
+        let node = video.parentElement;
+        let best = node;
+        while (node && node !== document.body && node !== document.documentElement) {
+            const rect = node.getBoundingClientRect();
+            const tolW = Math.max(40, base.width * 0.12);
+            const tolH = Math.max(40, base.height * 0.12);
+            const match = rect.width > 0 && Math.abs(rect.width - base.width) <= tolW && Math.abs(rect.height - base.height) <= tolH;
+            if (!match) break;
+            if (node.querySelector && node.querySelector('.custom-quick-controls, .custom-control-panel, .custom-ui-layer')) break;
+            best = node;
+            node = node.parentElement;
+        }
+        if (best && best.isConnected) return best;
+        if (state.container && state.container.isConnected) return state.container;
+        const host = playerContainer(video);
+        return host && host.isConnected ? host : video.parentElement;
+    }
+    function theaterSideColumns(host) {
+        let column = host;
+        let parent = column.parentElement;
+        while (parent && parent !== document.body && parent !== document.documentElement) {
+            const parentRect = parent.getBoundingClientRect();
+            const columnRect = column.getBoundingClientRect();
+            if (parentRect.width > columnRect.width * 1.06) {
+                const others = [];
+                for (const child of parent.children) {
+                    if (child === column || child.contains(host) || host.contains(child)) continue;
+                    const rect = child.getBoundingClientRect();
+                    const topAligned = Math.abs(rect.top - columnRect.top) <= Math.max(40, columnRect.height * 0.15);
+                    if (topAligned && rect.width >= Math.max(150, parentRect.width * 0.15) && rect.height >= 100) others.push(child);
+                }
+                if (others.length) return { column, row: parent, others };
+            }
+            column = parent;
+            parent = parent.parentElement;
+        }
+        return { column: null, row: null, others: [] };
+    }
+    function theaterSizeFor(column, lockedRatio) {
+        const ratio = lockedRatio > 0 ? lockedRatio : theaterRatio();
+        const box = viewportBox();
+        const narrow = box.w < 900;
+        const columnWidth = column && column.isConnected ? column.getBoundingClientRect().width : 0;
+        const fallback = box.w - (narrow ? 24 : 96);
+        let width = Math.max(320, Math.round(columnWidth > 0 ? columnWidth : fallback));
+        let height = Math.round(width / ratio);
+        const maxHeight = Math.round(box.h * (narrow ? 1.4 : 0.88));
+        if (height > maxHeight) {
+            height = maxHeight;
+            width = Math.round(height * ratio);
+        }
+        return { width, height };
+    }
+    function paintTheater() {
+        const current = theaterState;
+        if (!current) return;
+        if (!current.host.isConnected) {
+            setTheater(false, { silent: true });
+            return;
+        }
+        const apply = padding => {
+            const live = theaterState;
+            if (!live || live !== current) return;
+            const size = theaterSizeFor(current.column, current.ratio);
+            const width = Math.max(240, size.width - padding);
+            const height = Math.round(width / current.ratio);
+            current.host.style.setProperty('width', `${width}px`, 'important');
+            current.host.style.setProperty('height', `${height}px`, 'important');
+            for (const node of current.widened) {
+                if (node.isConnected) node.style.setProperty('width', `${width}px`, 'important');
+            }
+        };
+        apply(0);
+        syncFrameLayers();
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => {
+                const live = theaterState;
+                if (!live || live !== current) return;
+                const rect = current.host.getBoundingClientRect();
+                const wanted = theaterSizeFor(current.column, current.ratio).width;
+                const padding = Math.round(wanted - rect.width);
+                if (Math.abs(padding) <= 4) return;
+                apply(padding > 0 ? padding : 0);
+                syncFrameLayers();
+            });
+        }
+    }
+    function syncTheaterSwitch(on) {
+        const button = state.theaterSwitch;
+        if (!button || !button.isConnected) return;
+        button.classList.toggle('is-on', on);
+        button.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    function theaterWatchBind() {
+        if (theaterWatch) return;
+        theaterWatch = true;
+        window.addEventListener('resize', paintTheater, { passive: true });
+        window.addEventListener('orientationchange', paintTheater, { passive: true });
+    }
+    function setTheater(on, options = {}) {
+        const want = !!on;
+        const current = theaterState;
+        if (!want) {
+            if (current) {
+                for (const save of current.saved) {
+                    if (!save.node) continue;
+                    if (save.style === null) save.node.removeAttribute('style');
+                    else save.node.setAttribute('style', save.style);
+                    save.node.classList.remove(THEATER_HOST_CLASS);
+                }
+            }
+            theaterState = null;
+            document.documentElement.classList.remove(THEATER_CLASS);
+            syncTheaterSwitch(false);
+            if (!options.silent) log('🎬 已退出剧场模式');
+            syncFrameLayers();
+            setTimeout(syncFrameLayers, 320);
+            return false;
+        }
+        const host = theaterVideoHost();
+        if (!host) {
+            syncTheaterSwitch(false);
+            if (!options.silent) log('⚠️ 还没找到播放器，稍后再试');
+            return false;
+        }
+        if (current) setTheater(false, { silent: true });
+        const saved = [];
+        const remember = node => {
+            saved.push({ node, style: node.getAttribute('style') });
+            return node;
+        };
+        const geometry = theaterSideColumns(host);
+        const lockedWidth = host.getBoundingClientRect().width;
+        remember(host);
+        host.classList.add(THEATER_HOST_CLASS);
+        if (geometry.column) remember(geometry.column);
+        for (const node of geometry.others) {
+            remember(node);
+            node.style.setProperty('display', 'none', 'important');
+        }
+        const widened = [];
+        const layoutColumn = geometry.column || (host.parentElement && host.parentElement !== document.body && host.parentElement !== document.documentElement ? host.parentElement : null);
+        if (geometry.column) {
+            geometry.column.style.setProperty('flex', '1 1 100%', 'important');
+            geometry.column.style.setProperty('width', '100%', 'important');
+            geometry.column.style.setProperty('max-width', '100%', 'important');
+        }
+        let chain = host.parentElement;
+        for (let depth = 0; depth < 6 && chain && chain !== layoutColumn && chain !== document.body && chain !== document.documentElement; depth += 1) {
+            remember(chain);
+            chain.style.setProperty('width', '100%', 'important');
+            chain.style.setProperty('max-width', '100%', 'important');
+            chain = chain.parentElement;
+        }
+        if (layoutColumn) {
+            for (const child of layoutColumn.children) {
+                if (child === host || child.contains(host) || host.contains(child)) continue;
+                const rect = child.getBoundingClientRect();
+                if (!rect.width || Math.abs(rect.width - lockedWidth) > Math.max(24, lockedWidth * 0.04)) continue;
+                if (rect.height < 32) continue;
+                remember(child);
+                child.style.setProperty('box-sizing', 'border-box', 'important');
+                widened.push(child);
+            }
+        }
+        theaterState = { host, column: layoutColumn, saved, widened, ratio: theaterRatio() };
+        document.documentElement.classList.add(THEATER_CLASS);
+        theaterWatchBind();
+        paintTheater();
+        syncFrameLayers();
+        setTimeout(syncFrameLayers, 320);
+        syncTheaterSwitch(true);
+        if (!options.silent) {
+            const hidden = geometry.others.length;
+            log(hidden ? `🎬 进入剧场模式（已收起 ${hidden} 个侧栏）` : '🎬 进入剧场模式');
+        }
+        return true;
+    }
+    function toggleTheater() {
+        return setTheater(!theaterState);
+    }
     function setupShortcuts() {
         if (shortcutsBound) return;
         shortcutsBound = true;
@@ -6528,6 +6755,16 @@
             if (!video) return;
             const { accelerate, forward, backward } = settings.keys;
             const key = event.key.toLowerCase();
+            if (key === 'escape' && theaterState) {
+                event.preventDefault();
+                setTheater(false);
+                return;
+            }
+            if (key === 't') {
+                event.preventDefault();
+                if (!event.repeat) toggleTheater();
+                return;
+            }
             if (event.code === 'Space') {
                 event.preventDefault();
                 if (!event.repeat) togglePlayPause();
@@ -12058,6 +12295,7 @@
         ensurePositioned(container);
         state.video = video;
         state.container = container;
+        if (theaterState && theaterState.host !== container) setTheater(false, { silent: true });
         state.bound = true;
         state.player = (typeof unsafeWindow !== 'undefined' && unsafeWindow.player) || video.plyr || video;
         sweepUiOrphans(container);
@@ -12699,7 +12937,7 @@
     const SITE_SPLIT_KEY = 'siteSplit_v1';
     const MAX_RESUME = 1000;
     const RESUME_SAVE_INTERVAL = 5000;
-    const RESUME_TICK_INTERVAL = 15000;
+    const RESUME_TICK_INTERVAL = 5000;
     const RESUME_MIN_SECONDS = 30;
     const RESUME_TAIL_RATIO = 0.95;
     const RESUME_EXPIRE_MS = 120 * 86400000;
@@ -12807,6 +13045,7 @@
             genres: historyStringList(item.genres),
             maker: historyText(item.maker),
             maxProgress: Math.min(1, historyNumber(item.maxProgress)),
+            lastPosition: Math.max(0, Math.round(historyNumber(item.lastPosition))),
             watchCount: historyNumber(item.watchCount)
         };
     }
@@ -13062,6 +13301,7 @@
         }
         state.resumeLastSaved = Date.now();
         historyStorageSet(RESUME_KEY, JSON.stringify(store));
+        if (force) persistFlush();
         analyticsRev += 1;
     }
     function clearResume(code) {
@@ -13096,7 +13336,7 @@
         if (!video || !code || !video.isConnected) return false;
         const total = resumeTotal(video);
         const position = Number(video.currentTime) || 0;
-        if (!total || position < RESUME_MIN_SECONDS) return false;
+        if (position < RESUME_MIN_SECONDS) return false;
         const meta = extractPageMetadata();
         const entry = {
             title: meta?.title || '',
@@ -13315,6 +13555,41 @@
         log(`⏱️ 已从上次位置继续：${formatDuration(jump)}`);
         return true;
     }
+    const RESUME_NOTE_LIMIT = 40;
+    const resumeNotes = [];
+    function resumeNote(code, reason) {
+        try {
+            resumeNotes.push({ at: Date.now(), code: String(code || ''), reason: String(reason || '') });
+            if (resumeNotes.length > RESUME_NOTE_LIMIT) resumeNotes.shift();
+            unsafeWindow.__avResumeNotes = resumeNotes;
+        } catch (e) {}
+    }
+    function resumeRecordEntry(code) {
+        const key = resumeCodeKey(code);
+        if (!key) return null;
+        let list = null;
+        try { list = analyticsRecords(); } catch (e) { return null; }
+        if (!Array.isArray(list)) return null;
+        const hit = list.find(item => item && resumeCodeKey(item.code) === key);
+        if (!hit) return null;
+        const duration = Number(hit.duration) || 0;
+        const last = Number(hit.lastPosition) || 0;
+        const max = Math.min(1, Number(hit.maxProgress) || 0);
+        const position = last || (duration > 0 ? Math.round(max * duration) : 0);
+        return { position, duration, maxProgress: max };
+    }
+    function resumeApplyFromRecords(video, code, total) {
+        const record = resumeRecordEntry(code);
+        if (!record) { resumeNote(code, 'no-record'); return false; }
+        const duration = total || record.duration;
+        if (!duration) { resumeNote(code, 'no-duration'); return false; }
+        if (record.maxProgress >= 0.95) { resumeNote(code, 'record-finished'); return false; }
+        const position = Math.round(record.position);
+        if (position < RESUME_MIN_SECONDS) { resumeNote(code, 'record-too-early'); return false; }
+        if (position >= duration * RESUME_TAIL_RATIO) { resumeNote(code, 'record-tail'); return false; }
+        resumeNote(code, `record-fallback:${position}`);
+        return resumeApplyPosition(video, state.container, code, { position, duration });
+    }
     function maybeRestoreResumePosition() {
         const video = state.video;
         if (!video || !video.isConnected) return false;
@@ -13327,8 +13602,9 @@
         const entry = resumePosition(code, total);
         if (!entry) {
             if (saved && saved.duration && saved.position >= saved.duration * RESUME_TAIL_RATIO) clearResume(code);
-            return false;
+            return resumeApplyFromRecords(video, code, total);
         }
+        resumeNote(code, `resume:${entry.position}`);
         return resumeApplyPosition(video, state.container, code, entry);
     }
     function bindResumeSeekIntent(container) {
@@ -14863,6 +15139,7 @@
             session.watchedSeconds += jumped ? wallDelta : mediaDelta;
             session.dirty = true;
             const window_ = videoPlaybackWindow(state.video);
+            session.lastPosition = Math.round(mediaTime);
             if (window_.total > 0) {
                 session.duration = Math.round(window_.total);
                 session.maxProgress = Math.max(session.maxProgress, Math.min(1, (mediaTime - window_.origin) / window_.total));
@@ -14929,12 +15206,15 @@
             flushAnalyticsRecords();
             return;
         }
+        resumeCache = null;
+        historyReadCache.clear();
         const session = state.analyticsSession;
         if (!session || !state.video) return;
         session.lastTick = Date.now();
         session.lastMediaTime = Number(state.video.currentTime) || 0;
     }
     function flushAnalyticsRecords() {
+        resumeSaveCurrent(true);
         commitAnalyticsSession(true);
         if (state.analyticsSavePending) persistAnalyticsRecords(true);
         flushAnalyticsStorage();
@@ -14956,6 +15236,7 @@
             if (!session.committed) existing.watchCount = (existing.watchCount || 1) + 1;
             session.committed = true;
             if (session.duration) existing.duration = session.duration;
+            if (session.lastPosition) existing.lastPosition = Math.round(session.lastPosition);
             if (session.title && session.title !== session.code) existing.title = session.title;
             if (session.actresses.length) existing.actresses = session.actresses;
             if (session.genres.length) existing.genres = session.genres;
@@ -14974,6 +15255,7 @@
                 genres: session.genres,
                 maker: session.maker,
                 maxProgress: session.maxProgress,
+                lastPosition: session.lastPosition || 0,
                 watchCount: 1
             });
         }
@@ -15951,6 +16233,12 @@
         return { host, ticks, tip, img, label };
     }
     let framePreviewResizeHandler = null;
+    const frameLayerSyncs = new Set();
+    function syncFrameLayers() {
+        for (const sync of frameLayerSyncs) {
+            try { sync(); } catch (error) { debugLog(error, 'frame-sync'); }
+        }
+    }
     function installFramePreview(video, frames) {
         if (!video || !frames || !frames.length || !framesPreviewEnabled()) return;
         const attach = () => {
@@ -15985,14 +16273,22 @@
             };
             let ticksBox = null;
             let syncFrame = 0;
+            let railWidthLast = 0;
             const queueSync = () => {
                 if (syncFrame) return;
                 syncFrame = requestAnimationFrame(() => {
                     syncFrame = 0;
                     ticksBox = null;
                     syncLayer();
+                    const rail = railOf();
+                    const width = rail && rail.isConnected ? rail.getBoundingClientRect().width : 0;
+                    if (width && Math.abs(width - railWidthLast) > 24) {
+                        railWidthLast = width;
+                        renderTicks();
+                    }
                 });
             };
+            frameLayerSyncs.add(queueSync);
             syncLayer();
             if (framePreviewResizeHandler) window.removeEventListener('resize', framePreviewResizeHandler);
             framePreviewResizeHandler = queueSync;
@@ -16113,13 +16409,20 @@
                 const now = Date.now();
                 if (now - boxCheckedAt < 400) return;
                 boxCheckedAt = now;
-                const size = measureSiteBox();
-                if (!size) return;
-                const key = `${size.w}x${size.h}`;
+                const site = measureSiteBox();
+                const baseW = site ? site.w : 236;
+                const baseH = site ? site.h : 135;
+                const spanWidth = host.getBoundingClientRect().width || 0;
+                const maxW = spanWidth > 0 ? Math.min(440, Math.round(spanWidth * 0.34)) : 440;
+                let width = Math.min(baseW, maxW);
+                if (spanWidth >= 760) width = Math.max(width, Math.min(maxW, 320));
+                width = Math.max(168, Math.round(width));
+                const height = Math.max(64, Math.round(width * (baseH / baseW)));
+                const key = `${width}x${height}`;
                 if (host.dataset.avBox === key) return;
                 host.dataset.avBox = key;
-                host.style.setProperty('--av-frame-w', `${size.w}px`);
-                host.style.setProperty('--av-frame-h', `${size.h}px`);
+                host.style.setProperty('--av-frame-w', `${width}px`);
+                host.style.setProperty('--av-frame-h', `${height}px`);
             };
             const frameWarm = new Set();
             const warmQueue = [];
@@ -16161,7 +16464,10 @@
                 const remain = Math.max(0, (video.duration || 0) - seek);
                 label.textContent = `${formatDuration(Math.round(seek))} · 剩 ${formatDuration(remain)}`;
                 const frameRatio = tickRatioOf.has(frame.t) ? tickRatioOf.get(frame.t) : ratioOf(frame);
-                tip.style.left = `${(clamp(frameRatio, 0.08, 0.92) * 100).toFixed(2)}%`;
+                const spanWidth = host.getBoundingClientRect().width || 0;
+                const tipWidth = tip.offsetWidth || 236;
+                const edge = spanWidth > 0 ? Math.min(0.44, (tipWidth / 2 + 6) / spanWidth) : 0.08;
+                tip.style.left = `${(clamp(frameRatio, edge, 1 - edge) * 100).toFixed(2)}%`;
                 mutePreview(true);
                 host.classList.add('is-on');
                 if (hideTimer) clearTimeout(hideTimer);
@@ -16306,6 +16612,7 @@
             window.removeEventListener('resize', framePreviewResizeHandler);
             framePreviewResizeHandler = null;
         }
+        frameLayerSyncs.clear();
         for (const host of document.querySelectorAll('.av-frame-marks')) host.remove();
         for (const el of document.querySelectorAll('[data-av-frames-ready]')) delete el.dataset.avFramesReady;
         for (const el of document.querySelectorAll('.av-preview-off')) {
