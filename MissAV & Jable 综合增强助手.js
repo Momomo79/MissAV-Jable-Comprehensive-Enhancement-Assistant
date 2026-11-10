@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.04
+// @version      15.04.01
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -95,6 +95,139 @@
         }
     }
 
+    const avxReflowJobs = new Map();
+    let avxReflowPending = false;
+    function avxReflowDrain() {
+        avxReflowPending = false;
+        if (!avxReflowJobs.size) return;
+        const jobs = [...avxReflowJobs.values()];
+        avxReflowJobs.clear();
+        const results = [];
+        for (const job of jobs) {
+            try {
+                results.push(job.read ? job.read() : undefined);
+            } catch (error) {
+                results.push(undefined);
+                debugLog(error, 'reflow-read');
+            }
+        }
+        for (let i = 0; i < jobs.length; i += 1) {
+            const job = jobs[i];
+            if (!job.write) continue;
+            try {
+                job.write(results[i]);
+            } catch (error) {
+                debugLog(error, 'reflow-write');
+            }
+        }
+    }
+    function avxReflow(key, read, write) {
+        avxReflowJobs.set(key, { read, write });
+        if (avxReflowPending) return;
+        avxReflowPending = true;
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(avxReflowDrain);
+        else setTimeout(avxReflowDrain, 0);
+    }
+    const avxDateTexts = new Map();
+    function avxLocaleDate(value) {
+        const at = Number(value) || 0;
+        const hit = avxDateTexts.get(at);
+        if (hit !== undefined) return hit;
+        const text = new Date(at).toLocaleString();
+        if (avxDateTexts.size > 400) avxDateTexts.clear();
+        avxDateTexts.set(at, text);
+        return text;
+    }
+
+    function avxSnapValue(value, min, max, step) {
+        const lo = Number(min);
+        const hi = Number(max);
+        const size = Number(step) > 0 ? Number(step) : 1;
+        const input = Number(value);
+        if (!Number.isFinite(input)) return lo;
+        const steps = Math.round((Math.min(hi, Math.max(lo, input)) - lo) / size);
+        const snapped = lo + steps * size;
+        return Number(Math.min(hi, Math.max(lo, snapped)).toFixed(4));
+    }
+    function avxNumberField(options) {
+        const field = document.createElement('input');
+        field.type = 'text';
+        field.className = 'avx-num';
+        field.autocomplete = 'off';
+        field.spellcheck = false;
+        field.inputMode = Number(options.step) < 1 ? 'decimal' : 'numeric';
+        field.value = options.format(options.value());
+        if (options.label) field.setAttribute('aria-label', options.label);
+        let editing = false;
+        const plain = value => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? String(Number(parsed.toFixed(4))) : '';
+        };
+        const clean = () => String(field.value).replace(/[^0-9.+\-]/g, '');
+        const settle = apply => {
+            editing = false;
+            field.classList.remove('is-editing');
+            if (apply) {
+                const parsed = Number.parseFloat(clean());
+                if (Number.isFinite(parsed)) {
+                    const next = avxSnapValue(parsed, options.min, options.max, options.step);
+                    if (next !== options.value()) {
+                        options.commit(next);
+                        field.value = options.format(options.value());
+                        return;
+                    }
+                }
+            }
+            field.value = options.format(options.value());
+        };
+        field.addEventListener('focus', () => {
+            editing = true;
+            field.classList.add('is-editing');
+            field.value = plain(options.value());
+            try {
+                field.select();
+            } catch (error) {
+                debugLog(error);
+            }
+        });
+        field.addEventListener('input', () => {
+            if (!editing) return;
+            const next = clean();
+            if (next !== field.value) field.value = next;
+        });
+        field.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                event.stopPropagation();
+                settle(true);
+                field.blur();
+                return;
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                settle(false);
+                field.blur();
+                return;
+            }
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            event.stopPropagation();
+            const size = Number(options.step) > 0 ? Number(options.step) : 1;
+            const base = Number.parseFloat(clean());
+            const from = Number.isFinite(base) ? base : options.value();
+            const next = avxSnapValue(from + (event.key === 'ArrowUp' ? size : -size), options.min, options.max, options.step);
+            field.value = plain(next);
+            options.commit(next);
+        });
+        field.addEventListener('blur', () => {
+            if (editing) settle(true);
+        });
+        field.avxSet = text => {
+            if (document.activeElement !== field) field.value = text;
+        };
+        return field;
+    }
     const PERSIST_DELAY = 200;
     const PERSIST_QUEUE = new Map();
     const PERSIST_WRITTEN = new Map();
@@ -3867,6 +4000,16 @@
     background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
     border-radius: 6px; padding: 2px 7px; min-width: 48px; text-align: center; flex: 0 0 auto;
 }
+:where(.avx2) input.avx-num {
+    font-family: inherit; font-size: 10.5px; box-sizing: border-box; width: 64px; min-width: 52px;
+    appearance: none; -webkit-appearance: none; cursor: text; line-height: 1.2;
+}
+:where(.avx2) input.avx-num::selection { background: rgba(143,178,255,.35); }
+:where(.avx2) input.avx-num:hover { border-color: rgba(255,255,255,.2); background: rgba(255,255,255,.075); }
+:where(.avx2) input.avx-num:focus {
+    outline: none; border-color: rgba(143,178,255,.62); background: rgba(143,178,255,.14);
+    color: #fff; box-shadow: 0 0 0 2px rgba(143,178,255,.18);
+}
 :where(.avx2) .avx-range { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 12px; background: transparent; cursor: pointer; }
 :where(.avx2) .avx-range::-webkit-slider-runnable-track {
     height: 4px; border-radius: 999px;
@@ -3893,7 +4036,10 @@
 :where(.avx2) .avx-btn--ghost { background: transparent; border-color: var(--line); }
 :where(.avx2) .avx-btn--danger { color: #ff9aa6; border-color: rgba(255,122,138,.22); background: rgba(255,122,138,.055); }
 :where(.avx2) .avx-btn--sm { padding: 5px 9px; font-size: 11px; border-radius: 7px; }
-:where(.avx2) .avx-btn--block { width: 100%; }
+:where(.avx2) .avx-btn--block {
+    width: 100%; min-height: 32px; display: flex; align-items: center; justify-content: center;
+    box-sizing: border-box; gap: 6px; text-align: center; text-decoration: none;
+}
 :where(.avx2) .avx-btns { display: flex; gap: 7px; }
 :where(.avx2) .avx-btns > .avx-btn { flex: 1; }
 
@@ -4697,8 +4843,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             unit.textContent = unitText;
             title.appendChild(unit);
         }
-        const num = document.createElement('span');
-        num.className = 'avx-num';
         const slider = document.createElement('input');
         slider.type = 'range';
         slider.className = 'avx-range';
@@ -4706,8 +4850,22 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         slider.max = max;
         slider.step = step;
         slider.value = settings[key];
+        const num = avxNumberField({
+            label: labelText,
+            min,
+            max,
+            step,
+            format,
+            value: () => Number(slider.value),
+            commit: next => {
+                slider.value = next;
+                settings[key] = next;
+                paint(next);
+                onApply(next);
+            }
+        });
         const paint = value => {
-            num.textContent = format(value);
+            if (num && num.avxSet) num.avxSet(format(value));
             const pct = ((Number(value) - Number(min)) / (Number(max) - Number(min))) * 100;
             slider.style.setProperty('--pct', `${Math.max(0, Math.min(100, pct))}%`);
         };
@@ -5182,7 +5340,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const wrap = avxEl('div', 'avx-sl');
         const head = avxEl('div', 'avx-sl-h');
         const title = avxEl('b', '', unit ? label + ' <span class="avx-unit">' + unit + '</span>' : label);
-        const num = avxEl('span', 'avx-num', format(value));
         const range = document.createElement('input');
         range.type = 'range';
         range.className = 'avx-range';
@@ -5190,10 +5347,23 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         range.max = max;
         range.step = step;
         range.value = value;
+        const num = avxNumberField({
+            label,
+            min,
+            max,
+            step,
+            format,
+            value: () => Number(range.value),
+            commit: next => {
+                range.value = next;
+                paint(next);
+                onInput(next);
+            }
+        });
         const paint = v => {
             const pct = ((Number(v) - Number(min)) / (Number(max) - Number(min))) * 100;
             range.style.setProperty('--pct', `${Math.max(0, Math.min(100, pct))}%`);
-            num.textContent = format(v);
+            if (num && num.avxSet) num.avxSet(format(v));
         };
         paint(value);
         range.addEventListener('input', () => {
@@ -5389,6 +5559,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             cockpitWrap.appendChild(cockpit);
             dataPane.appendChild(cockpitWrap);
         }
+        const favBtn = btnFavFromKeys();
+        favBtn.classList.remove('avx-btn--sm');
+        favBtn.classList.add('avx-btn', 'avx-btn--primary', 'avx-btn--block');
+        favBtn.textContent = '打开女优收藏大屏';
+        favBtn.title = '在新标签页打开女优收藏大屏';
+        const favWrap = avxEl('div', 'avx-btns');
+        favWrap.appendChild(favBtn);
+        dataPane.appendChild(favWrap);
         const recordRows = ['filterTrackWatched', 'analyticsTrack']
             .map(key => {
                 const source = state.filterChecks[key];
@@ -5401,7 +5579,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             dataPane.appendChild(recordCard);
         }
 
-        const favCard = avxCard('收藏与备份', '');        const mkActionRow = (label, desc, btnLabel, node) => {
+        const favCard = avxCard('备份与清理', '打包下载与本地清空');
+        const mkActionRow = (label, desc, btnLabel, node) => {
             const row = avxEl('div', 'avx-row avx-row--tight');
             const lbl = avxEl('div', 'avx-lbl');
             lbl.append(avxEl('b', '', label), avxEl('small', '', desc));
@@ -5410,9 +5589,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             row.append(lbl, node);
             return row;
         };
-        const favBtn = btnFavFromKeys();
         favCard.append(
-            mkActionRow('女优收藏', `${IS_JABLE ? 'Jable' : 'MissAV'} 站内收藏页`, '打开', favBtn),
             mkActionRow('收藏批量备份', '名称 / 番号 / 封面打包下载', '备份', btnBackup),
             mkActionRow('清空本站已看库', '只影响当前站点', '清空', btnClearLib)
         );
@@ -7991,7 +8168,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function audioPaintPanel() {
         const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
         if (state.audioGainLabel) state.audioGainLabel.textContent = `音量 ${audioGainText(gain)}`;
-        if (state.audioSliderValue) state.audioSliderValue.textContent = audioGainText(gain);
+        if (state.audioSliderValue) {
+            if (state.audioSliderValue.avxSet) state.audioSliderValue.avxSet(audioGainText(gain));
+            else state.audioSliderValue.textContent = audioGainText(gain);
+        }
         if (state.audioSlider) {
             state.audioSlider.value = String(gain);
             syncRangeFill(state.audioSlider);
@@ -10318,6 +10498,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const renderGrid = () => {
             applySort();
             grid.replaceChildren();
+            const batch = document.createDocumentFragment();
             for (const item of sorted) {
                 const row = actressFavRow(site, item);
                 const check = row.querySelector('.av-actress-check');
@@ -10331,8 +10512,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     });
                 }
                 row.classList.toggle('is-picked', selected.has(row.dataset.fold));
-                grid.appendChild(row);
+                batch.appendChild(row);
             }
+            grid.appendChild(batch);
             mkKpi(kpiTotal, '收藏总数', String(list.length));
             applyFilter();
             loadActressSocials(grid, (found, settled) => {
@@ -16957,7 +17139,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             progress.timeText,
             progress.isCompleted ? 1 : 0,
             formatRecordDate(record.watchedAt),
-            new Date(Number(record.watchedAt) || 0).toLocaleString()
+            avxLocaleDate(record.watchedAt)
         ]);
     }
     function buildRecordRow(record) {
@@ -17123,13 +17305,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 empty.textContent = query ? `未找到匹配「${state.analyticsQuery}」的观影记录` : '本时间范围内暂无观影记录';
                 list.appendChild(empty);
             } else {
+                const batch = document.createDocumentFragment();
                 for (const record of shown) {
                     const rowKey = recordRowKey(record);
                     const bucket = pooled.get(rowKey);
                     const row = bucket && bucket.length ? bucket.shift() : buildRecordRow(record);
                     nextPool.push({ key: rowKey, row });
-                    list.appendChild(row);
+                    batch.appendChild(row);
                 }
+                list.appendChild(batch);
             }
             state.analyticsRowPool = nextPool;
             count.textContent = `共 ${found.length} 部影片`;
@@ -17478,18 +17662,22 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     function syncMetricToggle(group, metric) {
         if (!group) return;
-        const buttons = Array.prototype.slice.call(group.querySelectorAll('button[data-metric]'));
+        const buttons = group.querySelectorAll('button[data-metric]');
         let target = null;
         for (const button of buttons) {
             const on = button.dataset.metric === metric;
-            button.classList.toggle('is-on', on);
+            if (button.classList.contains('is-on') !== on) button.classList.toggle('is-on', on);
             if (on) target = button;
         }
-        group.dataset.metric = metric;
+        if (group.dataset.metric !== metric) group.dataset.metric = metric;
         const pill = group.querySelector('.av-stat-toggle-pill');
         if (!target || !pill) return;
-        pill.style.width = `${target.offsetWidth}px`;
-        pill.style.transform = `translateX(${target.offsetLeft}px)`;
+        avxReflow(group, () => [target.offsetWidth, target.offsetLeft], box => {
+            const [width, left] = box || [];
+            if (!Number.isFinite(width) || !Number.isFinite(left)) return;
+            pill.style.width = `${width}px`;
+            pill.style.transform = `translateX(${left}px)`;
+        });
     }
     function buildMetricToggle(options, active, onPick) {
         const wrap = document.createElement('div');
