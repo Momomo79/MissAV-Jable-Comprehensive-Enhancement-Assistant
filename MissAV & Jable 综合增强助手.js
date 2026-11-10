@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.03
+// @version      15.04
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -4241,14 +4241,15 @@
     background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
     border-radius: 6px; padding: 2px 6px;
 }
-.avx2 .av-audio-presets { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 11px 10px; }
-.avx2 .av-audio-presets > button {
-    flex: 1 1 auto; padding: 5px 8px; border-radius: 7px;
-    font-size: 10.5px; color: #c3cede;
+.avx2 .avx-chips.av-audio-presets { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; padding: 13px 11px 12px; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .avx-chips.av-audio-presets > button {
+    min-width: 0; padding: 5px 0; border-radius: 7px; white-space: nowrap;
+    display: inline-flex; align-items: center; justify-content: center; text-align: center; line-height: 1.15;
+    font-size: 10.5px; color: #c3cede; font-variant-numeric: tabular-nums; letter-spacing: .01em;
     background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.09); transition: .15s;
 }
-.avx2 .av-audio-presets > button:hover { background: rgba(143,178,255,.13); border-color: rgba(143,178,255,.4); color: #fff; }
-.avx2 .av-audio-presets > button.is-on {
+.avx2 .avx-chips.av-audio-presets > button:hover { background: rgba(143,178,255,.13); border-color: rgba(143,178,255,.4); color: #fff; }
+.avx2 .avx-chips.av-audio-presets > button.is-on {
     background: rgba(143,178,255,.16); border-color: rgba(143,178,255,.45); color: #eaf1ff;
 }
 .avx2 .av-audio-state {
@@ -4394,6 +4395,7 @@
 html.av-theater-mode {
     overflow-x: hidden;
 }
+html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 @media (max-width: 720px) {
     .av-theater-host { border-radius: 0 !important; }
 }
@@ -4444,7 +4446,11 @@ html.av-theater-mode {
 .avx2 .avx-card:hover { border-color: rgba(255,255,255,.075); }
 .custom-control-panel.avx2 { font-size: 12px; line-height: 1.4; }
 
-.avx2 .avx-btns .avx-btn,
+.avx2 .avx-btns .avx-btn {
+    border: 1px solid rgba(255,255,255,.1); padding: 7px 12px; background: rgba(255,255,255,.045);
+    border-radius: 8px; font-weight: 500; color: #dfe7f5;
+    box-shadow: none; transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
 .avx2 .avx-row .avx-btn {
     border: 0; padding: 0; background: transparent; border-radius: 7px;
     font-weight: 500; color: #dfe7f5;
@@ -4455,12 +4461,16 @@ html.av-theater-mode {
     border-radius: 8px; font-size: 11px; font-weight: 500; color: #c6d1e2;
     box-shadow: none; transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.avx2 .avx-btns .avx-btn--primary { background: transparent; color: #eaf1ff; font-weight: 600; }
-.avx2 .avx-btns .avx-btn:hover,
+.avx2 .avx-btns .avx-btn--primary { background: rgba(143,178,255,.16); border-color: rgba(143,178,255,.42); color: #eaf1ff; font-weight: 600; }
+.avx2 .avx-btns .avx-btn:hover { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.17); }
+.avx2 .avx-btns .avx-btn--primary:hover { background: rgba(143,178,255,.24); border-color: rgba(143,178,255,.56); }
 .avx2 .avx-row .avx-btn:hover { background: rgba(255,255,255,.06); }
 .avx2 .avx-chips .avx-chip.is-on { background: rgba(143,178,255,.18); border-color: rgba(143,178,255,.5); color: #eaf1ff; }
 .avx2 .avx-chips .avx-chip:hover { background: rgba(143,178,255,.12); border-color: rgba(143,178,255,.4); color: #fff; }
 .avx2 .avx-btns { align-items: center; }
+.avx2 .avx-card > .av-audio-state { padding: 0 11px 9px; }
+.avx2 .avx-card > .avx-btns { padding: 11px; border-top: 1px solid rgba(255,255,255,.045); }
+.avx2 .avx-card > .avx-note + .avx-btns { border-top: 0; padding-top: 4px; }
 .custom-control-panel.avx2.avx-preview-rest { background: rgba(18, 21, 29, var(--ui-bg-opacity, .93)); }
 .custom-control-panel.avx2.avx-preview-hover { background: rgba(18, 21, 29, var(--ui-hover-opacity, .96)); }
 .avx2 .avx-note {
@@ -5328,10 +5338,9 @@ html.av-theater-mode {
         devRow.appendChild(avxBtn('选择', { variant: 'ghost', small: true, block: false, onClick: () => openAudioWindow() }));
         routeCard.appendChild(devRow);
         routeCard.appendChild(avxEl('div', 'avx-note', '音频增益按站点独立保存；设备路由需浏览器支持 setSinkId。'));
-        audioPane.appendChild(routeCard);
         const audioState = avxEl('div', 'av-audio-state');
         audioState.style.display = 'none';
-        audioPane.appendChild(audioState);
+        routeCard.appendChild(audioState);
         state.audioStateEl = audioState;
 
         const audioBtns = avxEl('div', 'avx-btns');
@@ -5340,7 +5349,8 @@ html.av-theater-mode {
             avxBtn('测试音', { variant: 'ghost', block: true, onClick: () => audioTestTone() }),
             avxBtn('保存', { variant: 'primary', block: true, onClick: () => audioSaveSettings() })
         );
-        audioPane.appendChild(audioBtns);
+        routeCard.appendChild(audioBtns);
+        audioPane.appendChild(routeCard);
 
         const filterPane = paneOf('filter');
         const filterKpis = avxKpis([['0', '本页条目'], ['0', '已过滤'], ['0', '剩余可见']]);
@@ -5379,8 +5389,19 @@ html.av-theater-mode {
             cockpitWrap.appendChild(cockpit);
             dataPane.appendChild(cockpitWrap);
         }
-        const favCard = avxCard('收藏与备份', '');
-        const mkActionRow = (label, desc, btnLabel, node) => {
+        const recordRows = ['filterTrackWatched', 'analyticsTrack']
+            .map(key => {
+                const source = state.filterChecks[key];
+                return source && source.closest ? source.closest('.avx-row') : null;
+            })
+            .filter(Boolean);
+        if (recordRows.length) {
+            const recordCard = avxCard('数据记录', '影响已看库与统计');
+            for (const row of recordRows) recordCard.appendChild(row);
+            dataPane.appendChild(recordCard);
+        }
+
+        const favCard = avxCard('收藏与备份', '');        const mkActionRow = (label, desc, btnLabel, node) => {
             const row = avxEl('div', 'avx-row avx-row--tight');
             const lbl = avxEl('div', 'avx-lbl');
             lbl.append(avxEl('b', '', label), avxEl('small', '', desc));
@@ -6680,7 +6701,9 @@ html.av-theater-mode {
             syncTheaterSwitch(false);
             if (!options.silent) log('🎬 已退出剧场模式');
             syncFrameLayers();
+            syncSubtitleGeometry(true);
             setTimeout(syncFrameLayers, 320);
+            setTimeout(() => syncSubtitleGeometry(true), 320);
             return false;
         }
         const host = theaterVideoHost();
@@ -6734,7 +6757,9 @@ html.av-theater-mode {
         theaterWatchBind();
         paintTheater();
         syncFrameLayers();
+        syncSubtitleGeometry(true);
         setTimeout(syncFrameLayers, 320);
+        setTimeout(() => syncSubtitleGeometry(true), 320);
         syncTheaterSwitch(true);
         if (!options.silent) {
             const hidden = geometry.others.length;
@@ -6907,12 +6932,17 @@ html.av-theater-mode {
         const videoRect = video.getBoundingClientRect();
         if (!videoRect.height) return;
         const hostRect = el.parentElement ? el.parentElement.getBoundingClientRect() : videoRect;
+        const fontPx = subtitleFontPx(videoRect);
+        if (el.style.fontSize !== `${fontPx}px`) el.style.fontSize = `${fontPx}px`;
         const pct = clamp(settings.subtitleBottom, SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX);
         const gap = videoRect.height * pct / 100;
-        const height = el.offsetHeight || parseFloat(getComputedStyle(el).fontSize) * 1.4;
+        const height = el.offsetHeight || fontPx * 1.4;
         const top = videoRect.bottom - gap - height - hostRect.top;
+        const centerX = videoRect.left + videoRect.width / 2 - hostRect.left;
         el.style.setProperty('top', `${Math.round(top)}px`, 'important');
         el.style.setProperty('bottom', 'auto', 'important');
+        el.style.setProperty('left', `${Math.round(centerX)}px`, 'important');
+        el.style.setProperty('transform', 'translateX(-50%)', 'important');
     }
     function ensureSubtitleGeometryWatch() {
         if (state.subtitleGeomBound) return;
@@ -6930,10 +6960,18 @@ html.av-theater-mode {
         document.addEventListener('fullscreenchange', () => syncSubtitleGeometry(true));
         document.addEventListener('webkitfullscreenchange', () => syncSubtitleGeometry(true));
     }
+    function subtitleFontPx(videoRect) {
+        const base = clamp(settings.subtitleFontSize, FONT_SIZE_MIN, FONT_SIZE_MAX);
+        const width = videoRect && videoRect.width ? videoRect.width : 0;
+        if (!theaterState || !width) return base;
+        const scale = clamp(width / 960, 1, 2.2);
+        return Math.round(clamp(base * scale, FONT_SIZE_MIN, 72));
+    }
     function applySubtitleStyle() {
         const el = state.subtitleEl;
         if (!el) return;
-        el.style.fontSize = `${settings.subtitleFontSize}px`;
+        const rect = state.video && state.video.isConnected ? state.video.getBoundingClientRect() : null;
+        el.style.fontSize = `${subtitleFontPx(rect)}px`;
         syncSubtitleGeometry(true);
     }
     function applySubtitleText(text, label = '字幕', fileName = '') {
@@ -10606,6 +10644,7 @@ html.av-theater-mode {
     }
     function injectJableModelFavButton() {
         if (!IS_JABLE) return;
+        if (!/\/models\//i.test(location.pathname)) return;
         const header = jableModelHeader();
         if (!header) return;
         if (header.box.querySelector('.av-actress-fav-btn')) return;
