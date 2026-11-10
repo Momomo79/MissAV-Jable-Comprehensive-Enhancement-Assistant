@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.04.01
+// @version      15.05
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -286,14 +286,21 @@
             return false;
         }
         const pending = PERSIST_QUEUE.get(fullKey);
-        if (pending && pending.text === text && (!wantLs || pending.ls) && (!wantGm || pending.gm)) {
+        const sameText = !!pending && pending.text === text;
+        if (sameText && (!wantLs || pending.ls) && (!wantGm || pending.gm)) {
+            PERSIST_STATE.skipped += 1;
+            return false;
+        }
+        const nextLs = (sameText && pending.ls) || (wantLs && !known.ls);
+        const nextGm = (sameText && pending.gm) || (wantGm && !known.gm);
+        if (!nextLs && !nextGm) {
             PERSIST_STATE.skipped += 1;
             return false;
         }
         PERSIST_QUEUE.set(fullKey, {
             text,
-            ls: wantLs && !known.ls,
-            gm: wantGm && !known.gm
+            ls: nextLs,
+            gm: nextGm
         });
         PERSIST_STATE.queued += 1;
         persistHook();
@@ -729,6 +736,10 @@
             busAvatar: String(entry.busAvatar || ''),
             busWorks: Number(entry.busWorks) || 0,
             busFetchedAt: Number(entry.busFetchedAt) || 0,
+            wikiTitle: String(entry.wikiTitle || ''),
+            wikiPath: String(entry.wikiPath || ''),
+            wikiAvatar: String(entry.wikiAvatar || ''),
+            wikiFetchedAt: Number(entry.wikiFetchedAt) || 0,
             fetchedAt: Number(entry.fetchedAt) || 0
         };
     }
@@ -736,7 +747,7 @@
         const folded = foldActressName(name);
         if (!folded) return null;
         const store = actressProfileStore();
-        const current = Object.assign({ name: String(name || ''), aliases: [], works: 0, avatar: '', twitter: '', instagram: '', actorPath: '', busPath: '', busAvatar: '', birthday: '', age: '', height: '', cup: '', bust: '', waist: '', hip: '', hobby: '', busWorks: 0, busFetchedAt: 0, fetchedAt: 0 }, store.get(folded) || {}, patch || {});
+        const current = Object.assign({ name: String(name || ''), aliases: [], works: 0, avatar: '', twitter: '', instagram: '', actorPath: '', busPath: '', busAvatar: '', birthday: '', age: '', height: '', cup: '', bust: '', waist: '', hip: '', hobby: '', busWorks: 0, busFetchedAt: 0, wikiTitle: '', wikiPath: '', wikiAvatar: '', wikiFetchedAt: 0, fetchedAt: 0 }, store.get(folded) || {}, patch || {});
         current.fetchedAt = Date.now();
         store.set(folded, current);
         if (store.size > ACTRESS_PROFILE_LIMIT) {
@@ -892,7 +903,7 @@
         return [
             { label: 'JavDB', href: slug ? `https://javdb.com${slug}` : `https://javdb.com/search?q=${query}&f=actor` },
             { label: 'JavBus', href: bus ? `https://www.javbus.com${bus}` : `https://www.javbus.com/searchstar/${query}` },
-            { label: '维基百科', href: `https://zh.wikipedia.org/w/index.php?search=${query}` }
+            { label: '维基百科', href: profile && profile.wikiPath ? profile.wikiPath : `https://zh.wikipedia.org/w/index.php?search=${query}` }
         ];
     }
 
@@ -957,7 +968,7 @@
         if (!options || options.refresh !== false) refreshActressPage();
         return 'added';
     }
-    function actressFavRemove(site, name) {
+    function actressFavRemove(site, name, options = {}) {
         const folded = foldActressName(name);
         const list = actressFavList(site);
         const next = [];
@@ -966,14 +977,14 @@
         }
         if (next.length === list.length) return false;
         actressFavSave(site, next);
-        refreshActressPage();
+        if (!options || options.refresh !== false) refreshActressPage();
         return true;
     }
-    function actressFavClear(site) {
+    function actressFavClear(site, options = {}) {
         const list = actressFavList(site);
         if (!list.length) return 0;
         actressFavSave(site, []);
-        refreshActressPage();
+        if (!options || options.refresh !== false) refreshActressPage();
         return list.length;
     }
     const JDFORREPAM_API = 'https://jdforrepam.com';
@@ -2717,6 +2728,7 @@
         .av-actress-name:hover { color: #bae6fd; text-decoration: underline; }
         .av-actress-del { flex: 0 0 auto; padding: 4px 9px; border-radius: 7px; border: 1px solid rgba(248, 113, 113, .45); background: rgba(248, 113, 113, .14); color: #fca5a5; font: 600 11px/1.2 inherit; cursor: pointer; }
         .av-actress-del:hover { background: rgba(248, 113, 113, .28); color: #fee2e2; }
+        .av-actress-row .av-actress-detail, .av-actress-row .av-actress-del { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 24px; padding: 0 9px; line-height: 1.2; }
         .av-actress-fav-btn { display: inline-flex; align-items: center; justify-content: center; margin: 6px 0 0; padding: 5px 12px; border-radius: 8px; border: 1px solid rgba(96,165,250,.55); background: rgba(59,130,246,.22); color: #bfdbfe; font: 600 12px/1.2 inherit; cursor: pointer; }
         .av-actress-fav-btn:hover { background: rgba(59,130,246,.34); color: #fff; }
         .av-actress-fav-btn.is-on { border-color: rgba(52,211,153,.6); background: rgba(16,185,129,.24); color: #a7f3d0; }
@@ -2763,6 +2775,8 @@
         .av-actress-grid[data-view="grid"] .av-actress-stars, .av-actress-grid[data-view="wall"] .av-actress-stars { justify-content: center; }
         .av-actress-grid[data-view="grid"] .av-actress-tagline, .av-actress-grid[data-view="wall"] .av-actress-tagline { justify-content: center; }
         .av-actress-grid[data-view="grid"] .av-actress-actions, .av-actress-grid[data-view="wall"] .av-actress-actions { margin-left: 0; justify-content: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-row { flex-wrap: nowrap; align-items: center; }
+        .av-actress-grid[data-view="grid"] .av-actress-actions { margin-top: auto; width: 100%; }
         .av-actress-grid[data-view="grid"] .av-actress-check, .av-actress-grid[data-view="wall"] .av-actress-check { position: absolute; top: 6px; left: 6px; }
         .av-actress-grid[data-view="grid"] .av-actress-avatar { width: 56px; height: 56px; font-size: 20px; }
         .av-actress-grid[data-view="wall"] .av-actress-avatar { width: 48px; height: 48px; font-size: 18px; }
@@ -2875,6 +2889,7 @@
         .av-jable-model { display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 9999px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); color: #e2e8f0; font-size: 12px; line-height: 1.6; text-decoration: none; }
         a.av-jable-model:hover { background: rgba(96,165,250,.18); border-color: rgba(96,165,250,.5); color: #fff; }
         .av-jable-meta-pending { color: var(--avui-muted); }
+        .av-jable-meta-missing { color: var(--avui-muted); opacity: .62; }
         @media (max-width: 640px) { .av-jable-meta { padding: 10px 12px; } .av-jable-meta-item { grid-template-columns: 54px 1fr; gap: 8px; } }
         .av-info-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; user-select: none; background: rgba(255,255,255,.02); transition: background .15s; }
         .av-info-head:hover { background: rgba(255,255,255,.05); }
@@ -3093,7 +3108,7 @@
             .av-actress-sheet { padding: 8px; }
             .av-actress-sheet-card { padding: 12px; max-height: 90vh; }
             .av-actress-row { padding: 10px; }
-            .av-actress-del { min-height: 32px; padding: 6px 12px; font-size: 12px; }
+            .av-actress-row .av-actress-detail, .av-actress-row .av-actress-del { min-height: 32px; padding: 0 12px; font-size: 12px; }
             .av-actress-fav-btn { padding: 7px 14px; font-size: 13px; }
             .av-backup-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .av-audio .av-audio-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -7502,7 +7517,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     async function searchJavDbMovie(code) {
         const key = javDbCodeKey(code);
         if (!key) return null;
-        const body = JSON.parse(await jdApiFetch(javDbSearchUrl(code)));
+        let body = null;
+        try {
+            const raw = await jdApiFetch(javDbSearchUrl(code));
+            body = raw ? JSON.parse(raw) : null;
+        } catch (error) {
+            debugLog(error, 'javdb-search');
+            return null;
+        }
         const movies = Array.isArray(body?.data?.movies) ? body.data.movies : [];
         return movies.find(item => javDbCodeKey(item?.number) === key) || null;
     }
@@ -9671,7 +9693,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function actressAvatarSource(profile) {
         if (!profile) return '';
         if (profile.avatar) return profile.avatar;
-        return profile.busAvatar ? profile.busAvatar : '';
+        if (profile.busAvatar) return profile.busAvatar;
+        return profile.wikiAvatar ? profile.wikiAvatar : '';
     }
     function actressPaintAvatar(avatarEl, name) {
         const profile = actressProfileOf(name);
@@ -9748,6 +9771,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return parts.join(' · ');
     }
     function actressFavRow(site, item) {
+        const owner = (item && item.site) || site;
         const row = document.createElement('div');
         row.className = 'av-actress-row';
         const folded = foldActressName(item.name);
@@ -9795,14 +9819,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         detail.className = 'av-actress-detail';
         detail.textContent = '详情';
         detail.title = `查看 ${item.name} 的档案与观看记录`;
-        detail.addEventListener('click', () => openActressSheet(site, item));
+        detail.addEventListener('click', () => openActressSheet(owner, item));
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'av-actress-del';
         del.textContent = '移除';
-        del.title = `从${itemLabel(site)}收藏中移除`;
+        del.title = '从女优收藏中移除';
         del.addEventListener('click', () => {
-            actressFavRemove(site, item.name);
+            actressFavRemove(owner, item.name);
             log(`🗑 已移除女优收藏：${item.name}`);
         });
         actions.append(detail, del);
@@ -9990,6 +10014,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (aliases.length) parts.push(`别名：${aliases.join(' / ')}`);
             if (info && info.busWorks) parts.push(`JavBus ${info.busWorks} 部`);
             else if (info && info.works) parts.push(`JavDB 收录 ${info.works} 部`);
+            if (info && info.wikiTitle) parts.push(`维基百科 ${info.wikiTitle}`);
             if (added) parts.push(`${actressFavAgo(added)}加入收藏`);
             sub.textContent = parts.join(' · ') || '本地档案，暂无站外数据';
         };
@@ -10014,7 +10039,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         profileRefresh.type = 'button';
         profileRefresh.className = 'av-sheet-retry';
         profileRefresh.textContent = '刷新档案';
-        profileRefresh.title = '重新从 JavBus 拉取生日、身型与影片数';
+        profileRefresh.title = '重新从 JavBus 与维基百科拉取生日、身型与影片数';
         profileSection.appendChild(profileRefresh);
         card.appendChild(profileSection);
         const paintProfile = () => {
@@ -10046,10 +10071,17 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 if (strong) strong.classList.add('is-quiet');
                 profileGrid.appendChild(cell);
             }
-            const faded = !info.busFetchedAt || Date.now() - info.busFetchedAt > INFO_CACHE_TTL * 7;
-            profileHint.textContent = info.busPath && !faded
-                ? `来源 JavBus · ${formatRecordDate(info.busFetchedAt)}更新`
-                : '数据来自 JavBus，含生日、年龄、身高、罩杯、三围与影片数；没有档案时点「刷新档案」。';
+            const busFaded = !info.busFetchedAt || Date.now() - info.busFetchedAt > INFO_CACHE_TTL * 7;
+            const wikiFaded = !info.wikiFetchedAt || Date.now() - info.wikiFetchedAt > INFO_CACHE_TTL * 7;
+            const sources = [];
+            if (info.busFetchedAt && !busFaded) sources.push('JavBus');
+            if (info.wikiFetchedAt && !wikiFaded) sources.push('维基百科');
+            if (sources.length) {
+                const stamp = Math.max(busFaded ? 0 : info.busFetchedAt || 0, wikiFaded ? 0 : info.wikiFetchedAt || 0);
+                profileHint.textContent = `来源 ${sources.join(' + ')} · ${formatRecordDate(stamp)}更新`;
+            } else {
+                profileHint.textContent = '数据先取 JavBus，缺生日 / 身型 / 头像时用维基百科补齐；没有档案时点「刷新档案」。';
+            }
         };
         paintProfile();
         const runProfileFetch = () => {
@@ -10058,26 +10090,41 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             profileRefresh.dataset.busy = '1';
             profileRefresh.disabled = true;
             profileRefresh.textContent = '正在获取…';
-            Promise.allSettled([fetchActressBus(item.name)]).then(results => {
-                if (state.actressSheet !== sheet || !sheet.isConnected) return;
-                profileRefresh.dataset.busy = '';
-                profileRefresh.disabled = false;
-                profileRefresh.textContent = '刷新档案';
-                const info = actressProfileOf(item.name) || {};
-                if (info.busAvatar) actressPaintAvatarTo(avatar, item.name, info.busAvatar);
-                paintSub();
-                paintProfile();
-                if (state.actressPage) {
-                    const row = state.actressPage.querySelector(`.av-actress-row[data-fold="${CSS.escape(foldActressName(item.name))}"]`);
-                    if (row) respondActressRow(row, item.name);
-                }
-                const hit = results.some(entry => entry.status === 'fulfilled' && entry.value && (entry.value.busPath || entry.value.birthday || entry.value.works));
-                log(hit ? `📇 已更新 ${item.name} 的档案` : `⚠️ 未取到 ${item.name} 的档案`);
-            });
+            Promise.allSettled([fetchActressBus(item.name)])
+                .then(() => {
+                    const afterBus = actressProfileOf(item.name) || {};
+                    if (!needsWikiProfile(afterBus)) return null;
+                    return Promise.allSettled([fetchActressWiki(item.name)]);
+                })
+                .then(() => {
+                    if (state.actressSheet !== sheet || !sheet.isConnected) return;
+                    profileRefresh.dataset.busy = '';
+                    profileRefresh.disabled = false;
+                    profileRefresh.textContent = '刷新档案';
+                    const info = actressProfileOf(item.name) || {};
+                    const source = actressAvatarSource(info);
+                    if (source) actressPaintAvatarTo(avatar, item.name, source);
+                    paintSub();
+                    paintProfile();
+                    const linkNode = sheet.querySelector('.av-sheet-links');
+                    if (linkNode) linkNode.replaceWith(actressSheetLinks(item));
+                    if (state.actressPage) {
+                        const row = state.actressPage.querySelector(`.av-actress-row[data-fold="${CSS.escape(foldActressName(item.name))}"]`);
+                        if (row) respondActressRow(row, item.name);
+                    }
+                    const hit = !!(info.busPath || (info.wikiTitle && (info.birthday || info.height || info.wikiAvatar)));
+                    log(hit ? `📇 已更新 ${item.name} 的档案` : `⚠️ 未取到 ${item.name} 的档案`);
+                })
+                .catch(error => {
+                    debugLog(error, 'actress-profile');
+                    profileRefresh.dataset.busy = '';
+                    profileRefresh.disabled = false;
+                    profileRefresh.textContent = '刷新档案';
+                });
         };
         profileRefresh.addEventListener('click', runProfileFetch);
         const knownBus = actressProfileOf(item.name) || {};
-        if (!knownBus.busFetchedAt) setTimeout(runProfileFetch, 140);
+        if (!knownBus.busFetchedAt || needsWikiProfile(knownBus)) setTimeout(runProfileFetch, 140);
         const statSection = actressSheetSection('观看统计');
         const statGrid = document.createElement('div');
         statGrid.className = 'av-sheet-stats';
@@ -10580,7 +10627,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 let added = 0;
                 for (const entry of payload.favorites) {
                     if (!entry || !entry.name) continue;
-                    if (actressFavAdd(site, entry) === 'added') added += 1;
+                    const bucket = entry.site === 'jable' || entry.site === 'missav' ? entry.site : site;
+                    if (actressFavAdd(bucket, entry) === 'added') added += 1;
                 }
                 const metaMap = payload.meta && typeof payload.meta === 'object' ? payload.meta : {};
                 for (const key of Object.keys(metaMap)) {
@@ -10890,7 +10938,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             } catch (error) {
                 debugLog(error);
             }
-            if (actressFavAdd('missav', { name, url, slug }, { refresh: false }) === 'added') added += 1;
+            if (actressFavAdd(SITE_TAG, { name, url, slug }, { refresh: false }) === 'added') added += 1;
         }
         if (added) refreshActressPage();
         return added;
@@ -11292,6 +11340,154 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         fields.busFetchedAt = Date.now();
         if (fields.busPath || fields.birthday || fields.height || fields.busAvatar) actressProfileSave(trimmed, fields);
         writeCache(`busActor:${trimmed}`, fields, starHtml ? INFO_CACHE_TTL * 30 : INFO_CACHE_TTL * 2);
+        return fields;
+    }
+
+    const WIKI_LANGS = ['zh', 'ja'];
+    const WIKI_VARIANT_MAP = { '瀨': '瀬', '戶': '戸', '户': '戸', '澤': '沢', '黑': '黒', '櫻': '桜', '亞': '亜', '邊': '辺', '藏': '蔵', '國': '国', '惠': '恵', '濱': '浜' };
+    function wikiNormalizeName(value) {
+        return String(value || '').replace(/[<>\[\]{}|"'#·]/g, '').replace(/[瀨戶户澤黑櫻亞邊藏國惠濱]/g, ch => WIKI_VARIANT_MAP[ch] || ch);
+    }
+    function wikiNameScore(query, title) {
+        const want = wikiNormalizeName(foldActressName(query)).replace(/[^\u3040-\u30ff\u4e00-\u9fff]/g, '');
+        const pool = wikiNormalizeName(foldActressName(title)).replace(/[^\u3040-\u30ff\u4e00-\u9fff]/g, '').split('');
+        if (!want || !pool.length) return 0;
+        let hit = 0;
+        for (const ch of want) {
+            const index = pool.indexOf(ch);
+            if (index >= 0) { hit += 1; pool.splice(index, 1); }
+        }
+        return hit / want.length;
+    }
+    function wikiApi(lang) {
+        return `https://${lang}.wikipedia.org/w/api.php`;
+    }
+    async function wikiParsePage(lang, page) {
+        const url = `${wikiApi(lang)}?action=parse&format=json&formatversion=2&redirects=1&prop=wikitext&page=${encodeURIComponent(page)}`;
+        const data = historyParseJson(await gmRequest(url, { headers: { Accept: 'application/json' }, timeout: 7000 }), null);
+        if (!data || !data.parse || typeof data.parse.wikitext !== 'string') return null;
+        return { title: String(data.parse.title || page), wikitext: data.parse.wikitext };
+    }
+    async function wikiSearchTitle(lang, name) {
+        const url = `${wikiApi(lang)}?action=query&format=json&formatversion=2&list=search&srlimit=6&srsearch=${encodeURIComponent(name)}`;
+        const data = historyParseJson(await gmRequest(url, { headers: { Accept: 'application/json' }, timeout: 7000 }), null);
+        const hits = data && data.query && Array.isArray(data.query.search) ? data.query.search : [];
+        for (const hit of hits) {
+            const title = String(hit && hit.title ? hit.title : '');
+            if (title && wikiNameScore(name, title) >= 0.6) return title;
+        }
+        return '';
+    }
+    async function wikiImageUrl(lang, file) {
+        const name = String(file || '').replace(/^[^:]*:/, '').replace(/\[\[|\]\]/g, '').split('|')[0].trim();
+        if (!name) return '';
+        const url = `${wikiApi(lang)}?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url&iiurlwidth=240&titles=${encodeURIComponent(`File:${name}`)}`;
+        const data = historyParseJson(await gmRequest(url, { headers: { Accept: 'application/json' }, timeout: 7000 }), null);
+        const pages = data && data.query && Array.isArray(data.query.pages) ? data.query.pages : [];
+        const info = pages[0] && Array.isArray(pages[0].imageinfo) ? pages[0].imageinfo[0] : null;
+        return info ? String(info.thumburl || info.url || '') : '';
+    }
+    function wikiParam(wikitext, keys) {
+        const match = String(wikitext || '').match(new RegExp(`\\|\\s*(?:${keys})\\s*=\\s*([^\\n]{0,180})`, 'i'));
+        return match ? String(match[1] || '').trim() : '';
+    }
+    function wikiNumber(text) {
+        const match = String(text || '').match(/(\d{2,3}(?:\.\d)?)/);
+        return match ? match[1] : '';
+    }
+    function wikiBirthday(text) {
+        const match = String(text || '').match(/(\d{4})\s*[|年\/\-.]\s*(\d{1,2})\s*[|月\/\-.]\s*(\d{1,2})/);
+        if (!match) return '';
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) return '';
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    function wikiAge(birthday) {
+        const match = String(birthday || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) return '';
+        const born = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+        const now = new Date();
+        let age = now.getFullYear() - born.getFullYear();
+        const pending = now.getMonth() < born.getMonth() || (now.getMonth() === born.getMonth() && now.getDate() < born.getDate());
+        if (pending) age -= 1;
+        return age > 10 && age < 90 ? String(age) : '';
+    }
+    function parseWikiActor(name, wikitext) {
+        const fields = {};
+        const birthday = wikiBirthday(wikiParam(wikitext, '出生日期|出生年月日|生年月日|生日|birth[ _]?date'));
+        if (birthday) {
+            fields.birthday = birthday;
+            const age = wikiAge(birthday);
+            if (age) fields.age = age;
+        }
+        const height = wikiNumber(wikiParam(wikitext, '身高|身長|height'));
+        if (height) fields.height = `${height}cm`;
+        const bust = wikiNumber(wikiParam(wikitext, '胸圍|胸围|バスト|bust'));
+        if (bust) fields.bust = `${bust}cm`;
+        const waist = wikiNumber(wikiParam(wikitext, '腰圍|腰围|ウエスト|waist'));
+        if (waist) fields.waist = `${waist}cm`;
+        const hip = wikiNumber(wikiParam(wikitext, '臀圍|臀围|ヒップ|hip'));
+        if (hip) fields.hip = `${hip}cm`;
+        const cup = (wikiParam(wikitext, '罩杯|カップ|cup').match(/^\s*([A-Ka-k])\b/) || [])[1];
+        if (cup) fields.cup = cup.toUpperCase();
+        const image = (wikiParam(wikitext, '画像ファイル|畫像|画像|图像|圖像|image').match(/([^|\]]+\.(?:jpg|jpeg|png|webp))/i) || [])[1];
+        if (image) fields.wikiImage = String(image).trim();
+        fields.name = name;
+        return fields;
+    }
+    function needsWikiProfile(info) {
+        if (!info) return true;
+        if (info.wikiTitle && info.wikiFetchedAt && Date.now() - info.wikiFetchedAt < INFO_CACHE_TTL * 7) return false;
+        if (!info.birthday || !info.height || !info.cup) return true;
+        return !(info.avatar || info.busAvatar || info.wikiAvatar);
+    }
+    async function fetchActressWiki(name) {
+        const trimmed = String(name ?? '').trim();
+        if (!trimmed || trimmed.length < 2) return null;
+        const cached = readCache(`wikiActor:${trimmed}`);
+        if (cached) return cached;
+        let page = null;
+        for (const lang of WIKI_LANGS) {
+            try {
+                const direct = await wikiParsePage(lang, trimmed);
+                if (direct && direct.wikitext && wikiNameScore(trimmed, direct.title) >= 0.6) {
+                    page = { lang, title: direct.title, wikitext: direct.wikitext };
+                    break;
+                }
+                const title = await wikiSearchTitle(lang, trimmed);
+                if (title) {
+                    const found = await wikiParsePage(lang, title);
+                    if (found && found.wikitext) {
+                        page = { lang, title: found.title, wikitext: found.wikitext };
+                        break;
+                    }
+                }
+            } catch (error) {
+                debugLog(error, 'actress-wiki');
+            }
+        }
+        if (!page) {
+            writeCache(`wikiActor:${trimmed}`, { name: trimmed, empty: true }, INFO_CACHE_TTL / 4);
+            return { name: trimmed, empty: true };
+        }
+        const fields = parseWikiActor(trimmed, page.wikitext);
+        fields.wikiTitle = page.title;
+        fields.wikiPath = `https://${page.lang}.wikipedia.org/wiki/${encodeURIComponent(String(page.title).replace(/ /g, '_'))}`;
+        fields.wikiFetchedAt = Date.now();
+        if (fields.wikiImage) {
+            try {
+                const url = await wikiImageUrl(page.lang, fields.wikiImage);
+                if (url) fields.wikiAvatar = url;
+            } catch (error) {
+                debugLog(error, 'actress-wiki-image');
+            }
+            delete fields.wikiImage;
+        }
+        const useful = !!(fields.birthday || fields.height || fields.cup || fields.bust || fields.wikiAvatar);
+        if (useful) actressProfileSave(trimmed, fields);
+        writeCache(`wikiActor:${trimmed}`, fields, useful ? INFO_CACHE_TTL * 30 : INFO_CACHE_TTL / 4);
         return fields;
     }
     async function loadVideoInfo() {
@@ -12101,6 +12297,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             actors,
             url: movie?.id ? `https://javdb.com/v/${encodeURIComponent(String(movie.id))}` : ''
         };
+        credits.source = 'JavDB';
         const filled = credits.releaseDate || credits.maker || credits.director || credits.series || actors.length;
         return filled ? credits : null;
     }
@@ -12116,16 +12313,84 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const detail = await fetchJavDbDetail(movie.id);
         return javDbCreditsFrom(movie, detail);
     }
+    const JB_MOVIE_FIELD_LABELS = { releaseDate: '發行日期', maker: '發行商', director: '導演', series: '系列' };
+    function jbMovieField(html, label) {
+        const pattern = new RegExp(`<span class="header">${label}:</span>([\\s\\S]{0,320}?)</p>`);
+        const match = String(html || '').match(pattern);
+        if (!match) return '';
+        const segment = match[1];
+        const anchor = segment.match(/<a [^>]*>([^<]+)<\/a>/);
+        const text = anchor ? anchor[1] : segment.replace(/<[^>]+>/g, '');
+        return String(text || '').replace(/\s+/g, ' ').trim();
+    }
+    function parseJavBusCredits(code, html) {
+        if (!html) return null;
+        const credits = { code: String(code || '').trim().toUpperCase(), actors: [], url: '' };
+        for (const [key, label] of Object.entries(JB_MOVIE_FIELD_LABELS)) {
+            const value = jbMovieField(html, label);
+            if (value) credits[key] = value;
+        }
+        if (!credits.maker) {
+            const producer = jbMovieField(html, '製作商');
+            if (producer) credits.maker = producer;
+        }
+        const starRe = /class="star-name"[^>]*>\s*<a[^>]*>([^<]+)<\/a>|<a class="star-name"[^>]*>([^<]+)<\/a>/g;
+        for (const match of String(html).matchAll(starRe)) {
+            const name = String(match[1] || match[2] || '').trim();
+            if (name && !credits.actors.includes(name)) credits.actors.push(name);
+        }
+        credits.source = 'JavBus';
+        credits.url = `https://www.javbus.com/${encodeURIComponent(credits.code)}`;
+        const filled = credits.releaseDate || credits.maker || credits.director || credits.series || credits.actors.length;
+        return filled ? credits : null;
+    }
+    async function fetchJavBusCredits(code) {
+        const target = String(code || '').trim().toUpperCase();
+        if (!target) return null;
+        const cached = readCache(`jbMovie:${target}`);
+        if (cached) return cached.empty ? null : cached;
+        let html = '';
+        try {
+            html = await gmRequest(`https://www.javbus.com/${encodeURIComponent(target)}`, { headers: JB_PAGE_HEADERS, timeout: 7000 });
+        } catch (error) {
+            debugLog(error, 'javbus-movie');
+            html = '';
+        }
+        const credits = parseJavBusCredits(target, html);
+        writeCache(`jbMovie:${target}`, credits || { code: target, empty: true }, credits ? INFO_CACHE_TTL * 30 : INFO_CACHE_TTL);
+        return credits;
+    }
+    async function fetchMovieCredits(code) {
+        const target = String(code || '').trim().toUpperCase();
+        if (!target) return null;
+        let credits = null;
+        try {
+            credits = await fetchJavDbCredits(target);
+        } catch (error) {
+            debugLog(error, 'credits-javdb');
+            credits = null;
+        }
+        if (credits) return credits;
+        try {
+            credits = await fetchJavBusCredits(target);
+        } catch (error) {
+            debugLog(error, 'credits-javbus');
+            credits = null;
+        }
+        return credits;
+    }
     function javDbCreditsFor(code) {
         const target = String(code || '').trim().toUpperCase();
         if (!target) return Promise.resolve(null);
         if (JAVDB_CREDITS_DONE.has(target)) return Promise.resolve(JAVDB_CREDITS_DONE.get(target));
         const pending = JAVDB_CREDITS_TASKS.get(target);
         if (pending) return pending;
-        const task = fetchJavDbCredits(target).catch(() => null).then(credits => {
+        const task = fetchMovieCredits(target).catch(() => null).then(credits => {
             JAVDB_CREDITS_TASKS.delete(target);
-            trimCreditsCache();
-            JAVDB_CREDITS_DONE.set(target, credits || null);
+            if (credits) {
+                trimCreditsCache();
+                JAVDB_CREDITS_DONE.set(target, credits);
+            }
             return credits || null;
         });
         JAVDB_CREDITS_TASKS.set(target, task);
@@ -12166,8 +12431,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         node.textContent = '读取中…';
         return node;
     }
-    function jableCreditsNodes(credits, key) {
-        if (!credits) return [jablePendingNode()];
+    function jableMissingNode() {
+        const node = document.createElement('span');
+        node.className = 'av-jable-meta-missing';
+        node.textContent = '—';
+        node.title = '暂时没能获取到这项资料';
+        return node;
+    }
+    function jableCreditsNodes(credits, key, phase) {
+        if (!credits) return [phase === 'pending' ? jablePendingNode() : jableMissingNode()];
         const value = String(credits[key] || '').trim();
         const node = document.createElement('span');
         if (value) {
@@ -12179,7 +12451,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         return [node];
     }
-    function jableActressNodes(credits) {
+    function jableActressNodes(credits, phase) {
         const nodes = [];
         const seen = new Set();
         for (const item of jableActressLinks()) {
@@ -12206,7 +12478,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 nodes.push(node);
             }
         }
-        return nodes.length ? nodes : [jablePendingNode()];
+        return nodes.length ? nodes : [phase === 'pending' ? jablePendingNode() : jableMissingNode()];
     }
     function jableMetaItem(label, nodes) {
         const item = document.createElement('div');
@@ -12220,7 +12492,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         item.append(name, values);
         return item;
     }
-    function renderJableCreditsCard(code, credits) {
+    function renderJableCreditsCard(code, credits, phase = credits ? 'done' : 'pending') {
         const target = String(code || '').trim().toUpperCase();
         if (!target) return null;
         const host = jableCardHost();
@@ -12241,24 +12513,27 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const caption = document.createElement('span');
         caption.className = 'av-jable-meta-title';
         caption.textContent = '作品资料';
+        const sourceLabel = credits ? String(credits.source || 'JavDB') : '';
         const source = document.createElement(credits?.url ? 'a' : 'span');
         source.className = 'av-jable-meta-src';
-        source.textContent = 'JavDB';
+        source.textContent = sourceLabel || (phase === 'pending' ? '查询中' : '未获取');
         if (credits?.url) {
             source.href = credits.url;
             source.target = '_blank';
             source.rel = 'noopener noreferrer';
-            source.title = '在 JavDB 查看该作品';
+            source.title = `在 ${sourceLabel || '资料站'} 查看该作品`;
+        } else if (phase === 'failed') {
+            source.title = 'JavDB 接口需要登录、CORS 代理不可用时会查不到，可稍后重试';
         }
         head.append(caption, source);
         const grid = document.createElement('div');
         grid.className = 'av-jable-meta-grid';
         grid.append(
-            jableMetaItem('女优', jableActressNodes(credits)),
-            jableMetaItem('发行时间', jableCreditsNodes(credits, 'releaseDate')),
-            jableMetaItem('片商', jableCreditsNodes(credits, 'maker')),
-            jableMetaItem('导演', jableCreditsNodes(credits, 'director')),
-            jableMetaItem('系列', jableCreditsNodes(credits, 'series'))
+            jableMetaItem('女优', jableActressNodes(credits, phase)),
+            jableMetaItem('发行时间', jableCreditsNodes(credits, 'releaseDate', phase)),
+            jableMetaItem('片商', jableCreditsNodes(credits, 'maker', phase)),
+            jableMetaItem('导演', jableCreditsNodes(credits, 'director', phase)),
+            jableMetaItem('系列', jableCreditsNodes(credits, 'series', phase))
         );
         card.replaceChildren(head, grid);
         return card;
@@ -12268,7 +12543,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const target = String(code || getPageVideoCode() || '').trim().toUpperCase();
         if (!target) return null;
         const known = JAVDB_CREDITS_DONE.has(target) ? JAVDB_CREDITS_DONE.get(target) : jableInfoCredits(target);
-        renderJableCreditsCard(target, known || null);
+        renderJableCreditsCard(target, known || null, known ? 'done' : 'pending');
         if (known || jableCardCode === target) return null;
         jableCardCode = target;
         return setTimeout(() => {
@@ -12276,7 +12551,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             javDbCreditsFor(target).then(credits => {
                 if (jableCardCode !== target) return;
                 if (String(getPageVideoCode() || '').trim().toUpperCase() !== target) return;
-                renderJableCreditsCard(target, credits);
+                if (!credits) {
+                    jableCardCode = '';
+                    renderJableCreditsCard(target, null, 'failed');
+                    return;
+                }
+                renderJableCreditsCard(target, credits, 'done');
+            }).catch(error => {
+                debugLog(error, 'jable-credits');
+                jableCardCode = '';
+                renderJableCreditsCard(target, null, 'failed');
             });
         }, JABLE_CARD_DELAY);
     }
@@ -13427,12 +13711,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (cached && now - cached.at < HISTORY_READ_TTL) return cached.value;
         const gmValue = historyGmGet(key);
         const localValue = historyLocalGet(key);
-        let value = gmValue;
-        if (gmValue !== null) {
-            if (localValue !== gmValue) historyLocalSet(key, gmValue);
-        } else if (localValue !== null) {
-            historyGmSet(key, localValue);
-            value = localValue;
+        let value = localValue;
+        if (localValue !== null) {
+            if (gmValue !== localValue) historyGmSet(key, localValue);
+        } else if (gmValue !== null) {
+            historyLocalSet(key, gmValue);
+            value = gmValue;
         }
         historyReadCache.set(key, { at: now, value });
         return value;
