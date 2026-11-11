@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.05
+// @version      15.07
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -58,8 +58,8 @@
 // @license      MIT
 // @homepageURL  https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant
 // @supportURL   https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/issues
-// @downloadURL  https://raw.githubusercontent.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/main/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.js
-// @updateURL    https://raw.githubusercontent.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/main/MissAV%20%26%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.js
+// @downloadURL  https://update.sleazyfork.org/scripts/595477/MissAV%20%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.user.js
+// @updateURL    https://update.sleazyfork.org/scripts/595477/MissAV%20%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.meta.js
 // ==/UserScript==
 (function () {
     'use strict';
@@ -1357,6 +1357,22 @@
             return;
         }
         persistWrite(STORAGE_PREFIX + CACHE_INDEX_KEY, text);
+    }
+    function cacheForget(key) {
+        const fullKey = STORAGE_PREFIX + key;
+        READ_CACHE_MEMO.delete(key);
+        PERSIST_QUEUE.delete(fullKey);
+        PERSIST_WRITTEN.delete(fullKey);
+        try {
+            localStorage.removeItem(fullKey);
+        } catch (error) {
+            debugLog(error, 'cache-forget');
+        }
+        const index = cacheIndexRead();
+        if (index && Object.prototype.hasOwnProperty.call(index, key)) {
+            delete index[key];
+            cacheIndexSave(index);
+        }
     }
     function cacheSweep(minDrop = 0) {
         const index = cacheIndexRead();
@@ -3033,6 +3049,17 @@
         .av-list-movie:hover strong { color: #93c5fd; }
         .quick-pip-btn { min-width: 32px; font-size: 15px; line-height: 1; }
     `);
+    GM_addStyle(`
+        .avx2 .avx-chips.av-sub-srcs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; padding: 10px 11px 12px; flex-wrap: nowrap; }
+        .avx2 .avx-chips.av-sub-srcs > .avx-chip { width: 100%; min-width: 0; flex: 0 1 auto; justify-content: center; padding: 6px 3px; font-size: 10.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .avx2.avx2 .avx-btn, .avx2.avx2 a.avx-btn { border-radius: 8px !important; font-family: inherit !important; text-transform: none !important; }
+        .avx2.avx2 .avx-btn--sm { border-radius: 7px !important; }
+        .avx2.avx2 .avx-btn--lg { border-radius: 10px !important; }
+        .avx2.avx2 .avx-chip { border-radius: 8px !important; font-family: inherit !important; text-transform: none !important; }
+        .avx2.avx2 .avx-tab { border-radius: 8px 8px 0 0 !important; }
+        .avx2.avx2 .avx-sw { position: relative; }
+        .avx2.avx2 .avx-sw::before { content: ""; position: absolute; inset: -10px -8px; border-radius: 16px; }
+    `);
     if (AV_PLATFORM.isMobile) {
         GM_addStyle(`
             .custom-control-panel { max-width: calc(100vw - 12px); }
@@ -3049,9 +3076,23 @@
             .custom-control-panel input[type="number"],
             html .custom-control-panel .av-login-panel input[type="text"],
             html .custom-control-panel .av-login-panel input[type="password"] { font-size: 16px; }
-            .custom-control-panel button,
+            .custom-control-panel button:not(.avx-sw):not(.avx-tab):not(.avx-ico),
             .custom-control-panel .panel-gear,
             .custom-control-panel .panel-full-btn { min-height: 40px; }
+            .custom-control-panel .avx-sw,
+            .custom-control-panel .avx-sw::after { min-height: 0; }
+            .custom-control-panel .avx-sw { height: 18px; }
+            html .custom-control-panel .avx-capsule {
+                padding: 4px 8px 4px 4px; gap: 6px; max-width: calc(100vw - 16px);
+                -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+            }
+            html .custom-control-panel .avx-capsule > * { min-height: 0; }
+            html .custom-control-panel .avx-capsule .avx-ico { width: 24px; height: 24px; }
+            html .custom-control-panel .avx-capsule .avx-rate { padding: 2px 7px; font-size: 11px; min-height: 0 !important; height: 24px; }
+            html .custom-control-panel input.avx-num { width: 68px; min-width: 64px; padding-left: 6px; padding-right: 6px; }
+            html .custom-control-panel.avx2 { font-size: 12.5px; }
+            body.avx-panel-open #av-helper-quick-portal { z-index: 2147483500 !important; }
+            body.avx-panel-open .custom-quick-controls { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }
             .custom-control-panel .panel-gear { min-width: 40px; }
             .custom-control-panel .av-audio-presets button,
             .custom-control-panel .av-audio-actions button,
@@ -3062,6 +3103,76 @@
             .custom-control-panel select { min-height: 40px; }
             .custom-quick-controls { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
             .quick-btn { min-width: 44px; height: 38px; font-size: 14px; }
+            .custom-control-panel.avx2.panel-collapsed {
+                left: auto !important;
+                right: calc(12px + env(safe-area-inset-right, 0px)) !important;
+                top: auto !important;
+                bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+                width: 52px !important;
+                min-width: 52px !important;
+                max-width: 52px !important;
+                height: 52px !important;
+                min-height: 0 !important;
+                padding: 0 !important;
+                border-radius: 15px !important;
+                background: rgba(14,17,24,.92) !important;
+                border: 1px solid rgba(148,163,184,.3) !important;
+                box-shadow: 0 10px 26px -12px rgba(0,0,0,.85) !important;
+                -webkit-backdrop-filter: blur(12px);
+                backdrop-filter: blur(12px);
+            }
+            .custom-control-panel.avx2.panel-collapsed > .avx-capsule {
+                width: 100% !important;
+                height: 100% !important;
+                padding: 0 !important;
+                gap: 0 !important;
+                border: 0 !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                justify-content: center !important;
+                align-items: center !important;
+                cursor: pointer;
+                overflow: hidden;
+            }
+            .custom-control-panel.avx2.panel-collapsed > .avx-capsule > .avx-rate,
+            .custom-control-panel.avx2.panel-collapsed > .avx-capsule > .avx-sep,
+            .custom-control-panel.avx2.panel-collapsed > .avx-capsule > .avx-ico { display: none !important; }
+            .custom-control-panel.avx2.panel-collapsed > .avx-capsule > .avx-logo { width: 30px; height: 30px; border-radius: 10px; }
+            .custom-control-panel.avx2:not(.panel-collapsed) {
+                left: 0 !important;
+                right: 0 !important;
+                top: auto !important;
+                bottom: 0 !important;
+                width: 100% !important;
+                min-width: 0 !important;
+                max-width: 100% !important;
+                max-height: 84dvh;
+                border-radius: 18px 18px 0 0 !important;
+                border-left: 0 !important;
+                border-right: 0 !important;
+                border-bottom: 0 !important;
+                padding-bottom: env(safe-area-inset-bottom, 0px);
+                overflow: hidden;
+                box-shadow: 0 -20px 46px -26px rgba(0,0,0,.9) !important;
+            }
+            .custom-control-panel.avx2:not(.panel-collapsed)::before {
+                content: "";
+                display: block;
+                flex: 0 0 auto;
+                width: 40px;
+                height: 4px;
+                margin: 8px auto 2px;
+                border-radius: 999px;
+                background: rgba(148,163,184,.45);
+            }
+            .custom-control-panel.avx2:not(.panel-collapsed) > .avx-tabs {
+                padding-left: calc(6px + env(safe-area-inset-left, 0px));
+                padding-right: calc(6px + env(safe-area-inset-right, 0px));
+            }
+            .custom-control-panel.avx2:not(.panel-collapsed) > .avx-body {
+                overscroll-behavior: contain;
+                -webkit-overflow-scrolling: touch;
+            }
             .custom-quick-controls.quick-single { flex-wrap: nowrap !important; row-gap: 0; gap: 4px; padding: 6px 8px; border-radius: 22px; }
             .custom-quick-controls.quick-single .quick-jump-group { flex-wrap: nowrap; }
             .custom-quick-controls.quick-single .quick-btn { min-width: 44px; height: 40px; font-size: 14px; }
@@ -3735,15 +3846,19 @@
         viewportCacheAt = stamp;
         return viewportCacheBox;
     }
+    function panelEdgeGap() {
+        return AV_PLATFORM.isMobile ? 8 : 0;
+    }
     function clampPanelPosition(panel = state.panel) {
         if (!panel) return;
         const box = viewportBox();
+        const edge = panelEdgeGap();
         const width = panel.offsetWidth || PANEL_WIDTH;
-        const maxX = Math.max(0, box.w - width);
-        panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, 0, maxX)}px`;
+        const maxX = Math.max(edge, box.w - width - edge);
+        panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, edge, maxX)}px`;
         const height = panel.offsetHeight || 60;
-        const maxY = Math.max(0, box.h - height);
-        panel.style.top = `${clamp(panel.offsetTop || settings.panelY, 0, maxY)}px`;
+        const maxY = Math.max(edge, box.h - height - edge);
+        panel.style.top = `${clamp(panel.offsetTop || settings.panelY, edge, maxY)}px`;
     }
     function makeDraggable(element, handle, keys = { x: 'panelX', y: 'panelY' }, onEnd = null) {
         let originX = 0;
@@ -5042,8 +5157,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (state.panel || document.querySelector('.custom-control-panel')) return;
         const panel = document.createElement('div');
         panel.className = 'custom-control-panel avx2';
-        panel.style.left = `${clamp(settings.panelX, 0, Math.max(0, window.innerWidth - PANEL_WIDTH))}px`;
-        panel.style.top = `${clamp(settings.panelY, 0, Math.max(0, window.innerHeight - 60))}px`;
+        const startEdge = panelEdgeGap();
+        panel.style.left = `${clamp(settings.panelX, startEdge, Math.max(startEdge, window.innerWidth - PANEL_WIDTH - startEdge))}px`;
+        panel.style.top = `${clamp(settings.panelY, Math.max(startEdge, 72), Math.max(startEdge, window.innerHeight - 60))}px`;
         state.panel = panel;
         const { header, gearBtn, pill, pillText } = buildPanelHeader('综合增强助手');
         state.panelPill = pillText;
@@ -5081,6 +5197,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         capOpen.innerHTML = avxSvg('<path d="m6 9 6 6 6-6"/>', { w: 1.9 });
         capOpen.addEventListener('click', () => togglePanel(false));
         capsule.append(capLogo, capRate, capSep, capPlay, capSub, capOpen);
+        capsule.addEventListener('click', event => {
+            if (!AV_PLATFORM.isMobile) return;
+            if (event.target.closest('button')) return;
+            togglePanel(false);
+        });
         state.panelCapsule = capsule;
         state.panelPaintRate = paintCapRate;
 
@@ -5199,8 +5320,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const width = panel.offsetWidth || PANEL_WIDTH;
             const height = panel.offsetHeight || 60;
             panel.style.bottom = 'auto';
-            panel.style.left = `${clamp(Number(settings.panelX) || 0, 0, Math.max(0, box.w - width))}px`;
-            panel.style.top = `${clamp(Number(settings.panelY) || 0, 0, Math.max(0, box.h - height))}px`;
+            const edge = panelEdgeGap();
+            panel.style.left = `${clamp(Number(settings.panelX) || 0, edge, Math.max(edge, box.w - width - edge))}px`;
+            panel.style.top = `${clamp(Number(settings.panelY) || 0, edge, Math.max(edge, box.h - height - edge))}px`;
         };
         state.layoutPanel = layoutPanel;
         window.addEventListener('resize', () => { lockBodyHeight(); });
@@ -5214,6 +5336,25 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         };
         let panelMotion = null;
         let panelMotionToken = 0;
+        const coverQuickBar = covered => {
+            if (!AV_PLATFORM.isMobile) return;
+            const bar = document.querySelector('.custom-quick-controls');
+            if (!bar) return;
+            if (covered) {
+                bar.style.setProperty('opacity', '0', 'important');
+                bar.style.setProperty('visibility', 'hidden', 'important');
+                bar.style.setProperty('pointer-events', 'none', 'important');
+            } else if (bar.classList.contains('quick-visible')) {
+                bar.style.setProperty('opacity', '1', 'important');
+                bar.style.setProperty('visibility', 'visible', 'important');
+                bar.style.setProperty('pointer-events', 'auto', 'important');
+            }
+        };
+        const syncQuickLayer = () => {
+            const open = !panel.classList.contains('panel-collapsed');
+            document.body.classList.toggle('avx-panel-open', open);
+            coverQuickBar(open);
+        };
         const commitPanelState = collapsed => {
             panel.classList.remove('is-closing');
             panel.classList.toggle('panel-collapsed', collapsed);
@@ -5227,6 +5368,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (!collapsed) lockBodyHeight();
             layoutPanel();
             syncRangeFills(panel);
+            syncQuickLayer();
         };
         const panelMotions = [];
         const cancelPanelMotion = () => {
@@ -5318,6 +5460,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 
         panel.append(capsule, header, tabs, body, foot, logEl);
         if (settings.isMinimized) panel.classList.add('panel-collapsed');
+        document.body.classList.toggle('avx-panel-open', !panel.classList.contains('panel-collapsed'));
+        [320, 900, 1800].forEach(delay => setTimeout(() => {
+            const bar = document.querySelector('.custom-quick-controls');
+            if (!bar || !AV_PLATFORM.isMobile) return;
+            if (panel.classList.contains('panel-collapsed') || !bar.classList.contains('quick-visible')) return;
+            bar.style.setProperty('opacity', '0', 'important');
+            bar.style.setProperty('visibility', 'hidden', 'important');
+            bar.style.setProperty('pointer-events', 'none', 'important');
+        }, delay));
         if (settings.hideMenu) panel.classList.add('panel-menu-hidden');
         const applyPanelSkin = () => {
             const width = clamp(Number(settings.panelWidth) || 372, 320, 520);
@@ -5443,7 +5594,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 
         const subPane = paneOf('sub');
         const srcCard = avxCard('在线字幕源', `${SUBTITLE_SOURCES.length} 个源`);
-        const srcChips = avxEl('div', 'avx-chips');
+        const srcChips = avxEl('div', 'avx-chips av-sub-srcs');
         for (const source of SUBTITLE_SOURCES) {
             const chip = avxEl('button', 'avx-chip', source.label);
             chip.type = 'button';
@@ -5672,6 +5823,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         const quickCard = avxCard('快捷操作', '设置随改随存');
         const actionRow = avxEl('div', 'avx-actions');
+        resetPosBtn.classList.remove('btn', 'btn-primary', 'btn-ghost');
+        btnSave.classList.remove('btn', 'btn-primary');
         resetPosBtn.classList.add('avx-btn', 'avx-btn--lg', 'avx-btn--ghost');
         btnSave.classList.add('avx-btn', 'avx-btn--lg', 'avx-btn--primary');
         resetPosBtn.innerHTML = avxSvg('<path d="M3 12a9 9 0 1 0 2.6-6.4"/><path d="M3 4v5h5"/>', { w: 1.9 }) + '<span>重置位置</span>';
@@ -5704,8 +5857,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             store.set('panelY', settings.panelY);
             layoutPanel();
         };
-        makeDraggable(panel, header, { x: 'panelX', y: 'panelY' }, persistAnchor);
-        makeDraggable(panel, capsule, { x: 'panelX', y: 'panelY' }, persistAnchor);
+        if (!AV_PLATFORM.isMobile) {
+            makeDraggable(panel, header, { x: 'panelX', y: 'panelY' }, persistAnchor);
+            makeDraggable(panel, capsule, { x: 'panelX', y: 'panelY' }, persistAnchor);
+        }
         clampPanelPosition(panel);
         layoutPanel();
         registerPanelMenus();
@@ -7460,13 +7615,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const merged = headers || PAGE_HEADERS;
         const startedAt = Date.now();
         const budgetLeft = () => INFO_FETCH_BUDGET - (Date.now() - startedAt);
+        let directStatus = 0;
         try {
             const direct = await gmRaw(url, { headers: merged, timeout: Math.max(600, Math.min(timeout, budgetLeft())) });
-            if (direct.status >= 200 && direct.status < 300 && direct.responseText) return direct.responseText;
+            directStatus = Number(direct.status) || 0;
+            if (directStatus >= 200 && directStatus < 300 && direct.responseText) return direct.responseText;
         } catch (error) {
             debugLog(error, 'fetch-direct');
         }
         if (skipProxy) return '';
+        if (directStatus >= 400 && directStatus < 500 && directStatus !== 403 && directStatus !== 429) return '';
         const remaining = budgetLeft();
         if (remaining < 900) return '';
         const perProxy = Math.max(800, Math.min(3500, remaining));
@@ -7680,6 +7838,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             return '';
         }
     }
+    const SUBTITLE_PROXY_HOSTS = ['xunlei.com', 'geilijiasu.com', 'subtitlecat.com'];
+    function subtitleProxyAllowed(url) {
+        const host = hostOf(url);
+        if (!host) return false;
+        return SUBTITLE_PROXY_HOSTS.some(item => host === item || host.endsWith(`.${item}`));
+    }
     async function fetchSubtitlePayload(url) {
         try {
             const payload = await gmRequest(url, { timeout: 20000, binary: true });
@@ -7693,6 +7857,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         } catch (error) {
             debugLog(error);
         }
+        if (!subtitleProxyAllowed(url)) return null;
         for (const proxy of CORS_PROXIES) {
             try {
                 const text = await gmRequest(proxy + encodeURIComponent(url), { timeout: 12000 });
@@ -7714,7 +7879,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         try {
             const payload = await fetchSubtitlePayload(url);
             if (payload === null) {
-                log(`❌ 下载失败: 网络错误${host ? ` (${host})` : ''}，请确认已授予 @connect 权限或改用「加载本地」`);
+                log(`❌ 下载失败: 网络错误${host ? ` (${host})` : ''}，自定义源不经过公共代理，请确认该地址可直连，或改用「加载本地」`);
                 return;
             }
             const text = await decodeSubtitleBuffer(payload);
@@ -10084,12 +10249,17 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
         };
         paintProfile();
-        const runProfileFetch = () => {
+        const runProfileFetch = (force = false) => {
             if (state.actressSheet !== sheet || !sheet.isConnected) return;
             if (profileRefresh.dataset.busy === '1') return;
             profileRefresh.dataset.busy = '1';
             profileRefresh.disabled = true;
             profileRefresh.textContent = '正在获取…';
+            if (force) {
+                const profileKey = String(item.name ?? '').trim();
+                cacheForget(`busActor:${profileKey}`);
+                cacheForget(`wikiActor:${profileKey}`);
+            }
             Promise.allSettled([fetchActressBus(item.name)])
                 .then(() => {
                     const afterBus = actressProfileOf(item.name) || {};
@@ -10122,7 +10292,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     profileRefresh.textContent = '刷新档案';
                 });
         };
-        profileRefresh.addEventListener('click', runProfileFetch);
+        profileRefresh.addEventListener('click', () => runProfileFetch(true));
         const knownBus = actressProfileOf(item.name) || {};
         if (!knownBus.busFetchedAt || needsWikiProfile(knownBus)) setTimeout(runProfileFetch, 140);
         const statSection = actressSheetSection('观看统计');
@@ -11059,6 +11229,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         return { stills, reviews };
     }
+    function javLibraryCodeMatches(html, code) {
+        const wanted = String(code || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+        if (!wanted) return true;
+        const block = html.match(/id=["']video_id["'][\s\S]{0,600}?class=["']code["'][^>]*>([^<]{1,40})</i);
+        const raw = block ? String(block[1] || '') : '';
+        if (raw) return raw.replace(/[^a-z0-9]/gi, '').toUpperCase() === wanted;
+        const titleBlock = html.match(/<title>([\s\S]{0,200}?)<\/title>/i);
+        if (!titleBlock) return true;
+        return String(titleBlock[1] || '').replace(/[^a-z0-9]/gi, '').toUpperCase().includes(wanted);
+    }
     function parseJavLibraryHtml(html) {
         let rating;
         const reviews = [];
@@ -11211,6 +11391,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
         }
         if (!html) return { rating: undefined, reviews: [] };
+        if (!javLibraryCodeMatches(html, code)) {
+            debugLog(new Error(`javlibrary mismatch: ${code}`), 'javlibrary-verify');
+            return { rating: undefined, reviews: [] };
+        }
         const parsed = parseJavLibraryHtml(html);
         onPartial?.(parsed);
         return parsed;
@@ -11312,6 +11496,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (cachedBus) return cachedBus;
         let starHtml = '';
         let busPath = '';
+        let searchFailed = false;
+        let starFailed = false;
         try {
             const searchHtml = await gmRequest(`https://www.javbus.com/searchstar/${encodeURIComponent(trimmed)}`, { headers: JB_PAGE_HEADERS, timeout: 7000 });
             const hits = [];
@@ -11325,12 +11511,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const exact = hits.find(hit => foldActressName(hit.title) === wanted) || hits[0];
             if (exact) busPath = exact.path;
         } catch (error) {
+            searchFailed = true;
             debugLog(error, 'actress-bus-search');
         }
         if (busPath) {
             try {
                 starHtml = await gmRequest(`https://www.javbus.com${busPath}`, { headers: JB_PAGE_HEADERS, timeout: 7000 });
             } catch (error) {
+                starFailed = true;
                 debugLog(error, 'actress-bus-star');
                 starHtml = '';
             }
@@ -11339,7 +11527,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (busPath) fields.busPath = busPath;
         fields.busFetchedAt = Date.now();
         if (fields.busPath || fields.birthday || fields.height || fields.busAvatar) actressProfileSave(trimmed, fields);
-        writeCache(`busActor:${trimmed}`, fields, starHtml ? INFO_CACHE_TTL * 30 : INFO_CACHE_TTL * 2);
+        if (starHtml) writeCache(`busActor:${trimmed}`, fields, INFO_CACHE_TTL * 30);
+        else if (searchFailed || starFailed) debugLog(new Error(`javbus unavailable: ${trimmed}`), 'actress-bus-nocache');
+        else writeCache(`busActor:${trimmed}`, fields, INFO_CACHE_TTL / 4);
         return fields;
     }
 
@@ -12030,12 +12220,24 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const raw = await jdApiFetch(url).catch(() => '');
         state.reviewsLoadingMore = false;
         if (state.infoData !== info) return;
+        if (!String(raw || '').trim()) {
+            renderInfoSection(info);
+            log('⚠️ 短评加载失败，可再点一次「加载更多」重试');
+            return;
+        }
         let list = [];
+        let parsedOk = true;
         try {
             const body = JSON.parse(raw);
             list = Array.isArray(body?.data?.reviews) ? body.data.reviews : [];
         } catch (error) {
+            parsedOk = false;
             debugLog(error);
+        }
+        if (!parsedOk) {
+            renderInfoSection(info);
+            log('⚠️ 短评数据解析失败，可再点一次「加载更多」重试');
+            return;
         }
         const before = info.reviews.length;
         const merged = [...info.reviews];
