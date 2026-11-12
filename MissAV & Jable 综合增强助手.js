@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.07
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      15.08
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -1002,13 +1002,27 @@
     const AUTO_QUALITY_ATTEMPTS = 12;
     const AUTO_QUALITY_INTERVAL = 300;
     const AUTO_QUALITY_EVENTS = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'];
+
+    const SHARPNESS_KEY = 'sharpness';
+    const SHARPNESS_MODES = ['off', 'light', 'medium', 'strong'];
+    const SHARPNESS_LABELS = { off: '关', light: '轻', medium: '中', strong: '强' };
+    const SHARPNESS_HINTS = {
+        off: '关闭画面处理',
+        light: '轻微提亮与对比，几乎不占资源',
+        medium: '更明显的通透感，几乎不占资源',
+        strong: 'SVG 卷积真锐化，部分显卡会掉帧（掉帧会自动降为「中」）'
+    };
+    const SHARPNESS_STRONG_AMOUNT = 0.35;
+    const SHARPNESS_SVG_ID = 'av-sharp-defs';
+    const SHARPNESS_FILTER_ID = 'av-sharp-filter';
+    const SHARPNESS_FPS_FLOOR = 40;
     const WHOS_BASE = 'https://whos.tv/videos/';
     const WHOS_FRAMES_KEY = 'whosFrames_v1';
     const WHOS_FRAMES_LIMIT = 120;
     const WHOS_FETCH_TIMEOUT = 7000;
     const WHOS_SEARCH = 'https://whos.tv/result?search=';
     const WHOS_AJAX_BASE = 'https://whos.tv/ajax/frames/video-frames';
-    const WHOS_MAX_PAGES = 40;
+    const WHOS_MAX_PAGES = 40;
     const WHOS_PAGE_LANES = 4;
     const WHOS_TICK_TARGET = 40;
     const WHOS_CACHE_VERSION = 2;
@@ -5590,6 +5604,23 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     });
     state.theaterSwitch = theaterRow.querySelector('.avx-sw');
     behaveCard.appendChild(theaterRow);
+
+    const sharpRow = avxEl('div', 'avx-chips');
+    const sharpChips = [];
+    const sharpField = avxEl('div', 'avx-field');
+    sharpField.appendChild(avxEl('label', '', '画面锐化'));
+    for (const mode of SHARPNESS_MODES) {
+        const chip = avxEl('button', 'avx-chip' + (sharpnessMode() === mode ? ' is-on' : ''), SHARPNESS_LABELS[mode]);
+        chip.type = 'button';
+        chip.dataset.mode = mode;
+        chip.title = SHARPNESS_HINTS[mode];
+        chip.addEventListener('click', () => setSharpness(mode));
+        sharpChips.push(chip);
+        sharpRow.appendChild(chip);
+    }
+    sharpField.appendChild(sharpRow);
+    state.sharpChips = sharpChips;
+    behaveCard.insertBefore(sharpField, skipBox.wrap);
     playPane.appendChild(behaveCard);
 
         const subPane = paneOf('sub');
@@ -11402,7 +11433,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     async function fetchJavBusInfo(code, onPartial) {
         const html = await fetchHtml(`${JB_ENDPOINT}${encodeURIComponent(code)}`, {
             headers: { Cookie: 'age=verified; existmag=all; dv=1' },
-            timeout: 4000
+            timeout: 8000,
+            skipProxy: true
         });
         const parsed = parseJavBusHtml(html);
         onPartial?.(parsed);
@@ -11694,11 +11726,13 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.infoData = { code, rating: undefined, stills: [], reviews: pageReviews, lists: [] };
         const cacheKey = `${INFO_CACHE_PREFIX}${code}`;
         const cached = readCache(cacheKey);
-        if (cached) {
+        const cachedFilled = !!cached && !!(cached.rating || (cached.stills || []).length || (cached.reviews || []).length || (cached.lists || []).length);
+        if (cachedFilled) {
             state.infoData = cached;
             if (session === state.infoSession) applyInfoToPage(cached);
             return cached;
         }
+        if (cached) cacheForget(cacheKey);
         log(`🔎 正在获取情报: ${code}`);
         const merged = [...pageReviews];
         const seenStills = [];
@@ -11759,7 +11793,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         };
         state.infoData = finalData;
         applyInfoToPage(finalData);
-        writeCache(cacheKey, finalData);
+        if (finalData.rating || finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
+            writeCache(cacheKey, finalData);
+        } else {
+            cacheForget(cacheKey);
+        }
         if (finalData.rating || finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
             log(`✅ 情报加载完成：${finalData.stills.length} 剧照，${finalData.reviews.length} 短评，${finalData.lists.length} 影单`);
         } else {
@@ -12994,6 +13032,130 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             state.tapHudEl = null;
         }
     }
+
+    function sharpnessMode() {
+        const raw = String(store.get(SHARPNESS_KEY) || 'off');
+        return SHARPNESS_MODES.indexOf(raw) >= 0 ? raw : 'off';
+    }
+
+    function sharpnessCss(mode) {
+        if (mode === 'light') return 'contrast(1.06) saturate(1.07) brightness(1.01)';
+        if (mode === 'medium') return 'contrast(1.12) saturate(1.14) brightness(1.02)';
+        return '';
+    }
+
+    function sharpnessKernel(amount) {
+        const k = Math.max(0, Math.min(1.2, Number(amount) || 0));
+        const center = (1 + 4 * k).toFixed(4);
+        const side = (-k).toFixed(4);
+        return `0 ${side} 0 ${side} ${center} ${side} 0 ${side} 0`;
+    }
+
+    function ensureSharpnessFilter() {
+        const existing = document.getElementById(SHARPNESS_SVG_ID);
+        if (existing && existing.isConnected) {
+            return existing.querySelector('feConvolveMatrix');
+        }
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.id = SHARPNESS_SVG_ID;
+        svg.setAttribute('width', '0');
+        svg.setAttribute('height', '0');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+        const defs = document.createElementNS(ns, 'defs');
+        const filter = document.createElementNS(ns, 'filter');
+        filter.setAttribute('id', SHARPNESS_FILTER_ID);
+        filter.setAttribute('x', '0');
+        filter.setAttribute('y', '0');
+        filter.setAttribute('width', '100%');
+        filter.setAttribute('height', '100%');
+        filter.setAttribute('color-interpolation-filters', 'sRGB');
+        const kernel = document.createElementNS(ns, 'feConvolveMatrix');
+        kernel.setAttribute('order', '3');
+        kernel.setAttribute('preserveAlpha', 'true');
+        kernel.setAttribute('edgeMode', 'duplicate');
+        kernel.setAttribute('kernelMatrix', sharpnessKernel(SHARPNESS_STRONG_AMOUNT));
+        filter.appendChild(kernel);
+        defs.appendChild(filter);
+        svg.appendChild(defs);
+        (document.body || document.documentElement).appendChild(svg);
+        return kernel;
+    }
+
+    const sharpWatch = { raf: 0 };
+
+    function stopSharpnessWatch() {
+        if (sharpWatch.raf) {
+            cancelAnimationFrame(sharpWatch.raf);
+            sharpWatch.raf = 0;
+        }
+    }
+
+    function startSharpnessWatch() {
+        if (sharpWatch.raf) return;
+        let frames = 0;
+        let last = performance.now();
+        let slow = 0;
+        const step = now => {
+            frames += 1;
+            if (now - last >= 1000) {
+                const fps = Math.round((frames * 1000) / Math.max(1, now - last));
+                frames = 0;
+                last = now;
+                const playing = state.video && !state.video.paused && state.video.readyState >= 2;
+                if (playing && fps > 0 && fps < SHARPNESS_FPS_FLOOR) slow += 1;
+                else slow = 0;
+                if (slow >= 2) {
+                    sharpWatch.raf = 0;
+                    store.set(SHARPNESS_KEY, 'medium');
+                    applySharpness();
+                    syncSharpnessChips();
+                    log(`⚠️ 强锐化掉帧（${fps} fps），已自动降为「中」`);
+                    return;
+                }
+            }
+            sharpWatch.raf = requestAnimationFrame(step);
+        };
+        sharpWatch.raf = requestAnimationFrame(step);
+    }
+
+    function applySharpness() {
+        const video = state.video;
+        if (!video || !video.isConnected) return;
+        const mode = sharpnessMode();
+        if (mode === 'strong') {
+            const kernel = ensureSharpnessFilter();
+            if (kernel) {
+                kernel.setAttribute('kernelMatrix', sharpnessKernel(SHARPNESS_STRONG_AMOUNT));
+                video.style.filter = `url(#${SHARPNESS_FILTER_ID})`;
+                startSharpnessWatch();
+                return;
+            }
+        }
+        video.style.filter = sharpnessCss(mode);
+        stopSharpnessWatch();
+    }
+
+    function syncSharpnessChips() {
+        const chips = state.sharpChips || [];
+        const mode = sharpnessMode();
+        for (const chip of chips) {
+            chip.classList.toggle('is-on', chip.dataset.mode === mode);
+        }
+    }
+
+    function setSharpness(mode, options = {}) {
+        const next = SHARPNESS_MODES.indexOf(mode) >= 0 ? mode : 'off';
+        store.set(SHARPNESS_KEY, next);
+        applySharpness();
+        syncSharpnessChips();
+        if (!options.silent) {
+            log(next === 'off' ? '🪞 画面锐化已关闭' : `🪞 画面锐化：${SHARPNESS_LABELS[next]}`);
+        }
+        return next;
+    }
+
     function bindPlayer(video, container, force = false) {
         if (!force && state.bound && state.video === video && video.isConnected) return;
         if (isPreviewVideo(video)) return;
@@ -13033,6 +13195,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         setupMediaSession(video);
         setupAutoMaxQuality(video);
         setupFramePreview(video);
+        applySharpness();
         ensurePageExternalLinks();
         setupResumePlayback(video, container);
         setupAudioControl(video);
