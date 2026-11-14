@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.00
+// @version      16.02
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -1071,7 +1071,6 @@
         '/actors/ranking'
     ]);
 
-
     const AD_SELECTORS = [
         'div[class*="fixed"][class*="right-"][class*="bottom-"]',
         'iframe[id^="aswift_"]',
@@ -1150,7 +1149,7 @@
                 const path = event.composedPath();
                 if (path && path.length) node = path[0];
             }
-        } catch (error) { /* ignore */ }
+        } catch (error) { }
         return Boolean(node instanceof Element && node.closest('input,textarea,select,[contenteditable="true"]'));
     };
     function throttle(fn, delay) {
@@ -1175,7 +1174,6 @@
         };
     }
 
-
     async function mapPool(list, size, worker) {
         const items = Array.from(list || []);
         const out = new Array(items.length);
@@ -1196,7 +1194,6 @@
         await Promise.all(Array.from({ length: limit }, runner));
         return out;
     }
-
 
     const META_LABEL_TITLE = /^(?:Title|標題|标题|タイトル|作品名)\s*[:：]?$/i;
     const META_LABEL_CODE = /^(?:Code|品番|番号|番號)\s*[:：]?$/i;
@@ -1248,7 +1245,6 @@
         const gg = (a, b, c, d, x, s, t) => cmn((b & d) | (c & ~d), a, b, x, s, t);
         const hh = (a, b, c, d, x, s, t) => cmn(b ^ c ^ d, a, b, x, s, t);
         const ii = (a, b, c, d, x, s, t) => cmn(c ^ (b | ~d), a, b, x, s, t);
-
 
         const blockBuf = new Array(16);
         const str2blk = (bytes, offset) => {
@@ -3908,7 +3904,6 @@
         let suppressHandleClickUntil = 0;
         const TOUCH_DRAG_THRESHOLD = 6;
 
-
         const flushPosition = () => {
             clearTimeout(saveTimer);
             saveTimer = 0;
@@ -4059,7 +4054,6 @@
 :where(.avx2) button { font-family: inherit; font-size: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
 .avx2 input, .avx2 textarea { font-family: inherit; font-size: inherit; }
 
-
 .avx2 {
     position: fixed; z-index: 2147483000; width: 372px;
     max-width: calc(100vw - 16px);
@@ -4104,7 +4098,6 @@
 :where(.avx2) .avx-ico:hover { background: rgba(255,255,255,.06); color: var(--text); border-color: var(--line); }
 :where(.avx2) .avx-ico svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-
 :where(.avx2) .avx-tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid rgba(255,255,255,.055); position: relative; }
 :where(.avx2) .avx-tab {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px;
@@ -4119,7 +4112,6 @@
     content: ""; position: absolute; left: 50%; bottom: -1px; transform: translateX(-50%);
     width: 18px; height: 2px; border-radius: 2px; background: var(--grad); box-shadow: 0 0 5px rgba(150,170,255,.4);
 }
-
 
 :where(.avx2) .avx-body {
     padding: 12px 11px 11px; display: flex; flex-direction: column; gap: 10px;
@@ -4144,12 +4136,10 @@
 :where(.avx2) .avx-row .avx-lbl small { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
 :where(.avx2) .avx-val { font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-
 :where(.avx2) .avx-sw { width: 32px; height: 18px; border-radius: 999px; background: rgba(255,255,255,.11); position: relative; flex: 0 0 auto; transition: .2s; border: 1px solid rgba(255,255,255,.06); }
 :where(.avx2) .avx-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #8b96a8; transition: .2s; }
 :where(.avx2) .avx-sw.is-on { background: var(--grad2); border-color: transparent; box-shadow: 0 0 14px -2px rgba(150,170,255,.6); }
 :where(.avx2) .avx-sw.is-on::after { left: 16px; background: #fff; }
-
 
 :where(.avx2) .avx-seg { display: flex; gap: 3px; background: rgba(255,255,255,.045); padding: 3px; border-radius: 9px; border: 1px solid rgba(255,255,255,.045); flex: 0 0 auto; }
 :where(.avx2) .avx-seg button { color: var(--sub); font-size: 11px; padding: 4px 9px; border-radius: 6px; transition: .15s; white-space: nowrap; }
@@ -4157,7 +4147,6 @@
 :where(.avx2) .avx-seg button.on { background: rgba(255,255,255,.10); color: #fff; box-shadow: 0 1px 0 rgba(255,255,255,.08) inset; }
 :where(.avx2) .avx-seg--grow { flex: 1; }
 :where(.avx2) .avx-seg--grow button { flex: 1; text-align: center; padding: 5px 0; }
-
 
 :where(.avx2) .avx-sl { padding: 10px 11px 9px; border-top: 1px solid rgba(255,255,255,.045); }
 :where(.avx2) .avx-card > .avx-sl:first-child { border-top: 0; }
@@ -4192,7 +4181,6 @@
 :where(.avx2) .avx-range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--grad); }
 :where(.avx2) .avx-range::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 50%; background: #fff; }
 
-
 :where(.avx2) .avx-btn {
     border: 1px solid var(--line2); background: rgba(255,255,255,.045); color: #dbe3f0;
     font-size: 11.5px; font-weight: 500; padding: 8px 12px; border-radius: 9px; transition: .15s;
@@ -4212,7 +4200,6 @@
 :where(.avx2) .avx-btns { display: flex; gap: 7px; }
 :where(.avx2) .avx-btns > .avx-btn { flex: 1; }
 
-
 :where(.avx2) .avx-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 11px; border-top: 1px solid rgba(255,255,255,.045); }
 :where(.avx2) .avx-card > .avx-chips:first-child, :where(.avx2) .avx-card-h + .avx-chips { border-top: 0; }
 :where(.avx2) .avx-chip {
@@ -4225,7 +4212,6 @@
 :where(.avx2) .avx-chip i.dot { width: 4px; height: 4px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 :where(.avx2) .avx-chip small { color: var(--muted); font-size: 10px; }
 
-
 :where(.avx2) .avx-key {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; min-width: 24px; text-align: center;
     padding: 3px 6px; border-radius: 5px; background: rgba(255,255,255,.07);
@@ -4236,7 +4222,6 @@
 :where(.avx2) .avx-key.cap { background: rgba(143,178,255,.22); border-color: rgba(143,178,255,.5); color: #fff; animation: avx-pulse 1.1s ease-in-out infinite; }
 @keyframes avx-pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 
-
 :where(.avx2) .avx-field { padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.045); }
 :where(.avx2) .avx-card > .avx-field:first-child, :where(.avx2) .avx-card-h + .avx-field { border-top: 0; }
 :where(.avx2) .avx-field label { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--muted); margin-bottom: 6px; letter-spacing: .03em; }
@@ -4246,7 +4231,6 @@
 }
 :where(.avx2) .avx-inp::placeholder { color: #6b7789; }
 :where(.avx2) .avx-inp:focus { border-color: rgba(143,178,255,.55); background: rgba(143,178,255,.06); }
-
 
 :where(.avx2) .avx-foot {
     display: flex; align-items: center; gap: 7px; padding: 8px 12px 9px;
@@ -4262,7 +4246,6 @@
 :where(.avx2) .avx-log div { display: flex; gap: 8px; padding: 6px 12px; font-size: 11.5px; color: #93a1b6;
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 :where(.avx2) .avx-log div span:first-child { color: #6b7789; flex: 0 0 auto; }
-
 
 :where(.avx2) .avx-capsule { display: none; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; position: relative; cursor: grab; user-select: none; }
 .avx2.panel-collapsed.is-drag > .avx-capsule { cursor: grabbing; }
@@ -4280,7 +4263,6 @@
 .avx2.panel-collapsed > .avx-head > .avx-titles, .avx2.panel-collapsed > .avx-head > .avx-pill, .avx2.panel-collapsed > .avx-tabs, .avx2.panel-collapsed > .avx-body, .avx2.panel-collapsed > .avx-foot, .avx2.panel-collapsed > .avx-log { display: none; }
 .avx2.panel-collapsed > .avx-head { display: none; }
 .avx2.panel-collapsed > .avx-capsule { display: flex; }
-
 
 .avx2 :where(button, a, [role="switch"]):focus-visible,
 .av-cockpit :where(button, a):focus-visible,
@@ -4301,7 +4283,6 @@
 .avx2.is-compact :where(.avx-card-h) { padding: 7px 10px 6px; }
 .avx2.is-compact :where(.avx-chip) { padding: 3px 8px; }
 .avx2.is-compact :where(.avx-tab) { padding: 7px 0 8px; }
-
 
 :where(.avx2) .avx-qj-main { display: inline-flex; align-items: center; gap: 3px; }
 :where(.avx2) .avx-qj-main b { font-size: 10px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
@@ -7412,7 +7393,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         log(`✅ ${label}加载成功：${items.length} 条${fileName && fileName !== label ? `（${fileName}）` : ''}`);
         return true;
     }
-
 
     const SUBTITLE_SNAPSHOT_MAX = 400000;
     function subtitleSnapshotKey() {
@@ -11208,6 +11188,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         actressSyncToken += 1;
         const token = actressSyncToken;
         const frame = document.createElement('iframe');
+        frame.setAttribute('data-av-helper', 'actress-sync');
         frame.setAttribute('aria-hidden', 'true');
         frame.tabIndex = -1;
         frame.title = 'actress-sync';
@@ -16234,7 +16215,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function aggregateAnalytics(range) {
         const records = analyticsRecords();
 
-
         const aggKey = `${range}|${state.analyticsDataVersion || 0}`;
         const aggCached = state.analyticsAggCache;
         if (aggCached && aggCached.key === aggKey) return aggCached.data;
@@ -16304,7 +16284,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const count = Math.max(1, result.totalCount);
         const avgWatchedMinutes = Math.round((result.totalWatchedSeconds / 60 / count) * 10) / 10;
         const completionRate = Math.round((result.completedCount / count) * 1000) / 10;
-
 
         const maxOf = (values, floor = 1) => {
             let best = floor;
@@ -19117,7 +19096,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         clearTimeout(state.holdTimer);
         disposePageLifecycle();
     }, { once: true });
-    /* ================= 影片收藏大屏（由独立脚本 v3.1.1 合并） ================= */
     const FavScreen = (function () {
         'use strict';
 
@@ -19140,7 +19118,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     const ENRICH_TTL = 7 * 24 * 3600 * 1000;
     const ENRICH_VERSION = 10;
 
-
     const GM = {
         get(key, fallback) {
             try {
@@ -19148,7 +19125,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     const value = GM_getValue(key, null);
                     if (value !== null && value !== undefined) return value;
                 }
-            } catch (error) {  }
+            } catch (error) { }
             try {
                 const raw = localStorage.getItem(key);
                 return raw ? JSON.parse(raw) : fallback;
@@ -19162,7 +19139,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     GM_setValue(key, value);
                     return true;
                 }
-            } catch (error) {  }
+            } catch (error) { }
             try {
                 localStorage.setItem(key, JSON.stringify(value));
                 return true;
@@ -19251,7 +19228,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         try {
             const enrichedBlob = GM.get(enrichedKey(site), null);
             if (enrichedBlob && typeof enrichedBlob === 'object') merged.enriched = enrichedBlob;
-        } catch (error) { /* ignore */ }
+        } catch (error) { }
         merged.meta = Object.assign({}, saved.meta || {});
         let savedSettings = null;
         try {
@@ -19323,7 +19300,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         else persistTimer = setTimeout(write, 600);
     }
 
-
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     function el(tag, className, text) {
@@ -19370,7 +19346,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     const item = queue.shift();
                     try {
                         await worker(item);
-                    } catch (error) {  }
+                    } catch (error) { }
                 }
             })());
         }
@@ -19393,7 +19369,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     return;
                 }
             }
-        } catch (error) {  }
+        } catch (error) { }
         const style = document.createElement('style');
         style.textContent = css;
         root.appendChild(style);
@@ -19422,7 +19398,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>',
         chart: '<path d="M3 3v18h18"/><path d="M7 15l3.5-4 3 3L20 7"/>'
     };
-
 
     const IMG_ATTRS = ['data-src', 'data-original', 'data-lazy', 'data-lazy-src', 'data-webp', 'data-cover', 'data-thumb', 'src'];
 
@@ -19685,7 +19660,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         for (const scope of ['.pagination', '.pager', '.page-nav', '.paging', '[class*="pagination"]', '[class*="pager"]', 'nav']) {
             try {
                 push(Array.from(doc.querySelectorAll(`${scope} a, ${scope} button`)));
-            } catch (error) {  }
+            } catch (error) { }
         }
         push(Array.from(doc.querySelectorAll('a[rel="next"]')));
 
@@ -19695,7 +19670,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 for (const node of doc.querySelectorAll(`${scope} li, ${scope} span`)) {
                     if (!pools.includes(node) && !extras.includes(node)) extras.push(node);
                 }
-            } catch (error) {  }
+            } catch (error) { }
         }
         const pickNumber = (list, wanted) => list.find(node => usable(node) && !isLast(node) && !isFirst(node) && pagerNumber(node) === wanted);
 
@@ -19729,11 +19704,28 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!node) return false;
         try {
             if (node.scrollIntoView) node.scrollIntoView({ block: 'center', inline: 'nearest' });
-        } catch (error) {  }
+        } catch (error) { }
+        try {
+            const doc = node.ownerDocument;
+            const win = doc && (doc.defaultView || doc.parentWindow);
+            if (win) {
+                for (const type of ['pointerover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+                    const Ctor = (type.indexOf('pointer') === 0 && win.PointerEvent) ? win.PointerEvent : win.MouseEvent;
+                    if (!Ctor) continue;
+                    node.dispatchEvent(new Ctor(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: win,
+                        button: 0,
+                        buttons: (type === 'pointerdown' || type === 'mousedown') ? 1 : 0
+                    }));
+                }
+            }
+        } catch (error) { }
         try {
             node.click();
             return true;
-        } catch (error) {  }
+        } catch (error) { }
         try {
             const doc = node.ownerDocument;
             const win = doc && (doc.defaultView || doc.parentWindow);
@@ -19770,7 +19762,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             return '';
         }
     }
-
 
     const META_BLOCKED_ZONE = 'nav, header, footer, aside, .sidebar, .pagination, .breadcrumb, .navbar, .menu, .footer, .header';
     const STOP_LABEL_RE = /^(?:女優|女优|演員|演员|類型|类型|類別|类别|標籤|标签|主題|主题|片商|發行商|发行商|番號|番号|日期|時長|时长|導演|导演|系列|廠商|厂商|發售|发售|商品|日本發售|日本发售)$/;
@@ -19855,6 +19846,42 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (ogActors.length) result.actress = ogActors.slice(0, 30);
         const ogTags = ogValues('og:video:tag');
         if (ogTags.length) result.genre = ogTags.slice(0, 30);
+
+        if (!result.actress.length || !result.genre.length || !result.maker) {
+            const jsonNodes = [];
+            for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+                try {
+                    const data = JSON.parse(script.textContent || '');
+                    if (Array.isArray(data)) jsonNodes.push(...data);
+                    else if (data && Array.isArray(data['@graph'])) jsonNodes.push(...data['@graph']);
+                    else if (data) jsonNodes.push(data);
+                } catch (error) { }
+            }
+            for (const node of jsonNodes) {
+                if (!node || typeof node !== 'object') continue;
+                if (!result.actress.length) {
+                    const actors = node.actor || node.actors;
+                    const list = Array.isArray(actors) ? actors : (actors ? [actors] : []);
+                    const names = list.map(actor => {
+                        if (!actor) return '';
+                        return typeof actor === 'string' ? actor : String(actor.name || '');
+                    }).map(name => validEntity(name)).filter(Boolean);
+                    if (names.length) result.actress = Array.from(new Set(names)).slice(0, 30);
+                }
+                if (!result.genre.length) {
+                    const genres = node.genre;
+                    const list = Array.isArray(genres) ? genres : (genres ? [genres] : []);
+                    const tags = list.map(tag => validEntity(String(tag || ''))).filter(Boolean);
+                    if (tags.length) result.genre = Array.from(new Set(tags)).slice(0, 30);
+                }
+                if (!result.maker) {
+                    const company = node.productionCompany || node.publisher;
+                    const name = typeof company === 'string' ? company : (company && company.name);
+                    const maker = validEntity(String(name || ''));
+                    if (maker) result.maker = maker.slice(0, 40);
+                }
+            }
+        }
 
         const INFO_ZONE = '.video-info, #video-info, .video-detail, .movie-panel-info, .info';
         const pools = { actress: [], genre: [], maker: [] };
@@ -19968,7 +19995,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return result;
     }
 
-
     const HOST_QUEUE = new Map();
     function withHostLimit(key, gap, task) {
         const prev = HOST_QUEUE.get(key) || Promise.resolve();
@@ -19995,7 +20021,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         throw last || new Error('请求失败');
     }
-
 
     function httpGet(url, timeout, extraHeaders) {
         const limit = timeout || 20000;
@@ -20045,6 +20070,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!host) {
             host = document.createElement('div');
             host.id = 'fav-screen-frames';
+            host.setAttribute('data-av-helper', 'wall-frames');
             host.style.cssText = 'position:fixed;left:-12000px;top:0;width:1280px;height:900px;overflow:hidden;opacity:0;pointer-events:none;z-index:-1;';
             (document.body || document.documentElement).appendChild(host);
         }
@@ -20053,6 +20079,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 
     function createHiddenFrame() {
         const frame = document.createElement('iframe');
+        frame.setAttribute('data-av-helper', 'wall-frame');
         frame.setAttribute('aria-hidden', 'true');
         frame.tabIndex = -1;
         frame.title = 'fav-screen-loader';
@@ -20151,14 +20178,13 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (doc) {
                 try {
                     if (collectCards(doc, site, frameUrl(frame) || location.href).length) return doc;
-                } catch (error) {  }
+                } catch (error) { }
             }
             if (runToken && runToken.cancelled) return doc;
             await sleep(350);
         }
         return doc;
     }
-
 
     let runToken = null;
     let running = false;
@@ -20408,11 +20434,214 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return totalNew;
     }
 
+    function hookFramePager(frame, bucket) {
+        try {
+            const win = frame && frame.contentWindow;
+            if (!win || win.__avPagerHooked) return;
+            win.__avPagerHooked = true;
+            const XHR = win.XMLHttpRequest;
+            if (XHR && XHR.prototype) {
+                const origOpen = XHR.prototype.open;
+                const origSend = XHR.prototype.send;
+                XHR.prototype.open = function (method, url) {
+                    try { this.__avUrl = String(url || ''); } catch (error) { }
+                    return origOpen.apply(this, arguments);
+                };
+                XHR.prototype.send = function () {
+                    try {
+                        this.addEventListener('load', () => {
+                            try {
+                                const text = this.responseText;
+                                if (typeof text === 'string' && text.length > 200) {
+                                    bucket.push({ url: this.responseURL || this.__avUrl || '', text });
+                                }
+                            } catch (error) { }
+                        });
+                    } catch (error) { }
+                    return origSend.apply(this, arguments);
+                };
+            }
+            const origFetch = win.fetch;
+            if (typeof origFetch === 'function') {
+                win.fetch = function (input, init) {
+                    const url = typeof input === 'string' ? input : ((input && input.url) || '');
+                    const promise = origFetch.apply(this, arguments);
+                    try {
+                        promise.then(response => response.clone().text().then(text => {
+                            if (typeof text === 'string' && text.length > 200) bucket.push({ url, text });
+                        }).catch(() => { })).catch(() => { });
+                    } catch (error) { }
+                    return promise;
+                };
+            }
+        } catch (error) { }
+    }
+
+    function readDataAttrs(node) {
+        const out = {};
+        try {
+            for (const attr of Array.from(node.attributes || [])) {
+                if (attr.name.indexOf('data-') === 0) out[attr.name] = attr.value;
+            }
+        } catch (error) { }
+        return out;
+    }
+
+    function jableAsyncUrl(here, blockId, sortBy, param, page) {
+        if (!blockId) return '';
+        try {
+            const url = new URL(here);
+            url.search = '';
+            url.searchParams.set('mode', 'async');
+            url.searchParams.set('function', 'get_block');
+            url.searchParams.set('block_id', blockId);
+            if (sortBy) url.searchParams.set('sort_by', sortBy);
+            url.searchParams.set(param, String(page));
+            return url.href;
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function parseParamString(raw) {
+        const params = new URLSearchParams();
+        for (const part of String(raw || '').split(';')) {
+            const index = part.indexOf(':');
+            if (index <= 0) continue;
+            const key = part.slice(0, index).trim();
+            const value = part.slice(index + 1).trim();
+            if (key) params.set(key, value);
+        }
+        return params;
+    }
+
+    function jableAsyncUrlWith(here, blockId, rawParams, page) {
+        if (!blockId) return '';
+        try {
+            const url = new URL(here);
+            url.search = '';
+            url.searchParams.set('mode', 'async');
+            url.searchParams.set('function', 'get_block');
+            url.searchParams.set('block_id', blockId);
+            const extra = parseParamString(rawParams);
+            let hasFrom = false;
+            for (const key of Array.from(extra.keys())) {
+                if (/^from_/i.test(key)) {
+                    extra.set(key, String(page));
+                    hasFrom = true;
+                }
+            }
+            if (!hasFrom) extra.set('from', String(page));
+            for (const [key, value] of extra.entries()) url.searchParams.set(key, value);
+            return url.href;
+        } catch (error) {
+            return '';
+        }
+    }
+
+    async function fetchFrameText(frame, url) {
+        try {
+            const win = frame && frame.contentWindow;
+            if (!win || typeof win.fetch !== 'function') return '';
+            const response = await win.fetch(url, {
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            });
+            if (!response || !response.ok) return '';
+            return await response.text();
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function writeFrameHtml(frame, html) {
+        try {
+            const doc = frameDoc(frame);
+            if (!doc || !doc.open || !doc.write) return false;
+            doc.open();
+            doc.write(html);
+            doc.close();
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function pagerTargetUrl(target, here) {
+        if (!target) return '';
+        try {
+            for (const name of ['data-url', 'data-href', 'data-link', 'data-target']) {
+                const value = target.getAttribute(name);
+                if (value && !/^(?:#|javascript:)/i.test(value)) return absUrl(value, here);
+            }
+            const withOnclick = (target.closest && target.closest('[onclick]')) || target;
+            const code = withOnclick.getAttribute('onclick') || '';
+            const hit = /['"]([^'"]*[?&](?:page|from)=[^'"]*)['"]/i.exec(code);
+            if (hit) return absUrl(hit[1], here);
+        } catch (error) { }
+        return '';
+    }
+
+    function jableBlockConfig(doc, here) {
+        if (!doc) return null;
+        try {
+            let blockId = '';
+            let sortBy = '';
+            let rawParams = '';
+            let active = doc.querySelector('li.active > a, .page-link.active, .pagination .active a');
+            if (!active) active = doc.querySelector('.pagination .active, [aria-current="page"]');
+            if (active) {
+                const holder = (active.closest && active.closest('a')) || active;
+                blockId = holder.getAttribute('data-block-id') || (holder.dataset && holder.dataset.blockId) || '';
+                rawParams = holder.getAttribute('data-parameters') || (holder.dataset && holder.dataset.parameters) || '';
+                const hit = /sort_by\s*:\s*([^,;\s]+)/i.exec(rawParams);
+                if (hit) sortBy = hit[1];
+            }
+            if (!blockId) {
+                const scope = listScope(doc, 'jable');
+                if (scope && scope.id && /^list_videos/i.test(scope.id)) blockId = scope.id;
+            }
+            if (!blockId) return null;
+            return { blockId, sortBy, params: rawParams, base: here };
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function jableBlockUrl(config, page, options) {
+        if (!config || !config.blockId) return '';
+        const opts = options || {};
+        try {
+            const url = new URL(config.base || location.href);
+            url.search = '';
+            url.searchParams.set('mode', 'async');
+            url.searchParams.set('function', 'get_block');
+            url.searchParams.set('block_id', config.blockId);
+            const sortBy = opts.sortBy !== undefined ? opts.sortBy : config.sortBy;
+            if (sortBy) url.searchParams.set('sort_by', sortBy);
+            url.searchParams.set(opts.param || 'from', String(page));
+            return url.href;
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function pageParamUrl(here, page) {
+        try {
+            const url = new URL(here);
+            url.searchParams.set('page', String(page));
+            return url.href;
+        } catch (error) {
+            return '';
+        }
+    }
+
     async function scrapeJableFrame(log, token, entry) {
         const frame = createHiddenFrame();
         let totalNew = 0;
         let touched = false;
         let page = 1;
+        let blockConf = null;
         try {
             const loaded = await loadFrame(frame, entry);
             if (!loaded) {
@@ -20426,8 +20655,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 return { ok: false, totalNew: 0 };
             }
             log(`🪟 后台已打开收藏页，首屏 ${firstCards.length} 条`);
+            blockConf = jableBlockConfig(first, frameUrl(frame) || entry);
 
-            let prevSignature = '';
+            const seenSignatures = new Set();
             for (; page <= 200; page++) {
                 if (token.cancelled) break;
                 const doc = frameDoc(frame);
@@ -20436,48 +20666,177 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     break;
                 }
                 const here = frameUrl(frame) || entry;
+                if (!blockConf) blockConf = jableBlockConfig(doc, here);
                 const cards = collectCards(doc, 'jable', here);
                 if (!cards.length) {
                     log(page === 1 ? '⚠️ 收藏页没有解析到影片：请确认已登录 jable.tv' : '🏁 已到最后一页');
                     break;
                 }
                 const signature = cards.slice(0, 12).map(card => card.path).join('|');
-                if (page > 1 && signature === prevSignature) {
-                    log('🏁 翻页后内容没有变化，判定已到末页');
+                if (page > 1 && seenSignatures.has(signature)) {
+                    log('🏁 翻页后回到已抓过的页面，判定已到末页');
                     break;
                 }
-                prevSignature = signature;
+                seenSignatures.add(signature);
                 touched = true;
                 totalNew += mergeCards(cards, 'jable', page, log);
                 setProgress(0.35, `Jable 第 ${page} 页 · 已收录 ${formatNumber(allItems().length)} 部`);
                 persist();
 
                 const next = findNextLink(doc, page + 1);
-                if (!next) {
-                    log('🏁 已到 Jable 收藏最后一页');
-                    break;
-                }
-                const href = next.getAttribute('href') || '';
-                const nextUrl = (href && !/^(?:#|javascript:)/i.test(href)) ? absUrl(href, here) : '';
                 const beforeSig = cardSignature(doc, 'jable');
-                const label = (next.textContent || '').replace(/\s+/g, '').slice(0, 10) || '下一页';
-                log(`➡️ 后台点「${label}」翻到第 ${page + 1} 页`);
+                let changed = false;
 
-                const clicked = humanClick(next);
-                let changed = clicked ? await waitFrameChange(frame, 'jable', beforeSig, 40, here) : false;
+                const pageSize = Math.max(1, cards.length);
+                const pagerTarget = next ? ((next.closest && next.closest('a, button')) || (next.querySelector && next.querySelector('a, button')) || next) : null;
+                const pagerAttrs = pagerTarget ? readDataAttrs(pagerTarget) : {};
+                const blockIds = [];
+                for (const id of [blockConf && blockConf.blockId, pagerAttrs['data-block-id'], pagerAttrs['data-container-id']]) {
+                    if (id && blockIds.indexOf(id) < 0) blockIds.push(id);
+                }
+                if (!blockIds.length && page === 1) log('⚠️ 未识别到 Jable 分块配置（block_id）');
+                const blockSort = (blockConf && blockConf.sortBy) || '';
 
-                if (!changed && nextUrl && nextUrl !== here) {
-                    log('↪️ 点击没有反应，改为直接载入下一页地址');
-                    const ok = await loadFrame(frame, nextUrl);
+                const rawParams = pagerAttrs['data-parameters'] || (blockConf && blockConf.params) || '';
+                const attrBlockId = pagerAttrs['data-block-id'] || (blockConf && blockConf.blockId) || '';
+                const asyncTries = [];
+                const addAsync = (kind, url) => {
+                    if (!url || asyncTries.some(entry => entry[1] === url)) return;
+                    asyncTries.push([kind, url]);
+                };
+                addAsync('分页参数', jableAsyncUrlWith(here, attrBlockId, rawParams, page + 1));
+                if (pagerAttrs['data-container-id']) addAsync('分页参数(容器)', jableAsyncUrlWith(here, pagerAttrs['data-container-id'], rawParams, page + 1));
+                for (const blockId of blockIds) {
+                    for (const [param, value] of [['from', page + 1], ['from', page], ['page', page + 1]]) {
+                        addAsync(`异步接口 ${param}=${value}`, jableAsyncUrl(here, blockId, blockSort, param, value));
+                    }
+                }
+                for (const [kind, url] of asyncTries) {
+                    {
+                        log(`↪️ ${kind}`);
+                        const text = await fetchFrameText(frame, url);
+                        if (!text) {
+                            log('⚠️ 异步接口无响应');
+                            continue;
+                        }
+                        const parsed = toDoc(text);
+                        const got = collectCards(parsed, 'jable', url);
+                        if (got.length && cardSignature(parsed, 'jable') !== beforeSig) {
+                            writeFrameHtml(frame, text);
+                            changed = true;
+                            break;
+                        }
+                        log(`↪️ 异步接口无新内容（${formatNumber(text.length)} 字节 / ${formatNumber(got.length)} 条）${got.length ? '' : ' · ' + text.replace(/\s+/g, ' ').slice(0, 60)}`);
+                    }
+                    if (changed) break;
+                }
+
+                const targets = [];
+                const addTarget = (kind, url) => {
+                    if (!url || url === here) return;
+                    if (targets.some(entry => entry[1] === url)) return;
+                    targets.push([kind, url]);
+                };
+                if (blockConf && !blockConf.sortBy) addTarget('分块接口(排序)', jableBlockUrl(blockConf, page + 1, { sortBy: 'post_date' }));
+                addTarget('分块接口(page)', jableBlockUrl(blockConf, page + 1, { param: 'page' }));
+                addTarget('分块接口', jableBlockUrl(blockConf, page + 1));
+                addTarget('分块接口(偏移)', jableBlockUrl(blockConf, page * pageSize));
+                addTarget('页码参数', pageParamUrl(here, page + 1));
+                if (next) {
+                    const rawTarget = (next.closest && next.closest('a, button')) || (next.querySelector && next.querySelector('a, button')) || next;
+                    addTarget('分页属性', pagerTargetUrl(rawTarget, here));
+                }
+                for (const [kind, url] of targets) {
+                    if (changed) break;
+                    log(`↪️ 按${kind}加载第 ${page + 1} 页`);
+                    const ok = await loadFrame(frame, url, 12000);
                     if (!ok) {
                         log('⚠️ 下一页加载超时');
+                        continue;
+                    }
+                    await waitForCards(frame, 'jable', 8000);
+                    const afterDoc = frameDoc(frame);
+                    const afterCards = afterDoc ? collectCards(afterDoc, 'jable', url) : [];
+                    if (afterCards.length && cardSignature(afterDoc, 'jable') !== beforeSig) {
+                        changed = true;
                         break;
                     }
-                    await waitForCards(frame, 'jable', 6000);
-                    changed = true;
+                    log(`↪️ ${kind}没有返回新内容（${formatNumber(afterCards.length)} 条）`);
                 }
+
+                if (!changed && next && targets.length) {
+                    if (await loadFrame(frame, here)) await waitForCards(frame, 'jable', 6000);
+                }
+
+                if (!changed && next) {
+                    const target = (next.closest && next.closest('a, button')) || (next.querySelector && next.querySelector('a, button')) || next;
+                    const href = target.getAttribute('href') || '';
+                    const nextUrl = (href && !/^(?:#|javascript:)/i.test(href)) ? absUrl(href, here) : '';
+                    const label = (target.textContent || '').replace(/\s+/g, '').slice(0, 10) || '下一页';
+                    const opensNewTab = /^_blank$/i.test(target.getAttribute('target') || '');
+                    if (nextUrl && nextUrl !== here && targets.every(([, url]) => url !== nextUrl)) {
+                        log(`↪️ 按分页链接加载第 ${page + 1} 页`);
+                        if (await loadFrame(frame, nextUrl)) {
+                            await waitForCards(frame, 'jable', 8000);
+                            const afterDoc = frameDoc(frame);
+                            changed = Boolean(afterDoc
+                                && collectCards(afterDoc, 'jable', nextUrl).length
+                                && cardSignature(afterDoc, 'jable') !== beforeSig);
+                        }
+                    }
+                    if (!changed && !opensNewTab) {
+                        log(`➡️ 后台点「${label}」翻到第 ${page + 1} 页`);
+                        try {
+                            const liveDoc = frameDoc(frame);
+                            const liveWin = liveDoc && liveDoc.defaultView;
+                            if (liveWin && liveDoc.body) {
+                                liveWin.scrollTo(0, liveDoc.body.scrollHeight);
+                                liveDoc.dispatchEvent(new liveWin.Event('scroll', { bubbles: true }));
+                            }
+                        } catch (error) { }
+                        await sleep(160);
+                        const bucket = [];
+                        hookFramePager(frame, bucket);
+                        humanClick(target);
+                        changed = await waitFrameChange(frame, 'jable', beforeSig, 16, here);
+                        if (!changed && bucket.length) {
+                            const hit = bucket.slice().reverse().find(entry => {
+                                try {
+                                    const parsed = toDoc(entry.text);
+                                    const hitCards = collectCards(parsed, 'jable', entry.url || here);
+                                    return hitCards.length > 0 && cardSignature(parsed, 'jable') !== beforeSig;
+                                } catch (error) {
+                                    return false;
+                                }
+                            });
+                            if (hit) {
+                                const frameDocNow = frameDoc(frame);
+                                if (frameDocNow && frameDocNow.open && frameDocNow.write) {
+                                    try {
+                                        frameDocNow.open();
+                                        frameDocNow.write(hit.text);
+                                        frameDocNow.close();
+                                        changed = true;
+                                        log(`✅ 已接管站内翻页响应（第 ${page + 1} 页）`);
+                                    } catch (error) { }
+                                }
+                            } else {
+                                const lastUrl = String((bucket[bucket.length - 1] || {}).url || '').slice(0, 140);
+                                log(`🔍 站内翻页响应没有新卡片（${formatNumber(bucket.length)} 条）${lastUrl ? ' · ' + lastUrl : ''}`);
+                            }
+                        } else if (!changed) {
+                            log('🔍 站点没有发出翻页请求');
+                            try {
+                                const pairs = Object.entries(pagerAttrs).map(([key, value]) => `${key}=${value}`).join(' | ');
+                                log(`🔍 分页元素属性：${pairs.slice(0, 300) || '无 data-* 属性'}`);
+                            } catch (error) { }
+                        }
+                    }
+                }
+
                 if (!changed) {
-                    log('🏁 没有更多新内容，抓取结束');
+                    if (next || blockConf) log('🏁 没有更多新内容，抓取结束');
+                    else log('🏁 已到 Jable 收藏最后一页');
                     break;
                 }
                 await sleep(320);
@@ -20549,6 +20908,67 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
     }
 
+    async function fetchDetailWithFallback(item, code) {
+        const attempts = [];
+        if (item && item.href) attempts.push(item.href);
+        if (CURRENT_SITE === 'jable') {
+            const canonical = `${location.origin}/videos/${String(code || '').toLowerCase()}/`;
+            if (!attempts.includes(canonical)) attempts.push(canonical);
+        }
+        let lastError = '无数据';
+        for (const url of attempts) {
+            try {
+                const html = await withHostLimit('site', 120, () => fetchWithRetry(() => httpGet(url, 20000), 2, 700));
+                if (isBlockedHtml(html)) {
+                    lastError = '页面被拦截';
+                    continue;
+                }
+                const parsed = parseDetail(toDoc(html), url);
+                if (parsed && (parsed.actress.length || parsed.genre.length || parsed.maker)) {
+                    return { parsed, url };
+                }
+                lastError = '详情页没有元数据';
+            } catch (error) {
+                lastError = error && error.message ? error.message : String(error);
+            }
+        }
+
+        if (CURRENT_SITE === 'jable') {
+            try {
+                const searchUrl = `${location.origin}/search/${encodeURIComponent(String(code || ''))}/`;
+                const listHtml = await withHostLimit('site', 120, () => fetchWithRetry(() => httpGet(searchUrl, 20000), 2, 700));
+                if (isBlockedHtml(listHtml)) throw new Error(lastError === '无数据' ? '页面被拦截' : lastError);
+                const listDoc = toDoc(listHtml);
+                const target = String(code || '').toLowerCase();
+                let href = '';
+                for (const anchor of listDoc.querySelectorAll('a[href*="/videos/"]')) {
+                    const url = absUrl(anchor.getAttribute('href'), searchUrl);
+                    if (!url) continue;
+                    const slug = (url.split('/videos/')[1] || '').toLowerCase();
+                    if (!target || slug.indexOf(target) === 0) {
+                        href = url;
+                        break;
+                    }
+                }
+                if (!href) {
+                    lastError = lastError === '详情页没有元数据' ? lastError : '站内没有这个番号';
+                } else {
+                    const pageHtml = await withHostLimit('site', 120, () => fetchWithRetry(() => httpGet(href, 20000), 2, 700));
+                    if (!isBlockedHtml(pageHtml)) {
+                        const parsed = parseDetail(toDoc(pageHtml), href);
+                        if (parsed && (parsed.actress.length || parsed.genre.length || parsed.maker)) {
+                            return { parsed, url: href };
+                        }
+                        lastError = '详情页没有元数据';
+                    }
+                }
+            } catch (error) {
+                lastError = error && error.message ? error.message : lastError;
+            }
+        }
+        throw new Error(lastError);
+    }
+
     async function runEnrich() {
         if (running) return;
         const items = allItems().filter(item => item.code && item.href);
@@ -20592,18 +21012,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 let reason = '';
 
                 try {
-                    if (!entry.item.href) throw new Error('缺少详情链接');
-                    const html = await withHostLimit('site', 120, () => fetchWithRetry(
-                        () => httpGet(entry.item.href, 20000), 2, 700
-                    ));
-                    if (isBlockedHtml(html)) throw new Error('页面被拦截');
-                    const parsed = parseDetail(toDoc(html), entry.item.href);
-                    if (!parsed || (!parsed.actress.length && !parsed.genre.length && !parsed.maker)) {
-                        throw new Error('详情页没有元数据');
-                    }
-                    detail = parsed;
+                    if (!entry.item.href && CURRENT_SITE !== 'jable') throw new Error('缺少详情链接');
+                    const resolved = await fetchDetailWithFallback(entry.item, code);
+                    detail = resolved.parsed;
+                    if (resolved.url && entry.item.href !== resolved.url) entry.item.href = resolved.url;
                 } catch (error) {
-                    reason = error.message;
+                    reason = error && error.message ? error.message : '无数据';
                     detail = null;
                 }
 
@@ -20654,14 +21068,13 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
     }
 
-
     function isJunkEntry(item) {
         if (!item) return true;
         const title = String(item.title || '');
         const cover = String(item.cover || '');
         try {
             if (item.href && !isVideoPath(new URL(item.href), item.site || CURRENT_SITE)) return true;
-        } catch (error) {  }
+        } catch (error) { }
         if (JUNK_TITLE_RE.test(title.trim())) return true;
         if (!item.code && !item.duration && title.trim().length <= 8) return true;
         if (!item.duration && title.trim().length <= 24 && /^(?:繁體中文|繁体中文|簡體中文|简体中文|日本語|한국어|語言|语言)/.test(title.trim())) return true;
@@ -20855,7 +21268,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         stats.avgMinutes = stats.withDuration ? stats.minutes / stats.withDuration : 0;
         return stats;
     }
-
 
     const ui = {
         host: null,
@@ -22089,7 +22501,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
     }
 
-
     const CSS = `
 :host { all: initial; }
 *, *::before, *::after { box-sizing: border-box; }
@@ -22697,18 +23108,18 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             try {
                 GM_openInTab(url, { active: true, insert: true, setParent: true });
                 return;
-            } catch (error) { /* ignore */ }
+            } catch (error) { }
         }
         try {
             const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             if (pageWin && typeof pageWin.open === 'function') {
                 const win = pageWin.open(url, '_blank');
                 if (win) {
-                    try { win.focus(); } catch (error) { /* ignore */ }
+                    try { win.focus(); } catch (error) { }
                     return;
                 }
             }
-        } catch (error) { /* ignore */ }
+        } catch (error) { }
         try {
             const anchor = document.createElement('a');
             anchor.href = url;
@@ -22718,7 +23129,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             (document.body || document.documentElement).appendChild(anchor);
             anchor.click();
             setTimeout(() => anchor.remove(), 1200);
-        } catch (error) { /* ignore */ }
+        } catch (error) { }
     }
 
     function copyText(value) {
@@ -22744,7 +23155,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 navigator.clipboard.writeText(text).then(done, fallback);
                 return;
             }
-        } catch (error) { /* ignore */ }
+        } catch (error) { }
         fallback();
     }
 
@@ -22767,7 +23178,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 const path = event.composedPath();
                 if (path && path.length) node = path[0];
             }
-        } catch (error) {  }
+        } catch (error) { }
         const tag = (node && node.tagName) || '';
         if (/^(?:INPUT|TEXTAREA|SELECT)$/.test(tag) || (node && node.isContentEditable) || event.metaKey || event.ctrlKey || event.altKey) return;
         if (event.key === '/') {
@@ -22778,7 +23189,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             openRandom();
         }
     }
-
 
     function dashboardUrl() {
         return CURRENT_SITE === 'jable'
@@ -22813,7 +23223,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 if (node.pause) node.pause();
                 node.muted = true;
                 node.volume = 0;
-            } catch (error) {  }
+            } catch (error) { }
         };
         for (const node of document.querySelectorAll('video, audio')) stop(node);
         let observer = null;
@@ -22828,7 +23238,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 }
             });
             observer.observe(document.documentElement, { childList: true, subtree: true });
-        } catch (error) {  }
+        } catch (error) { }
         setTimeout(() => {
             if (observer) observer.disconnect();
             for (const node of document.querySelectorAll('video, audio')) stop(node);
@@ -22897,7 +23307,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         try {
             window.close();
-        } catch (error) {  }
+        } catch (error) { }
         setTimeout(() => {
             if (!ui.root) return;
             location.href = CURRENT_SITE === 'jable'
@@ -22905,7 +23315,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 : `${location.origin}${MISSAV_SAVED_PATH}?page=1`;
         }, 260);
     }
-
 
     function download(filename, content, type) {
         const blob = new Blob([content], { type: type || 'application/json;charset=utf-8' });
@@ -22968,8 +23377,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         pushLog(`💾 已导出 JSON：${allItems().length} 部`);
     }
 
-
-
     function boot() {
         if (isDashboardRoute()) {
             mountDashboard();
@@ -22996,8 +23403,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     })();
     try {
         window.__avFavScreen = FavScreen;
-    } catch (error) {  }
-    /* ================= 影片收藏大屏 结束 ================= */
+    } catch (error) { }
 
     registerPanelMenus();
     } catch (error) {
