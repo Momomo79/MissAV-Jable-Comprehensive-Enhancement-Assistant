@@ -11,8 +11,7 @@
 
 移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退。
 
-> **项目地址**：<https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant>
-> **问题反馈**：[Issues](https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/issues)
+
 
 ---
 
