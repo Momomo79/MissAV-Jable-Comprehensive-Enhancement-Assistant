@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      15.08
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      16.00
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
 // @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
@@ -128,6 +128,26 @@
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(avxReflowDrain);
         else setTimeout(avxReflowDrain, 0);
     }
+    function avxMemoWrite(cache, key, value, limit = 2048) {
+        if (cache.size >= limit) cache.clear();
+        cache.set(key, value);
+        return value;
+    }
+    function avxWriteText(node, value) {
+        if (!node) return false;
+        const text = String(value ?? '');
+        if (node.textContent === text) return false;
+        node.textContent = text;
+        return true;
+    }
+    function avxWriteStyle(node, property, value, priority = '') {
+        if (!node || !node.style) return false;
+        const text = String(value ?? '');
+        if (node.style.getPropertyValue(property) === text && node.style.getPropertyPriority(property) === priority) return false;
+        node.style.setProperty(property, text, priority);
+        return true;
+    }
+
     const avxDateTexts = new Map();
     function avxLocaleDate(value) {
         const at = Number(value) || 0;
@@ -542,10 +562,6 @@
     const INFO_CACHE_PREFIX = 'info:v4:';
     const ACTRESS_CACHE_PREFIX = 'actress2:';
     const ACTRESS_FAV_PREFIX = 'actressFav';
-    const ACTRESS_FAV_SITES = [
-        { key: 'missav', label: 'MissAV', savedPath: '/saved/actresses' },
-        { key: 'jable', label: 'Jable', savedPath: '' }
-    ];
     const ACTRESS_VARIANT_PAIRS = '麗|丽,澤|泽,華|华,繪|绘,穗|穗,遙|遥,葉|叶,瀬|濑,瀨|濑,優|优,愛|爱,結|结,織|织,綺|绮,鈴|铃,櫻|樱,桜|樱,綾|绫,實|实,亞|亚,來|来,時|时,東|东,馬|马,鳥|鸟,龍|龙,鳳|凤,岡|冈,島|岛,嶋|岛,嶌|岛,濱|滨,浜|滨,邊|边,貝|贝,廣|广,氣|气,醫|医,戰|战,藝|艺,樂|乐,學|学,國|国,圖|图,團|团,圍|围,園|园,圓|圆,場|场,塊|块,壯|壮,聲|声,處|处,備|备,價|价,億|亿,儀|仪,劍|剑,務|务,動|动,勵|励,勸|劝,區|区,協|协,單|单,賣|卖,衛|卫,參|参,雙|双,髮|发,發|发,變|变,疊|叠,號|号,嘆|叹,嚇|吓,嚴|严,囉|啰,驕|骄,驗|验,驚|惊,體|体,點|点,黨|党,齊|齐,龜|龟,亂|乱,爭|争,於|于,與|与,興|兴,舉|举,舊|旧,艱|艰,蘇|苏,蘭|兰,蟲|虫,蠶|蚕,蠻|蛮,衆|众,債|债,傷|伤,傾|倾,償|偿,僅|仅,傑|杰,兩|两,歲|岁,靜|静,顏|颜,願|愿,頂|顶,順|顺,須|须,項|项,顯|显,風|风,飛|飞,餘|余,飯|饭,餅|饼,駒|驹,驅|驱,鬥|斗,魚|鱼,鮮|鲜,黃|黄,黙|默,嵐|岚,頁|页,亜|亚,悪|恶,圧|压,囲|围,転|转,徳|德,恵|惠,稲|稻,駅|驿,応|应,壊|坏,覚|觉,拡|扩,殻|壳,巻|卷,陥|陷,寛|宽,歓|欢,観|观,関|关,舘|馆,舗|铺,経|经,蛍|萤,軽|轻,撃|击,検|检,剣|剑,険|险,顕|显,験|验,効|效,鉱|矿,済|济,砕|碎,雑|杂,賛|赞,糸|丝,児|儿,歯|齿,釈|释,収|收,渋|涩,獣|兽,縦|纵,従|从,粋|粹,酔|醉,穂|穗,髄|髓,枢|枢,斉|齐,摂|摄,専|专,銭|钱,禅|禅,荘|庄,捜|搜,挿|插,巣|巢,曽|曾,痩|瘦,総|总,聡|聪,蔵|藏,臓|脏,続|续,対|对,帯|带,滝|泷,択|择,弾|弹,遅|迟,鋳|铸,庁|厅,徴|征,聴|听,鉄|铁,転|转,伝|传,闘|斗,読|读,縄|绳,弐|贰,悩|恼,脳|脑,覇|霸,廃|废,抜|拔,飯|饭,仏|佛,辺|边,弁|辩,歩|步,満|满,黙|默,訳|译,薬|药,予|预,揺|摇,様|样,謡|谣,覧|览,竜|龙,両|两,猟|猎,緑|绿,涙|泪,塁|垒,隣|邻,霊|灵,齢|龄,暦|历,歴|历,炉|炉,労|劳,楼|楼,録|录,湾|湾';
 
     let actressVariantCache = null;
@@ -1039,7 +1055,6 @@
     const JD_ACTOR_WORKS_RE = /class=["']section-meta["'][^>]*>\s*([\d,]+)\s*(?:部|本|條|条|个|個)/i;
     const JD_ACTOR_AVATAR_RE = /class=["']avatar["'][^>]*style=["'][^"']*background-image:\s*url\(\s*['"]?([^'")]+)['"]?\s*\)/i;
     const JD_TWITTER_RE = /href=["'](https?:\/\/(?:twitter\.com|x\.com)\/[^"'\s?#]+)["']/i;
-    const JB_ACTOR_PATH_RE = /href=["'](?:https?:\/\/www\.javbus\.com)?(\/star\/[a-zA-Z0-9_-]+)["']/;
     const JB_SEARCH_HIT_RE = /<a[^>]+href=["'](?:https?:\/\/www\.javbus\.com)?(\/star\/[a-zA-Z0-9_-]+)["'][^>]*>[\s\S]{0,240}?<img[^>]+src=["']([^"']+)["'][^>]*title=["']([^"']*)["']/gi;
     const JB_ACTOR_IMG_RE = /<img[^>]+src=["']([^"']*\/pics\/actress\/[^"']+)["'][^>]*title=["']([^"']*)["']/i;
     const JB_ACTOR_LABEL_RE = /<p>\s*(生日|出生|年齡|年龄|身高|罩杯|胸圍|胸围|腰圍|腰围|臀圍|臀围|愛好|爱好)\s*[:：]\s*([^<]*)<\/p>/g;
@@ -1127,8 +1142,17 @@
     const pad2 = value => String(value).padStart(2, '0');
     const formatSeconds = seconds => (seconds >= 60 ? `${seconds / 60}分钟` : `${seconds}秒`);
     const formatSpan = seconds => (seconds >= 60 ? `${seconds / 60}m` : `${seconds}s`);
-    const isEditableTarget = target =>
-        Boolean(target instanceof Element && target.closest('input,textarea,select,[contenteditable="true"]'));
+    const isEditableTarget = event => {
+        if (!event) return false;
+        let node = event.target;
+        try {
+            if (typeof event.composedPath === 'function') {
+                const path = event.composedPath();
+                if (path && path.length) node = path[0];
+            }
+        } catch (error) { /* ignore */ }
+        return Boolean(node instanceof Element && node.closest('input,textarea,select,[contenteditable="true"]'));
+    };
     function throttle(fn, delay) {
         let timer = 0;
         let lastArgs = null;
@@ -4012,6 +4036,7 @@
 
 .avx2, .avx2 *, .avx2 *::before, .avx2 *::after { box-sizing: border-box; }
 .avx2 [hidden], .av-actress-page [hidden], .av-analytics-page [hidden], .custom-control-panel [hidden], .av-panel [hidden] { display: none !important; }
+
 .avx2 {
     --bg: rgba(18, 21, 29, .93);
     --line: rgba(255,255,255,.07);
@@ -5764,6 +5789,21 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const favWrap = avxEl('div', 'avx-btns');
         favWrap.appendChild(favBtn);
         dataPane.appendChild(favWrap);
+        const wallBtn = avxEl('button', 'avx-btn avx-btn--primary avx-btn--block');
+        wallBtn.type = 'button';
+        wallBtn.textContent = '打开影片收藏大屏';
+        wallBtn.title = '在新标签页打开收藏海报墙大屏';
+        wallBtn.addEventListener('click', () => {
+            const screen = window.__avFavScreen;
+            if (!screen || typeof screen.open !== 'function') {
+                log('⚠️ 影片收藏大屏未加载，请刷新页面后重试');
+                return;
+            }
+            screen.open();
+        });
+        const wallWrap = avxEl('div', 'avx-btns');
+        wallWrap.appendChild(wallBtn);
+        dataPane.appendChild(wallWrap);
         const recordRows = ['filterTrackWatched', 'analyticsTrack']
             .map(key => {
                 const source = state.filterChecks[key];
@@ -7153,7 +7193,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         shortcutsBound = true;
         document.addEventListener('keydown', event => {
             if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
-            if (isEditableTarget(event.target)) return;
+            if (isEditableTarget(event)) return;
+            if (window.__avFavScreen && typeof window.__avFavScreen.isOpen === 'function' && window.__avFavScreen.isOpen()) return;
             const video = state.video;
             if (!video) return;
             const { accelerate, forward, backward } = settings.keys;
@@ -7273,10 +7314,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!el || !state.cueIndex?.items.length) return;
         const cue = locateCue(video.currentTime);
         const text = cue ? cue.text : '';
-        if (!force && text === state.activeCueText) return;
+        if (!force && text === state.activeCueText && el.textContent === text) return;
         state.activeCueText = text;
-        el.textContent = text;
-        el.style.display = text ? 'block' : 'none';
+        avxWriteText(el, text);
+        avxWriteStyle(el, 'display', text ? 'block' : 'none');
         if (text) syncSubtitleGeometry(true);
     }
     function applySubtitleOffset(offset) {
@@ -7311,16 +7352,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!videoRect.height) return;
         const hostRect = el.parentElement ? el.parentElement.getBoundingClientRect() : videoRect;
         const fontPx = subtitleFontPx(videoRect);
-        if (el.style.fontSize !== `${fontPx}px`) el.style.fontSize = `${fontPx}px`;
+        avxWriteStyle(el, 'font-size', `${fontPx}px`);
         const pct = clamp(settings.subtitleBottom, SUBTITLE_BOTTOM_MIN, SUBTITLE_BOTTOM_MAX);
         const gap = videoRect.height * pct / 100;
         const height = el.offsetHeight || fontPx * 1.4;
         const top = videoRect.bottom - gap - height - hostRect.top;
         const centerX = videoRect.left + videoRect.width / 2 - hostRect.left;
-        el.style.setProperty('top', `${Math.round(top)}px`, 'important');
-        el.style.setProperty('bottom', 'auto', 'important');
-        el.style.setProperty('left', `${Math.round(centerX)}px`, 'important');
-        el.style.setProperty('transform', 'translateX(-50%)', 'important');
+        avxWriteStyle(el, 'top', `${Math.round(top)}px`, 'important');
+        avxWriteStyle(el, 'bottom', 'auto', 'important');
+        avxWriteStyle(el, 'left', `${Math.round(centerX)}px`, 'important');
+        avxWriteStyle(el, 'transform', 'translateX(-50%)', 'important');
     }
     function ensureSubtitleGeometryWatch() {
         if (state.subtitleGeomBound) return;
@@ -7349,7 +7390,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const el = state.subtitleEl;
         if (!el) return;
         const rect = state.video && state.video.isConnected ? state.video.getBoundingClientRect() : null;
-        el.style.fontSize = `${subtitleFontPx(rect)}px`;
+        avxWriteStyle(el, 'font-size', `${subtitleFontPx(rect)}px`);
         syncSubtitleGeometry(true);
     }
     function applySubtitleText(text, label = '字幕', fileName = '') {
@@ -8412,15 +8453,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             state.audioStateEl.classList.toggle('is-off', boost.level === 'is-off');
             state.audioStateEl.classList.toggle('is-warn', boost.level === 'is-warn');
         }
-    }
-    function setAudioSliderOpen(open) {
-        settings.audioSliderOpen = Boolean(open);
-        store.set(siteAudioKey('SliderOpen'), settings.audioSliderOpen);
-        if (state.audioSliderWrap) state.audioSliderWrap.classList.toggle('av-collapsed', !settings.audioSliderOpen);
-        audioPaintPanel();
-        if (typeof state.layoutPanel === 'function') state.layoutPanel();
-    }
-    async function applyAudioGainFromUI() {
+    }    async function applyAudioGainFromUI() {
         const gain = clamp(Number(settings.audioGain) || 0, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX);
         const result = await audioApplyGain(audioActiveVideo());
         if (result.ok) {
@@ -12176,6 +12209,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const img = document.createElement('img');
             img.src = url;
             img.loading = 'lazy';
+            img.decoding = 'async';
             img.referrerPolicy = 'no-referrer';
             img.alt = `剧照 ${index + 1}`;
             img.addEventListener('error', () => {
@@ -12453,6 +12487,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 const img = document.createElement('img');
                 img.src = movie.cover;
                 img.loading = 'lazy';
+                img.decoding = 'async';
                 img.referrerPolicy = 'no-referrer';
                 img.alt = movie.number;
                 cover.appendChild(img);
@@ -13083,31 +13118,58 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return kernel;
     }
 
-    const sharpWatch = { raf: 0 };
+    const sharpWatch = { raf: 0, timer: 0 };
+    const SHARPNESS_IDLE_INTERVAL = 500;
 
     function stopSharpnessWatch() {
-        if (sharpWatch.raf) {
-            cancelAnimationFrame(sharpWatch.raf);
-            sharpWatch.raf = 0;
-        }
+        if (sharpWatch.raf) cancelAnimationFrame(sharpWatch.raf);
+        if (sharpWatch.timer) clearTimeout(sharpWatch.timer);
+        sharpWatch.raf = 0;
+        sharpWatch.timer = 0;
     }
 
     function startSharpnessWatch() {
-        if (sharpWatch.raf) return;
+        if (sharpWatch.raf || sharpWatch.timer) return;
         let frames = 0;
         let last = performance.now();
         let slow = 0;
+        let wasPlaying = false;
+        const isPlaying = () => Boolean(state.video && !state.video.paused && state.video.readyState >= 2);
+        const schedule = () => {
+            if (isPlaying()) sharpWatch.raf = requestAnimationFrame(step);
+            else {
+                sharpWatch.timer = setTimeout(() => {
+                    sharpWatch.timer = 0;
+                    step(performance.now());
+                }, SHARPNESS_IDLE_INTERVAL);
+            }
+        };
         const step = now => {
+            sharpWatch.raf = 0;
+            const playing = isPlaying();
+            if (!playing) {
+                frames = 0;
+                last = now;
+                slow = 0;
+                wasPlaying = false;
+                schedule();
+                return;
+            }
+            if (!wasPlaying) {
+                frames = 0;
+                last = now;
+                slow = 0;
+                wasPlaying = true;
+            }
             frames += 1;
             if (now - last >= 1000) {
                 const fps = Math.round((frames * 1000) / Math.max(1, now - last));
                 frames = 0;
                 last = now;
-                const playing = state.video && !state.video.paused && state.video.readyState >= 2;
-                if (playing && fps > 0 && fps < SHARPNESS_FPS_FLOOR) slow += 1;
+                if (fps > 0 && fps < SHARPNESS_FPS_FLOOR) slow += 1;
                 else slow = 0;
                 if (slow >= 2) {
-                    sharpWatch.raf = 0;
+                    stopSharpnessWatch();
                     store.set(SHARPNESS_KEY, 'medium');
                     applySharpness();
                     syncSharpnessChips();
@@ -13115,9 +13177,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     return;
                 }
             }
-            sharpWatch.raf = requestAnimationFrame(step);
+            schedule();
         };
-        sharpWatch.raf = requestAnimationFrame(step);
+        schedule();
     }
 
     function applySharpness() {
@@ -13127,13 +13189,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (mode === 'strong') {
             const kernel = ensureSharpnessFilter();
             if (kernel) {
-                kernel.setAttribute('kernelMatrix', sharpnessKernel(SHARPNESS_STRONG_AMOUNT));
-                video.style.filter = `url(#${SHARPNESS_FILTER_ID})`;
+                const matrix = sharpnessKernel(SHARPNESS_STRONG_AMOUNT);
+                if (kernel.getAttribute('kernelMatrix') !== matrix) kernel.setAttribute('kernelMatrix', matrix);
+                avxWriteStyle(video, 'filter', `url(#${SHARPNESS_FILTER_ID})`);
                 startSharpnessWatch();
                 return;
             }
         }
-        video.style.filter = sharpnessCss(mode);
+        avxWriteStyle(video, 'filter', sharpnessCss(mode));
         stopSharpnessWatch();
     }
 
@@ -14576,10 +14639,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (minutes > 0) return `${minutes} 分 ${total % 60} 秒`;
         return `${total} 秒`;
     }
-    function cardCodeFromHref(href) {
-        if (!href) return '';
+    function resolveCardCodeFromHref(href, baseHref) {
         try {
-            const url = new URL(href, location.href);
+            const url = new URL(href, baseHref);
             if (url.origin !== location.origin) return '';
             const segments = url.pathname.split('/').filter(Boolean);
             if (!segments.length) return '';
@@ -14599,6 +14661,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         } catch (error) {
             return '';
         }
+    }
+    const cardCodeHrefCache = new Map();
+    function cardCodeFromHref(href) {
+        if (!href) return '';
+        const baseHref = location.href;
+        const cacheKey = `${baseHref}\n${href}`;
+        const cached = cardCodeHrefCache.get(cacheKey);
+        if (cached !== undefined) return cached;
+        return avxMemoWrite(cardCodeHrefCache, cacheKey, resolveCardCodeFromHref(href, baseHref));
     }
     const cardParseCache = new WeakMap();
     function parseCard(card) {
@@ -15757,6 +15828,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             flushAnalyticsStorage();
         }, ANALYTICS_FLUSH_DELAY);
     }
+    let analyticsSerializedList = null;
+    let analyticsSerializedRev = -1;
+    let analyticsSerializedText = '';
     function flushAnalyticsStorage() {
         if (analyticsFlushTimer) {
             clearTimeout(analyticsFlushTimer);
@@ -15765,11 +15839,18 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const list = state.analyticsRecords;
         if (!Array.isArray(list)) return;
         let text = '';
-        try {
-            text = JSON.stringify(list);
-        } catch (error) {
-            debugLog(error, 'analytics-encode');
-            return;
+        if (list === analyticsSerializedList && analyticsRev === analyticsSerializedRev) {
+            text = analyticsSerializedText;
+        } else {
+            try {
+                text = JSON.stringify(list);
+                analyticsSerializedList = list;
+                analyticsSerializedRev = analyticsRev;
+                analyticsSerializedText = text;
+            } catch (error) {
+                debugLog(error, 'analytics-encode');
+                return;
+            }
         }
         historyStorageSet(ANALYTICS_KEY, text);
     }
@@ -15827,12 +15908,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (scope && scope.contains(anchor)) return false;
         return !!anchor.closest(META_SKIP_SELECTOR);
     }
-    function metaAnchors(selector, limit) {
-        const root = metaRoot();
+    function metaAnchors(selector, limit, root) {
+        const scope = root === undefined ? metaRoot() : root;
         const collect = list => {
             const found = [];
             for (const anchor of list) {
-                if (metaSkipped(anchor, root)) continue;
+                if (metaSkipped(anchor, scope)) continue;
                 found.push(anchor);
                 if (found.length >= limit) break;
             }
@@ -15944,20 +16025,20 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
         }
         const genres = new Set();
-        for (const anchor of metaAnchors(META_GENRE_SELECTOR, 40)) {
+        for (const anchor of metaAnchors(META_GENRE_SELECTOR, 40, metaScope)) {
             const text = metaText(anchor);
             if (text && !text.includes('http') && !/^(?:ranking|saved|collection|list|search)$/i.test(text)) genres.add(text);
         }
         meta.genres = [...genres];
         const actresses = new Set();
-        for (const anchor of metaAnchors(META_ACTRESS_SELECTOR, 30)) {
+        for (const anchor of metaAnchors(META_ACTRESS_SELECTOR, 30, metaScope)) {
             const text = metaText(anchor);
             const slug = ((anchor.getAttribute('href') || '').split('/').filter(Boolean).pop() || '').toLowerCase();
             if (text && !META_BLOCKED_SLUGS.has(slug)) actresses.add(text);
         }
         meta.actresses = [...actresses];
         if (!meta.maker) {
-            const makerAnchor = metaAnchors(META_MAKER_SELECTOR, 1)[0];
+            const makerAnchor = metaAnchors(META_MAKER_SELECTOR, 1, metaScope)[0];
             if (makerAnchor) meta.maker = metaText(makerAnchor);
         }
         const video = state.video;
@@ -17137,9 +17218,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 const rr = rail.getBoundingClientRect();
                 const cr = layerTarget.getBoundingClientRect();
                 if (!rr.width) return;
-                host.style.left = `${rr.left - cr.left}px`;
-                host.style.width = `${rr.width}px`;
-                host.style.top = `${rr.top - cr.top + (rr.height - 14) / 2}px`;
+                avxWriteStyle(host, 'left', `${rr.left - cr.left}px`);
+                avxWriteStyle(host, 'width', `${rr.width}px`);
+                avxWriteStyle(host, 'top', `${rr.top - cr.top + (rr.height - 14) / 2}px`);
             };
             let ticksBox = null;
             let syncFrame = 0;
@@ -17332,12 +17413,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 const seek = seekOf(frame);
                 if (img.getAttribute('src') !== frame.src) img.setAttribute('src', frame.src);
                 const remain = Math.max(0, (video.duration || 0) - seek);
-                label.textContent = `${formatDuration(Math.round(seek))} · 剩 ${formatDuration(remain)}`;
+                avxWriteText(label, `${formatDuration(Math.round(seek))} · 剩 ${formatDuration(remain)}`);
                 const frameRatio = tickRatioOf.has(frame.t) ? tickRatioOf.get(frame.t) : ratioOf(frame);
                 const spanWidth = host.getBoundingClientRect().width || 0;
                 const tipWidth = tip.offsetWidth || 236;
                 const edge = spanWidth > 0 ? Math.min(0.44, (tipWidth / 2 + 6) / spanWidth) : 0.08;
-                tip.style.left = `${(clamp(frameRatio, edge, 1 - edge) * 100).toFixed(2)}%`;
+                avxWriteStyle(tip, 'left', `${(clamp(frameRatio, edge, 1 - edge) * 100).toFixed(2)}%`);
                 mutePreview(true);
                 host.classList.add('is-on');
                 if (hideTimer) clearTimeout(hideTimer);
@@ -19036,6 +19117,3888 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         clearTimeout(state.holdTimer);
         disposePageLifecycle();
     }, { once: true });
+    /* ================= 影片收藏大屏（由独立脚本 v3.1.1 合并） ================= */
+    const FavScreen = (function () {
+        'use strict';
+
+    const HOST = location.hostname;
+    const IS_JABLE = /(^|\.)jable\.tv$/i.test(HOST);
+    const CURRENT_SITE = IS_JABLE ? 'jable' : 'missav';
+
+    const JABLE_FAVORITES_PATH = '/my/favourites/videos/';
+    const MISSAV_SAVED_PATH = '/saved';
+
+    const SITE_INFO = {
+        missav: { label: 'MissAV', color: '#8fb2ff' },
+        jable: { label: 'Jable', color: '#34d399' }
+    };
+
+    const STORE_PREFIX = 'favScreen::v2::';
+    const LEGACY_STORE_KEY = 'favScreen::v1';
+    const MAX_ITEMS = 8000;
+    const MAX_LOG_LINES = 240;
+    const ENRICH_TTL = 7 * 24 * 3600 * 1000;
+    const ENRICH_VERSION = 10;
+
+
+    const GM = {
+        get(key, fallback) {
+            try {
+                if (typeof GM_getValue === 'function') {
+                    const value = GM_getValue(key, null);
+                    if (value !== null && value !== undefined) return value;
+                }
+            } catch (error) {  }
+            try {
+                const raw = localStorage.getItem(key);
+                return raw ? JSON.parse(raw) : fallback;
+            } catch (error) {
+                return fallback;
+            }
+        },
+        set(key, value) {
+            try {
+                if (typeof GM_setValue === 'function') {
+                    GM_setValue(key, value);
+                    return true;
+                }
+            } catch (error) {  }
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+                return true;
+            } catch (error) {
+                return false;
+            }
+        }
+    };
+
+    function emptyState() {
+        return {
+            version: 2,
+            site: CURRENT_SITE,
+            items: {},
+            enriched: {},
+            meta: {},
+            syncs: [],
+            settings: { enrichLimit: 60, sort: 'rank' }
+        };
+    }
+
+    function storeKey(site) {
+        return `${STORE_PREFIX}${site}`;
+    }
+
+    function settingsKey(site) {
+        return `${STORE_PREFIX}${site}::settings`;
+    }
+
+    function enrichedKey(site) {
+        return `${STORE_PREFIX}${site}::enriched`;
+    }
+
+    function persistEnriched() {
+        GM.set(enrichedKey(state.site || CURRENT_SITE), state.enriched);
+    }
+
+    function persistSettings() {
+        GM.set(settingsKey(state.site || CURRENT_SITE), state.settings);
+    }
+
+    function commitData() {
+        bumpData();
+        persist(true);
+        refreshAll();
+    }
+
+    function migrateLegacy(site) {
+        let legacy = null;
+        try {
+            legacy = GM.get(LEGACY_STORE_KEY, null);
+        } catch (error) {
+            return null;
+        }
+        if (!legacy || !legacy.items || typeof legacy.items !== 'object') return null;
+        const items = {};
+        for (const [id, item] of Object.entries(legacy.items)) {
+            if (item && item.site === site) items[id] = item;
+        }
+        if (!Object.keys(items).length) return null;
+        return {
+            version: 2,
+            site,
+            items,
+            enriched: legacy.enriched || {},
+            meta: { [site]: (legacy.meta && legacy.meta[site]) || { lastSync: 0, pages: 0 } },
+            syncs: Array.isArray(legacy.syncs) ? legacy.syncs : [],
+            settings: legacy.settings || {}
+        };
+    }
+
+    function loadState(site) {
+        const base = emptyState();
+        let saved = null;
+        try {
+            saved = GM.get(storeKey(site), null);
+        } catch (error) {
+            saved = null;
+        }
+        if (!saved) saved = migrateLegacy(site);
+        if (!saved || typeof saved !== 'object') return base;
+        const merged = Object.assign(base, saved);
+        merged.site = site;
+        merged.items = saved.items && typeof saved.items === 'object' ? saved.items : {};
+        merged.enriched = saved.enriched && typeof saved.enriched === 'object' ? saved.enriched : {};
+        try {
+            const enrichedBlob = GM.get(enrichedKey(site), null);
+            if (enrichedBlob && typeof enrichedBlob === 'object') merged.enriched = enrichedBlob;
+        } catch (error) { /* ignore */ }
+        merged.meta = Object.assign({}, saved.meta || {});
+        let savedSettings = null;
+        try {
+            savedSettings = GM.get(settingsKey(site), null);
+        } catch (error) {
+            savedSettings = null;
+        }
+        merged.settings = Object.assign(base.settings, saved.settings || {}, savedSettings || {});
+        merged.syncs = Array.isArray(saved.syncs) ? saved.syncs.slice(-60) : [];
+        return merged;
+    }
+
+    const PROGRESS_LABELS = {
+        unseen: '未观看',
+        watching: '观看中',
+        done: '已看完'
+    };
+
+    const MISSING_LABELS = {
+        actress: '无女优',
+        genre: '无题材',
+        cover: '无封面',
+        duration: '无时长',
+        code: '无番号',
+        pending: '待补全'
+    };
+
+    const state = loadState(CURRENT_SITE);
+
+    let runStats = null;
+
+    let dataRev = 0;
+    let itemsCache = null;
+    let itemsRev = -1;
+    let viewsCache = null;
+    let viewsRev = -1;
+    let viewsPlaybackAt = -1;
+
+    function bumpData() {
+        dataRev++;
+    }
+
+    function allItems() {
+        if (itemsRev !== dataRev) {
+            itemsCache = Object.values(state.items);
+            itemsRev = dataRev;
+        }
+        return itemsCache;
+    }
+
+    let persistTimer = 0;
+    function persist(immediate) {
+        if (persistTimer) {
+            clearTimeout(persistTimer);
+            persistTimer = 0;
+        }
+        const write = () => {
+            const keys = Object.keys(state.items);
+            if (keys.length > MAX_ITEMS) {
+                keys.sort((a, b) => (state.items[a].firstSeen || 0) - (state.items[b].firstSeen || 0));
+                for (const key of keys.slice(0, keys.length - MAX_ITEMS)) delete state.items[key];
+            }
+            const site = state.site || CURRENT_SITE;
+            const ok = GM.set(storeKey(site), state);
+            GM.set(enrichedKey(site), state.enriched);
+            if (!ok && ui.log) pushLog('⚠️ 本地存储写入失败（可能超出配额），本次数据可能不会保存');
+        };
+        if (immediate) write();
+        else persistTimer = setTimeout(write, 600);
+    }
+
+
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = String(text);
+        return node;
+    }
+
+    function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+    }
+
+    function formatNumber(value, decimals) {
+        const digits = decimals || 0;
+        const num = Number(value) || 0;
+        return num.toFixed(digits).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    function formatTime(ts) {
+        if (!ts) return '尚未同步';
+        const date = new Date(ts);
+        const pad = num => String(num).padStart(2, '0');
+        return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function durationToMinutes(raw) {
+        const text = String(raw || '').trim();
+        if (!text) return 0;
+        const parts = text.split(':').map(Number);
+        if (parts.some(num => Number.isNaN(num))) return 0;
+        if (parts.length === 3) return parts[0] * 60 + parts[1] + parts[2] / 60;
+        if (parts.length === 2) return parts[0] + parts[1] / 60;
+        return 0;
+    }
+
+    async function mapPool(list, size, worker) {
+        const queue = list.slice();
+        const runners = [];
+        const count = Math.max(1, Math.min(size || 1, queue.length || 1));
+        for (let i = 0; i < count; i++) {
+            runners.push((async () => {
+                while (queue.length) {
+                    const item = queue.shift();
+                    try {
+                        await worker(item);
+                    } catch (error) {  }
+                }
+            })());
+        }
+        await Promise.all(runners);
+    }
+
+    function icon(paths, viewBox) {
+        const span = el('span', 'fs-ico');
+        span.innerHTML = `<svg viewBox="${viewBox || '0 0 24 24'}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+        return span;
+    }
+
+    function applyShadowCss(root, css) {
+        try {
+            if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in root) {
+                const sheet = new CSSStyleSheet();
+                if (typeof sheet.replaceSync === 'function') {
+                    sheet.replaceSync(css);
+                    root.adoptedStyleSheets = [sheet];
+                    return;
+                }
+            }
+        } catch (error) {  }
+        const style = document.createElement('style');
+        style.textContent = css;
+        root.appendChild(style);
+    }
+
+    const ICONS = {
+        network: '<circle cx="6.2" cy="6.4" r="2.4"/><circle cx="17.8" cy="7.4" r="2.4"/><circle cx="12" cy="17.4" r="2.4"/><path d="M8.4 7.3l2.3 7.4M15.8 9.3l-2.6 5.6M8.6 6.2h6.8"/>',
+        logo: '<rect x="2.8" y="4.8" width="18.4" height="14.4" rx="3.2"/><path d="M10.3 9.3l4.7 2.7-4.7 2.7z" fill="currentColor" stroke="none"/>',
+        sync: '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/>',
+        spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><path d="m6.3 6.3 2.8 2.8M14.9 14.9l2.8 2.8M17.7 6.3l-2.8 2.8M9.1 14.9l-2.8 2.8"/>',
+        download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+        close: '<path d="M18 6 6 18M6 6l12 12"/>',
+        film: '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3z"/>',
+        user: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
+        tag: '<path d="M20.6 13.4 12 22l-9-9V3h10z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+        clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+        layers: '<path d="m12 2 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+        search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+        grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+        external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/>',
+        stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+        list: '<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4.5" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.3" fill="currentColor" stroke="none"/>',
+        settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+        copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+        dice: '<rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
+        trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>',
+        chart: '<path d="M3 3v18h18"/><path d="M7 15l3.5-4 3 3L20 7"/>'
+    };
+
+
+    const IMG_ATTRS = ['data-src', 'data-original', 'data-lazy', 'data-lazy-src', 'data-webp', 'data-cover', 'data-thumb', 'src'];
+
+    const JUNK_SEGMENTS = new Set((
+        'saved savedlist favorites favourites favourited my account profile login signin signup register search ' +
+        'actress actresses actor actors model models star stars idol idols genre genres category categories tag tags ' +
+        'maker makers label labels studio studios company companies series videos video playlists playlist ranking ' +
+        'rankings rank popular trending new latest release releases new-release recent uncensored censored amateur ' +
+        'western china chinese english japanese korean contact about about-us dmca terms privacy policy help faq ' +
+        'premium vip monthly best top all list index page pages hd sd uhd fhd 4k 60fps vr ' +
+        'news notice announcement blog article guide tutorial about-us contact-us faq policy terms ' +
+        'zh-cn zh-tw simplify traditional'
+    ).split(/\s+/).filter(Boolean));
+
+    const JUNK_TITLE_RE = /^(?:最近更新|最新更新|聯絡我們|联系我们|關於我們|关于我们|首頁|首页|主頁|主页|登入|登录|註冊|注册|收藏|我的收藏|我的最愛|帳號|账号|服務條款|服务条款|隱私政策|隐私政策|DMCA|説明|帮助|幫助|回報|回报|意見|意见|下一頁|下一页|上一頁|上一页|next|prev|previous|more|詳情|详情|新聞|新闻|公告|通知|排行榜|指南|教程|客服|广告|廣告|繁體中文|繁体中文|簡體中文|简体中文|中文|日本語|日语|日本|English|한국어|語言|语言|語言切換|语言切换)$/i;
+    const CODE_BLOCK_PREFIX = new Set((
+        'HD SD FHD UHD 4K MP4 AVI WMV MKV MOV THE NEW FULL PART VOL CD DVD EP NO ID TV WEB DL XXX JAV AV PV SP EX ' +
+        'VER V2 V3 V4 UHD VIP APP PC MOB IOS AND HTTP HTTPS WWW COM NET ORG HTML PHP JS CSS'
+    ).split(/\s+/).filter(Boolean));
+    const DATE_TEXT_RE = /^(?:\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}\s*(?:分钟|分鐘|小时|小時|天|日|週|周|个月|個月|月|年)前|\d{1,2}:\d{2}(?::\d{2})?|\d{4}年\d{1,2}月(?:\d{1,2}日)?)(?:\s*\d{1,2}:\d{2}(?::\d{2})?)?$/;
+    const MONTH_YEAR_RE = /(?:\b(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b[\s.,/-]*\d{2,4}\b|\b20\d{2}\b)/i;
+
+    function absUrl(raw, base) {
+        if (!raw) return '';
+        try {
+            return new URL(String(raw), base || location.origin).href;
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function decodeSafe(text) {
+        try {
+            return decodeURIComponent(text);
+        } catch (error) {
+            return text;
+        }
+    }
+
+    function pathSegments(url) {
+        return url.pathname.split('/').filter(Boolean).map(decodeSafe);
+    }
+
+    function stripLangPrefix(segments) {
+        let index = 0;
+        while (index < segments.length && (/^dm\d+$/i.test(segments[index]) || /^(?:en|zh|cn|ja|ko|tw|us|gb)$/i.test(segments[index]))) index++;
+        return segments.slice(index);
+    }
+
+    function isVideoPath(url, site) {
+        const segments = pathSegments(url);
+        if (!segments.length) return false;
+        if (site === 'jable') {
+            const index = segments.findIndex(segment => segment.toLowerCase() === 'videos');
+            if (index < 0) return false;
+            const rest = segments.slice(index + 1);
+            if (!rest.length) return false;
+            if (rest.length === 1 && JUNK_SEGMENTS.has(rest[0].toLowerCase())) return false;
+            return true;
+        }
+        const rest = stripLangPrefix(segments);
+        if (rest.length !== 1) return false;
+        const slug = rest[0].toLowerCase();
+        if (!slug || JUNK_SEGMENTS.has(slug)) return false;
+        if (/^(?:zh|en|ja|ko|cn|tw|pt|es)[-_](?:tw|cn|hk|us|gb|hans|hant|sg)$/i.test(slug)) return false;
+        if (/^(?:naughty|news|notice|announcement|blog|guide|tutorial|special)\b/i.test(slug)) return false;
+        if (/^(?:page|search|saved|actress|genre|maker|label|series|release|dmca|contact)$/.test(slug)) return false;
+        if (slug.length < 2) return false;
+        return true;
+    }
+
+    function pickCode(text) {
+        const source = String(text || '');
+        if (!source) return '';
+        const fc2 = /fc2[-\s_]?(?:ppv[-\s_]?)?(\d{5,7})/i.exec(source);
+        if (fc2) return `FC2-PPV-${fc2[1]}`;
+        const re = /([A-Za-z]{2,10})[-\s_]?(\d{2,5})(?!\d)/g;
+        let match;
+        while ((match = re.exec(source))) {
+            const prefix = match[1].toUpperCase();
+            const num = match[2];
+            if (CODE_BLOCK_PREFIX.has(prefix)) continue;
+            if (num.length < 2) continue;
+            if (/^(?:19|20)\d{2}$/.test(num)) continue;
+            const start = match.index;
+            const before = start > 0 ? source[start - 1] : '';
+            if (before && /[A-Za-z0-9]/.test(before)) continue;
+            return `${prefix}-${num}`;
+        }
+        return '';
+    }
+
+    function extractCode(href, title) {
+        let slug = '';
+        try {
+            const url = new URL(href, location.origin);
+            const parts = url.pathname.split('/').filter(Boolean);
+            slug = decodeSafe(parts[parts.length - 1] || '');
+        } catch (error) {
+            slug = '';
+        }
+        const fromSlug = pickCode(slug);
+        if (fromSlug) return fromSlug;
+        return pickCode(title);
+    }
+
+    function cleanTitle(raw, code) {
+        let text = String(raw || '').replace(/\s+/g, ' ').trim();
+        if (!text) return '';
+        text = text.replace(/\s*[-|｜–—]+\s*(?:Jable\.?TV|Jable|MissAV|线上看|線上看|在线看|免費.*|免费.*|高清.*)\s*$/i, '').trim();
+        text = text.replace(/(?:^|\s)(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{4}年\d{1,2}月\d{1,2}日)(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
+        text = text.replace(/\b(?:HD|SD|FHD|4K|UHD|中文字幕|中文字幕|無碼|无码|高清)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+        if (code) {
+            const head = String(code).toUpperCase();
+            if (text.toUpperCase().startsWith(head)) text = text.slice(head.length).replace(/^[\s\-_|:：]+/, '').trim();
+            const loose = head.replace('-', '[-_\\s]?');
+            text = text.replace(new RegExp(`^${loose}\\s*`, 'i'), '').trim();
+        }
+        if (!text || DATE_TEXT_RE.test(text) || JUNK_TITLE_RE.test(text)) return '';
+        return text;
+    }
+
+    const CARD_BOX_SELECTOR = 'article, li, .col-6, .col-4, .col-3, .col-12, .col-sm-4, .col-lg-3, div[class*="aspect-w-16"], .video-img-box, .thumbnail, .video-card, .grid > div, .video-list > div, .item';
+
+    function imageUrl(img, base) {
+        if (!img) return '';
+        let raw = '';
+        for (const attr of IMG_ATTRS) {
+            const value = img.getAttribute && img.getAttribute(attr);
+            if (value) {
+                raw = value;
+                break;
+            }
+        }
+        if (!raw) {
+            const set = String((img.getAttribute && (img.getAttribute('srcset') || img.getAttribute('data-srcset'))) || '').split(',')[0] || '';
+            raw = set.trim().split(/\s+/)[0] || '';
+        }
+        const url = absUrl(raw, base);
+        if (!url || /^(?:data|blob|about|javascript):/i.test(url)) return '';
+        if (/(?:now_printing|blank\.|placeholder|loading\.|spacer\.|pixel\.|1x1\.|lazy\.)/i.test(url)) return '';
+        return url;
+    }
+
+    function listScope(doc, site) {
+        if (!doc) return null;
+        const marked = doc.querySelector('#list_videos_my_favourite_videos, .list_videos_my_favourite_videos');
+        if (marked) return marked;
+        const main = doc.querySelector('main, #main, .main, .container, .site-main, #content');
+        if (main) return main;
+        return doc.body || doc.documentElement;
+    }
+
+    function collectCards(doc, site, baseUrl) {
+        if (!doc || !doc.querySelectorAll) return [];
+        const scope = listScope(doc, site) || doc;
+        const out = [];
+        const seen = new Set();
+        const anchors = scope.querySelectorAll('a[href]');
+        for (const anchor of anchors) {
+            const raw = anchor.getAttribute('href') || '';
+            if (!raw || /^(?:#|javascript:|mailto:|tel:)/i.test(raw)) continue;
+            const url = absUrl(raw, baseUrl || location.origin);
+            if (!url) continue;
+            let parsed;
+            try {
+                parsed = new URL(url);
+            } catch (error) {
+                continue;
+            }
+            if (!isVideoPath(parsed, site)) continue;
+            const href = `${parsed.origin}${parsed.pathname}`;
+            if (seen.has(href)) continue;
+
+            const box = (anchor.closest && anchor.closest(CARD_BOX_SELECTOR)) || anchor.parentElement || anchor;
+            const img = anchor.querySelector('img') || (box && box.querySelector ? box.querySelector('img') : null);
+            const heading = box && box.querySelector ? box.querySelector('h6, h5, h4, h3, .title, .video-title, .detail h6, p.title') : null;
+            let title = (img && img.getAttribute('alt')) || anchor.getAttribute('title') || (heading && heading.textContent) || anchor.textContent || '';
+            title = String(title).replace(/\s+/g, ' ').trim();
+            const code = extractCode(href, title);
+            let name = cleanTitle(title, code);
+            if (!name) name = cleanTitle(title, '');
+            if (!name && !code) continue;
+
+            const cover = imageUrl(img, baseUrl || parsed.origin);
+            if (!cover && !code) continue;
+
+            let duration = '';
+            const boxText = box && box.textContent ? box.textContent : '';
+            const durMatch = boxText.match(/\b\d{1,2}:\d{2}(?::\d{2})?\b/);
+            if (durMatch) duration = durMatch[0];
+
+            if (JUNK_TITLE_RE.test(name)) continue;
+            if (!code && !duration && (name || '').length <= 8) continue;
+            if (!duration && (name || '').length <= 24 && /^(?:繁體中文|繁体中文|簡體中文|简体中文|日本語|한국어|語言|语言)/.test(name || '')) continue;
+
+            seen.add(href);
+            out.push({
+                href,
+                path: parsed.pathname,
+                code,
+                title: name || code,
+                cover,
+                duration
+            });
+        }
+
+        const withDuration = out.filter(item => item.duration).length;
+        const durationReliable = out.length >= 6 && withDuration / out.length >= 0.6;
+        const withCover = out.filter(item => item.cover).length;
+        const coverReliable = out.length >= 6 && withCover / out.length >= 0.6;
+        return out.filter(item => {
+            if (JUNK_TITLE_RE.test(item.title)) return false;
+            if (coverReliable && durationReliable && !item.cover && !item.duration) return false;
+            if (/\/logo|placeholder|noimage|no-image|\/default\./i.test(item.cover)) return false;
+            if (durationReliable && !item.duration && /(?:AV\s*)?[線线]上看\s*$/i.test(item.title)) return false;
+            return true;
+        });
+    }
+
+    function detectMaxPage(doc) {
+        if (!doc) return 0;
+        let max = 0;
+        for (const anchor of doc.querySelectorAll('a[href*="page="], a[href*="/page/"]')) {
+            const href = anchor.getAttribute('href') || '';
+            const match = /[?&]page=(\d+)/i.exec(href) || /\/page\/(\d+)\/?/i.exec(href);
+            if (match) max = Math.max(max, Number.parseInt(match[1], 10) || 0);
+        }
+        if (!max) {
+            for (const anchor of doc.querySelectorAll('.pagination a, .pager a, nav a')) {
+                const text = (anchor.textContent || '').replace(/\s+/g, '');
+                if (/^\d{1,3}$/.test(text)) max = Math.max(max, Number.parseInt(text, 10) || 0);
+            }
+        }
+        return max;
+    }
+
+    function pagerNumber(node) {
+        if (!node) return 0;
+        const text = (node.textContent || '').replace(/\s+/g, '').replace(/^0+(?=\d)/, '');
+        return /^\d{1,3}$/.test(text) ? Number(text) : 0;
+    }
+
+    function findNextLink(doc, expectedPage) {
+        if (!doc) return null;
+        const labelOf = node => `${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''} ${(node.textContent || '').replace(/\s+/g, '')}`.trim();
+        const usable = node => Boolean(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
+        const isLast = node => /(?:最後|最后|末頁|末页|尾頁|尾页|last)/i.test(labelOf(node));
+        const isFirst = node => /(?:最前|首頁|首页|第一頁|第一页|first)/i.test(labelOf(node));
+        const isPrev = node => /(?:prev|previous|上一頁|上一页|前へ|‹|«)/i.test(labelOf(node));
+        const isNextWord = node => {
+            if (isPrev(node) || isLast(node) || isFirst(node)) return false;
+            return /(?:next|下一頁|下一页|次へ|次页|下一张|下一張|›|»|→)/i.test(labelOf(node));
+        };
+
+        const pools = [];
+        const push = nodes => {
+            for (const node of nodes) if (node && !pools.includes(node)) pools.push(node);
+        };
+        for (const scope of ['.pagination', '.pager', '.page-nav', '.paging', '[class*="pagination"]', '[class*="pager"]', 'nav']) {
+            try {
+                push(Array.from(doc.querySelectorAll(`${scope} a, ${scope} button`)));
+            } catch (error) {  }
+        }
+        push(Array.from(doc.querySelectorAll('a[rel="next"]')));
+
+        const extras = [];
+        for (const scope of ['.pagination', '.pager', '.page-nav', '[class*="pagination"]', '[class*="pager"]']) {
+            try {
+                for (const node of doc.querySelectorAll(`${scope} li, ${scope} span`)) {
+                    if (!pools.includes(node) && !extras.includes(node)) extras.push(node);
+                }
+            } catch (error) {  }
+        }
+        const pickNumber = (list, wanted) => list.find(node => usable(node) && !isLast(node) && !isFirst(node) && pagerNumber(node) === wanted);
+
+        const wanted = Number(expectedPage) || 0;
+        if (wanted > 0) {
+            const hit = pickNumber(pools, wanted) || pickNumber(extras, wanted);
+            if (hit) return hit;
+        }
+
+        const active = doc.querySelector('.pagination .active, .pagination .current, .pagination .is-active, .page-item.active, .pager .active, [aria-current="page"]');
+        const current = pagerNumber(active);
+        if (current > 0) {
+            const hit = pools.find(node => usable(node) && !isLast(node) && pagerNumber(node) === current + 1);
+            if (hit) return hit;
+        }
+
+        const relNext = pools.find(node => usable(node) && /(?:^|\s)next(?:\s|$)/i.test(String(node.getAttribute('rel') || '')) && !isLast(node));
+        if (relNext) return relNext;
+        const wordHit = pools.find(node => usable(node) && isNextWord(node));
+        if (wordHit) return wordHit;
+
+        const loadMore = Array.from(doc.querySelectorAll('button, a')).find(node => {
+            if (!usable(node)) return false;
+            const text = (node.textContent || '').replace(/\s+/g, '');
+            return /^(?:加载更多|載入更多|查看更多|更多影片|loadmore|more)$/i.test(text);
+        });
+        return loadMore || null;
+    }
+
+    function humanClick(node) {
+        if (!node) return false;
+        try {
+            if (node.scrollIntoView) node.scrollIntoView({ block: 'center', inline: 'nearest' });
+        } catch (error) {  }
+        try {
+            node.click();
+            return true;
+        } catch (error) {  }
+        try {
+            const doc = node.ownerDocument;
+            const win = doc && (doc.defaultView || doc.parentWindow);
+            if (!win) return false;
+            for (const type of ['pointerover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                const Ctor = (type.indexOf('pointer') === 0 && win.PointerEvent) ? win.PointerEvent : win.MouseEvent;
+                if (!Ctor) continue;
+                node.dispatchEvent(new Ctor(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: win,
+                    button: 0,
+                    buttons: (type === 'pointerdown' || type === 'mousedown') ? 1 : 0
+                }));
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    const META_LABEL_ACTRESS = /^(?:Actress|Actors?|Cast|主演|演員|演员|女優|女优|モデル|出演者|出演|女優名)$/i;
+    const META_LABEL_GENRE = /^(?:Genre|Tag|Tags|類別|类别|類型|类型|主題|主题|標籤|标签|ジャンル|分類|分类)$/i;
+    const META_LABEL_MAKER = /^(?:Maker|Studio|Label|Company|メーカー|メーカ|スタジオ|片商|廠商|厂商|制作|製作|發行商|发行商)$/i;
+
+    function entitySlug(href, base) {
+        try {
+            const path = new URL(href, base || location.origin).pathname;
+            const match = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:actresses?|actors?|models?|stars?|idols?|genres?|categories|category|tags?|makers?|companies|studios?|labels?)\/([^/]+)\/?$/i.exec(path);
+            if (!match) return '';
+            const slug = decodeSafe(match[1]);
+            return /^\d+$/.test(slug) ? '' : slug;
+        } catch (error) {
+            return '';
+        }
+    }
+
+
+    const META_BLOCKED_ZONE = 'nav, header, footer, aside, .sidebar, .pagination, .breadcrumb, .navbar, .menu, .footer, .header';
+    const STOP_LABEL_RE = /^(?:女優|女优|演員|演员|類型|类型|類別|类别|標籤|标签|主題|主题|片商|發行商|发行商|番號|番号|日期|時長|时长|導演|导演|系列|廠商|厂商|發售|发售|商品|日本發售|日本发售)$/;
+
+    const META_LABEL_WORDS = /^(?:女優|女优|演員|演员|類型|类型|類別|类别|標籤|标签|主題|主题|片商|發行商|发行商|番號|番号|番号名|日期|時長|时长|導演|导演|系列|廠商|厂商|發售|发售|女優名|メーカー|ジャンル|ジャンル名|出演者)$/;
+
+    function validEntity(text) {
+        const value = String(text || '').replace(/\s+/g, ' ').trim().replace(/[:：]$/, '');
+        if (!value || value.length < 2 || value.length > 40) return '';
+        if (META_LABEL_WORDS.test(value)) return '';
+        if (/^按/.test(value)) return '';
+        if (/^(?:更多|全部|查看全部|more|all|see all|下一頁|下一页|上一頁|上一页)$/i.test(value)) return '';
+        if (MONTH_YEAR_RE.test(value) && value.length < 16) return '';
+        if (/[<>]/.test(value)) return '';
+        return value;
+    }
+
+    function linkKind(href, base) {
+        try {
+            const segments = new URL(href, base || location.origin).pathname.split('/').filter(Boolean);
+            if (segments.length < 2) return '';
+            const kind = segments[segments.length - 2].toLowerCase();
+            if (/^(?:actress|actresses|actor|actors|model|models|star|stars|idol|idols)$/.test(kind)) return 'actress';
+            if (/^(?:genre|genres|category|categories|tag|tags|theme|themes)$/.test(kind)) return 'genre';
+            if (/^(?:maker|makers|label|labels|studio|studios|company|companies)$/.test(kind)) return 'maker';
+            return '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function entityNameFrom(anchor) {
+        if (!anchor) return '';
+        const direct = String(anchor.textContent || '').replace(/\s+/g, ' ').trim();
+        if (direct.length >= 2) {
+            const value = validEntity(direct);
+            if (value) return value;
+        }
+        const nodes = [anchor].concat(Array.from(anchor.querySelectorAll ? anchor.querySelectorAll('[data-original-title], [title], img[alt]') : []));
+        for (const node of nodes) {
+            if (!node.getAttribute) continue;
+            const raw = node.getAttribute('data-original-title') || node.getAttribute('title') || node.getAttribute('alt') || '';
+            const value = validEntity(raw);
+            if (value) return value;
+        }
+        return '';
+    }
+
+    function rowValues(el) {
+        const out = [];
+        if (!el) return out;
+        const anchors = el.querySelectorAll ? el.querySelectorAll('a') : [];
+        if (anchors.length) {
+            for (const anchor of anchors) {
+                const value = entityNameFrom(anchor);
+                if (value && !out.includes(value)) out.push(value);
+            }
+            return out;
+        }
+        const text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        for (const part of text.split(/[,、/|]+/)) {
+            const value = validEntity(part);
+            if (value && !out.includes(value)) out.push(value);
+        }
+        return out;
+    }
+
+    function parseDetail(doc, baseUrl) {
+        const empty = { title: '', code: '', actress: [], genre: [], maker: '', cover: '', duration: '' };
+        if (!doc) return empty;
+        const result = Object.assign({}, empty);
+
+        const ogValues = prop => {
+            const list = [];
+            for (const meta of doc.querySelectorAll(`meta[property="${prop}"]`)) {
+                const value = validEntity(meta.getAttribute('content'));
+                if (value && !list.includes(value)) list.push(value);
+            }
+            return list;
+        };
+        const ogActors = ogValues('og:video:actor');
+        if (ogActors.length) result.actress = ogActors.slice(0, 30);
+        const ogTags = ogValues('og:video:tag');
+        if (ogTags.length) result.genre = ogTags.slice(0, 30);
+
+        const INFO_ZONE = '.video-info, #video-info, .video-detail, .movie-panel-info, .info';
+        const pools = { actress: [], genre: [], maker: [] };
+        for (const node of doc.querySelectorAll('span, div, dt, th, strong, b, p, li, td')) {
+            const label = String(node.textContent || '').replace(/\s+/g, ' ').trim().replace(/[:：]\s*$/, '');
+            if (!label || label.length > 12) continue;
+            let kind = '';
+            if (META_LABEL_ACTRESS.test(label)) kind = 'actress';
+            else if (META_LABEL_GENRE.test(label)) kind = 'genre';
+            else if (META_LABEL_MAKER.test(label)) kind = 'maker';
+            if (!kind) continue;
+
+            const parent = node.parentElement;
+            let valueEl = null;
+            let anchors = [];
+
+            if (node.nextElementSibling && node.nextElementSibling.matches && node.nextElementSibling.matches('a[href]')) {
+                let cursor = node.nextElementSibling;
+                let guard = 0;
+                while (cursor && guard < 40) {
+                    guard++;
+                    const labelText = (cursor.textContent || '').replace(/\s+/g, ' ').trim().replace(/[:：]$/, '');
+                    if (guard > 1 && labelText.length <= 12 && STOP_LABEL_RE.test(labelText)) break;
+                    if (cursor.matches('a[href]')) anchors.push(cursor);
+                    else if (cursor.querySelectorAll) anchors.push(...Array.from(cursor.querySelectorAll('a[href]')));
+                    cursor = cursor.nextElementSibling;
+                }
+                valueEl = node.nextElementSibling;
+            }
+
+            if (!anchors.length && parent && parent.querySelectorAll) {
+                const linkCount = parent.querySelectorAll('a').length;
+                if (linkCount > 0 && linkCount <= 20) {
+                    valueEl = parent;
+                    anchors = Array.from(parent.querySelectorAll('a[href]'));
+                }
+            }
+            if (!valueEl) valueEl = node.nextElementSibling;
+            if (!valueEl && parent) valueEl = parent.querySelector('.value, dd, .font-medium');
+            if (!valueEl || valueEl === node) continue;
+
+            const inInfo = Boolean(node.closest(INFO_ZONE)) || Boolean(valueEl.closest(INFO_ZONE));
+            const names = (anchors.length ? anchors.map(entityNameFrom).filter(Boolean) : rowValues(valueEl))
+                .filter(name => name !== label);
+            if (kind === 'maker') {
+                const text = names[0] || String(valueEl.textContent || '').replace(/\s+/g, ' ').replace(label, '').replace(/^[:：\s]+/, '').trim();
+                if (text) pools.maker.push({ text: text.slice(0, 40), inInfo });
+            } else {
+                pools[kind].push({ values: Array.from(new Set(names)), inInfo });
+            }
+        }
+        for (const kind of ['actress', 'genre']) {
+            if (result[kind].length) continue;
+            const entry = pools[kind].find(pool => pool.inInfo) || pools[kind][0];
+            if (entry) result[kind] = entry.values.slice(0, 30);
+        }
+        const makerEntry = pools.maker.find(pool => pool.inInfo) || pools.maker[0];
+        if (makerEntry && !result.maker) result.maker = makerEntry.text;
+
+        const scope = doc.querySelector('.video-info, #video-info, .video-detail, .movie-panel-info, .info-header, .info');
+        if (scope) {
+            const pick = (kind, target, limit) => {
+                for (const anchor of scope.querySelectorAll('a[href]')) {
+                    if (target.length >= limit) break;
+                    if (anchor.closest(META_BLOCKED_ZONE)) continue;
+                    const href = anchor.getAttribute('href') || '';
+                    if (linkKind(href, baseUrl) !== kind) continue;
+                    if (!entitySlug(href, baseUrl)) continue;
+                    const value = entityNameFrom(anchor);
+                    if (value && !target.includes(value)) target.push(value);
+                }
+            };
+            if (!result.actress.length) pick('actress', result.actress, 30);
+            if (!result.genre.length) pick('genre', result.genre, 30);
+            if (!result.maker) {
+                const anchor = Array.from(scope.querySelectorAll('a[href]')).find(item => {
+                    if (item.closest(META_BLOCKED_ZONE)) return false;
+                    const href = item.getAttribute('href') || '';
+                    return linkKind(href, baseUrl) === 'maker' && entitySlug(href, baseUrl);
+                });
+                if (anchor) {
+                    const value = entityNameFrom(anchor) || validEntity(anchor.textContent);
+                    if (value) result.maker = value.slice(0, 40);
+                }
+            }
+        }
+
+        const ogTitle = doc.querySelector('meta[property="og:title"]');
+        result.title = (ogTitle && ogTitle.getAttribute('content')) || (doc.querySelector('h1') && doc.querySelector('h1').textContent) || '';
+        result.title = String(result.title).replace(/\s+/g, ' ').trim();
+        const ogImage = doc.querySelector('meta[property="og:image"]');
+        result.cover = absUrl(ogImage && ogImage.getAttribute('content'), baseUrl);
+        const durMeta = doc.querySelector('meta[property="og:video:duration"], meta[itemprop="duration"]');
+        if (durMeta) {
+            const content = durMeta.getAttribute('content') || '';
+            if (/^\d+$/.test(content)) {
+                const seconds = Number(content);
+                if (seconds > 60 && seconds < 60 * 60 * 6) {
+                    const hours = Math.floor(seconds / 3600);
+                    const minutes = Math.floor((seconds % 3600) / 60);
+                    const rest = seconds % 60;
+                    result.duration = `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+                }
+            }
+        }
+        if (!result.duration) {
+            const text = doc.body ? doc.body.textContent : '';
+            const match = text.match(/\b\d{1,2}:\d{2}:\d{2}\b/);
+            if (match) result.duration = match[0];
+        }
+        return result;
+    }
+
+
+    const HOST_QUEUE = new Map();
+    function withHostLimit(key, gap, task) {
+        const prev = HOST_QUEUE.get(key) || Promise.resolve();
+        const run = prev.then(() => task(), () => task());
+        const tail = run.then(() => sleep(gap), () => sleep(gap));
+        HOST_QUEUE.set(key, tail);
+        return run;
+    }
+
+    function isRetryable(message) {
+        return /HTTP (?:403|429|500|502|503|504)|超时|网络错误|空响应|Failed to fetch/i.test(String(message || ''));
+    }
+
+    async function fetchWithRetry(task, attempts, delay) {
+        let last = null;
+        for (let i = 0; i < (attempts || 2); i++) {
+            try {
+                return await task();
+            } catch (error) {
+                last = error;
+                if (!isRetryable(error && error.message)) break;
+                await sleep((delay || 800) * (i + 1));
+            }
+        }
+        throw last || new Error('请求失败');
+    }
+
+
+    function httpGet(url, timeout, extraHeaders) {
+        const limit = timeout || 20000;
+        const headers = Object.assign({
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+        }, extraHeaders || {});
+        if (typeof GM_xmlhttpRequest === 'function') {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url,
+                    timeout: limit,
+                    withCredentials: true,
+                    headers,
+                    onload(response) {
+                        if (response.status >= 200 && response.status < 400) resolve(response.responseText || '');
+                        else reject(new Error(`HTTP ${response.status}`));
+                    },
+                    onerror() { reject(new Error('网络错误')); },
+                    ontimeout() { reject(new Error('请求超时')); }
+                });
+            });
+        }
+        return fetch(url, { credentials: 'include', headers }).then(response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.text();
+        });
+    }
+
+    function toDoc(html) {
+        try {
+            return new DOMParser().parseFromString(String(html || ''), 'text/html');
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function isBlockedHtml(html) {
+        if (!html) return true;
+        const head = html.slice(0, 5000);
+        return /Just a moment|cf-browser-verification|challenge-platform|Enable JavaScript and cookies|Attention Required/i.test(head);
+    }
+
+    function frameHost() {
+        let host = document.getElementById('fav-screen-frames');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'fav-screen-frames';
+            host.style.cssText = 'position:fixed;left:-12000px;top:0;width:1280px;height:900px;overflow:hidden;opacity:0;pointer-events:none;z-index:-1;';
+            (document.body || document.documentElement).appendChild(host);
+        }
+        return host;
+    }
+
+    function createHiddenFrame() {
+        const frame = document.createElement('iframe');
+        frame.setAttribute('aria-hidden', 'true');
+        frame.tabIndex = -1;
+        frame.title = 'fav-screen-loader';
+        frame.style.cssText = 'display:block;width:1280px;height:900px;border:0;';
+        frameHost().appendChild(frame);
+        return frame;
+    }
+
+    function frameDoc(frame) {
+        if (!frame) return null;
+        let doc = null;
+        try {
+            doc = frame.contentDocument;
+        } catch (error) {
+            return null;
+        }
+        if (!doc || !doc.querySelectorAll) return null;
+        if (doc === document) return null;
+        return doc;
+    }
+
+    function frameUrl(frame) {
+        const doc = frameDoc(frame);
+        if (!doc) return '';
+        try {
+            return String((doc.location && doc.location.href) || doc.URL || '');
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function loadFrame(frame, url, timeout) {
+        return new Promise(resolve => {
+            let settled = false;
+            const cleanup = () => frame.removeEventListener('load', onLoad);
+            const finish = ok => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve(ok);
+            };
+            const onLoad = () => {
+                setTimeout(() => finish(true), 700);
+            };
+            frame.addEventListener('load', onLoad);
+            setTimeout(() => finish(false), timeout || 30000);
+            try {
+                frame.src = url;
+            } catch (error) {
+                finish(false);
+            }
+        });
+    }
+
+    function cardSignature(doc, site) {
+        if (!doc) return '';
+        const scope = listScope(doc, site) || doc;
+        const hrefs = [];
+        for (const anchor of scope.querySelectorAll('a[href]')) {
+            const href = anchor.getAttribute('href') || '';
+            if (!href) continue;
+            if (site === 'jable' ? !/\/videos?\//i.test(href) : href.split('/').filter(Boolean).length < 2) continue;
+            hrefs.push(href);
+        }
+        if (!hrefs.length) return '';
+        const head = hrefs.slice(0, 3).join(',');
+        const tail = hrefs.slice(-3).join(',');
+        return `${hrefs.length}|${head}|${tail}`;
+    }
+
+    async function waitFrameChange(frame, site, before, tries, beforeUrl) {
+        const rounds = tries || 60;
+        for (let index = 0; index < rounds; index++) {
+            await sleep(250);
+            if (runToken && runToken.cancelled) return false;
+            const doc = frameDoc(frame);
+            if (!doc) continue;
+            if (beforeUrl) {
+                const nowUrl = frameUrl(frame);
+                if (nowUrl && nowUrl !== beforeUrl && !/^about:/i.test(nowUrl)) {
+                    await waitForCards(frame, site, 6000);
+                    return true;
+                }
+            }
+            const now = cardSignature(doc, site);
+            if (now && now !== before) return true;
+        }
+        return false;
+    }
+
+    async function waitForCards(frame, site, timeout) {
+        const deadline = Date.now() + (timeout || 6000);
+        let doc = frameDoc(frame);
+        while (Date.now() < deadline) {
+            doc = frameDoc(frame);
+            if (doc) {
+                try {
+                    if (collectCards(doc, site, frameUrl(frame) || location.href).length) return doc;
+                } catch (error) {  }
+            }
+            if (runToken && runToken.cancelled) return doc;
+            await sleep(350);
+        }
+        return doc;
+    }
+
+
+    let runToken = null;
+    let running = false;
+
+    function pushLog(text) {
+        ui.logLines.push({ text, at: Date.now() });
+        if (ui.logLines.length > MAX_LOG_LINES) ui.logLines.splice(0, ui.logLines.length - MAX_LOG_LINES);
+        paintLog();
+    }
+
+    function paintLog() {
+        if (!ui.logBox) return;
+        const fragment = document.createDocumentFragment();
+        for (const line of ui.logLines) {
+            const row = el('div', 'fs-log-line', line.text);
+            fragment.appendChild(row);
+        }
+        ui.logBox.replaceChildren(fragment);
+        ui.logBox.scrollTop = ui.logBox.scrollHeight;
+    }
+
+    function setProgress(ratio, text) {
+        if (ui.progressFill) {
+            const value = clamp(Number(ratio) || 0, 0, 1);
+            ui.progressFill.style.width = `${Math.round(value * 100)}%`;
+            ui.progressFill.classList.toggle('is-running', value > 0 && value < 1);
+        }
+        if (ui.progressText && text !== undefined) ui.progressText.textContent = text;
+    }
+
+    function setBusy(busy) {
+        running = busy;
+        for (const button of ui.actionButtons || []) {
+            if (button.dataset.always !== '1') button.disabled = busy;
+        }
+        for (const button of ui.sourceButtons || []) button.disabled = busy;
+        if (ui.stopBtn) ui.stopBtn.hidden = !busy;
+    }
+
+    function mergeCards(cards, site, pageIndex, log) {
+        let added = 0;
+        let updated = 0;
+        const now = Date.now();
+        cards.forEach((card, index) => {
+            const id = `${site}::${card.path}`;
+            const rank = pageIndex * 1000 + index;
+            const existing = state.items[id];
+            if (existing) {
+                let changed = false;
+                if (card.title && card.title !== existing.title && !existing.titleLocked) {
+                    existing.title = card.title;
+                    changed = true;
+                }
+                if (card.cover && !existing.cover) {
+                    existing.cover = card.cover;
+                    changed = true;
+                }
+                if (card.code && !existing.code) {
+                    existing.code = card.code;
+                    changed = true;
+                }
+                if (card.duration && !existing.duration) {
+                    existing.duration = card.duration;
+                    changed = true;
+                }
+                if (existing.rank !== rank) {
+                    existing.rank = rank;
+                    changed = true;
+                }
+                existing.lastSeen = now;
+                if (changed) updated++;
+            } else {
+                state.items[id] = {
+                    id,
+                    site,
+                    href: card.href,
+                    path: card.path,
+                    code: card.code,
+                    title: card.title,
+                    cover: card.cover,
+                    duration: card.duration,
+                    rank,
+                    firstSeen: now,
+                    lastSeen: now
+                };
+                added++;
+            }
+        });
+        if (log) log(`📄 第 ${pageIndex} 页解析 ${cards.length} 条 · 新增 ${added} · 更新 ${updated}`);
+        if (runStats) {
+            runStats.added += added;
+            runStats.updated += updated;
+            for (const card of cards) runStats.seen.add(card.href);
+        }
+        if (added || updated) bumpData();
+        return added;
+    }
+
+    function siteOrigin() {
+        return location.origin;
+    }
+
+    async function scrapeMissav(log, token) {
+        const origin = siteOrigin();
+        const base = `${origin}${MISSAV_SAVED_PATH}`;
+        const sameOrigin = location.origin === origin;
+        let frame = null;
+        let useFrame = false;
+        let maxPage = 0;
+        let page = 1;
+        let totalNew = 0;
+        let touched = false;
+        let prevSignature = '';
+        let consecutiveEmpty = 0;
+
+        for (; page <= 300; page++) {
+            if (token.cancelled) break;
+            const url = `${base}?page=${page}`;
+            let doc = null;
+
+            if (!useFrame) {
+                try {
+                    const html = await httpGet(url);
+                    if (isBlockedHtml(html)) {
+                        if (sameOrigin) {
+                            log('⚠️ 直连被站点拦截，改用页内框架读取');
+                            useFrame = true;
+                        } else {
+                            log('⚠️ 跨站读取被拦截：请先在 MissAV 页面打开本脚本再同步');
+                            break;
+                        }
+                    } else {
+                        doc = toDoc(html);
+                        const probe = collectCards(doc, 'missav', url);
+                        if (!probe.length && sameOrigin) {
+                            log('⚠️ 直连没有解析到卡片，改用页内框架读取');
+                            useFrame = true;
+                            doc = null;
+                        } else if (!probe.length) {
+                            log('⚠️ 没有解析到卡片：请确认已登录 MissAV 并停留在收藏页');
+                            break;
+                        }
+                    }
+                } catch (error) {
+                    if (sameOrigin) {
+                        log(`⚠️ 直连失败（${error.message}），改用页内框架`);
+                        useFrame = true;
+                    } else {
+                        log(`⚠️ 直连失败：${error.message}`);
+                        break;
+                    }
+                }
+            }
+
+            if (!doc && useFrame) {
+                if (!frame) frame = createHiddenFrame();
+                const loaded = await loadFrame(frame, url);
+                if (!loaded) {
+                    log(`⚠️ 第 ${page} 页加载超时`);
+                    break;
+                }
+                doc = await waitForCards(frame, 'missav', 5000);
+                if (!doc) {
+                    log('⚠️ 无法读取框架内容，请确认脚本运行在 MissAV 站点上');
+                    break;
+                }
+            }
+            if (!doc) break;
+
+            const cards = collectCards(doc, 'missav', url);
+            const signature = cards.slice(0, 12).map(card => card.path).join('|');
+            const declared = detectMaxPage(doc);
+            if (declared > maxPage) {
+                maxPage = declared;
+                log(`🧭 MissAV 收藏共 ${maxPage} 页`);
+            }
+            log(`📥 MissAV 第 ${page} 页${cards.length ? '' : '（空）'}`);
+
+            if (cards.length) touched = true;
+            if (!cards.length) {
+                consecutiveEmpty++;
+                if (page === 1) {
+                    log('⚠️ 第 1 页没有影片：请确认已登录并在 missav 收藏页（/saved）');
+                    break;
+                }
+                if (consecutiveEmpty >= 2) break;
+            } else if (page > 1 && prevSignature && signature === prevSignature) {
+                log('🏁 分页返回了与上一页相同的内容，判定已到末页');
+                break;
+            } else {
+                consecutiveEmpty = 0;
+                prevSignature = signature;
+                totalNew += mergeCards(cards, 'missav', page, log);
+            }
+
+            const total = allItems().length;
+            setProgress(maxPage ? clamp(page / maxPage, 0, 1) : 0.35, `MissAV 第 ${page}${maxPage ? `/${maxPage}` : ''} 页 · 已收录 ${formatNumber(total)} 部`);
+            persist();
+
+            if (maxPage && page >= maxPage) break;
+            if (!cards.length && page > 1 && consecutiveEmpty >= 2) break;
+            await sleep(180);
+        }
+
+        if (frame) frame.remove();
+        if (touched) state.meta.missav = { lastSync: Date.now(), pages: page };
+        return totalNew;
+    }
+
+    async function scrapeJableHttp(log, token, entry) {
+        let totalNew = 0;
+        let touched = false;
+        let page = 1;
+        let prevSignature = '';
+        for (; page <= 200; page++) {
+            if (token.cancelled) break;
+            const url = page === 1 ? entry : `${entry}?page=${page}`;
+            let html = '';
+            try {
+                html = await httpGet(url);
+            } catch (error) {
+                log(`⚠️ 第 ${page} 页读取失败：${error.message}`);
+                break;
+            }
+            if (isBlockedHtml(html)) {
+                log('⚠️ 跨站读取被拦截：请先在 jable.tv 页面打开本脚本再同步');
+                break;
+            }
+            const cards = collectCards(toDoc(html), 'jable', url);
+            if (!cards.length) {
+                if (page === 1) log('⚠️ 没有解析到影片：请确认已登录 Jable 并停留在收藏页');
+                break;
+            }
+            const signature = cards.slice(0, 12).map(card => card.path).join('|');
+            if (page > 1 && signature === prevSignature) {
+                log('🏁 站点未按 ?page 返回新内容（Jable 属于页内翻页）');
+                break;
+            }
+            prevSignature = signature;
+            touched = true;
+            totalNew += mergeCards(cards, 'jable', page, log);
+            setProgress(0.35, `Jable 第 ${page} 页 · 已收录 ${formatNumber(allItems().length)} 部`);
+            persist();
+            await sleep(200);
+        }
+        if (touched) state.meta.jable = { lastSync: Date.now(), pages: page };
+        return totalNew;
+    }
+
+    async function scrapeJableFrame(log, token, entry) {
+        const frame = createHiddenFrame();
+        let totalNew = 0;
+        let touched = false;
+        let page = 1;
+        try {
+            const loaded = await loadFrame(frame, entry);
+            if (!loaded) {
+                log('⚠️ 后台收藏页加载超时');
+                return { ok: false, totalNew: 0 };
+            }
+            const first = await waitForCards(frame, 'jable', 8000);
+            const firstCards = first ? collectCards(first, 'jable', frameUrl(frame) || entry) : [];
+            if (!firstCards.length) {
+                log('⚠️ 后台框架里没有读到收藏卡片');
+                return { ok: false, totalNew: 0 };
+            }
+            log(`🪟 后台已打开收藏页，首屏 ${firstCards.length} 条`);
+
+            let prevSignature = '';
+            for (; page <= 200; page++) {
+                if (token.cancelled) break;
+                const doc = frameDoc(frame);
+                if (!doc) {
+                    log('⚠️ 无法读取后台收藏页内容');
+                    break;
+                }
+                const here = frameUrl(frame) || entry;
+                const cards = collectCards(doc, 'jable', here);
+                if (!cards.length) {
+                    log(page === 1 ? '⚠️ 收藏页没有解析到影片：请确认已登录 jable.tv' : '🏁 已到最后一页');
+                    break;
+                }
+                const signature = cards.slice(0, 12).map(card => card.path).join('|');
+                if (page > 1 && signature === prevSignature) {
+                    log('🏁 翻页后内容没有变化，判定已到末页');
+                    break;
+                }
+                prevSignature = signature;
+                touched = true;
+                totalNew += mergeCards(cards, 'jable', page, log);
+                setProgress(0.35, `Jable 第 ${page} 页 · 已收录 ${formatNumber(allItems().length)} 部`);
+                persist();
+
+                const next = findNextLink(doc, page + 1);
+                if (!next) {
+                    log('🏁 已到 Jable 收藏最后一页');
+                    break;
+                }
+                const href = next.getAttribute('href') || '';
+                const nextUrl = (href && !/^(?:#|javascript:)/i.test(href)) ? absUrl(href, here) : '';
+                const beforeSig = cardSignature(doc, 'jable');
+                const label = (next.textContent || '').replace(/\s+/g, '').slice(0, 10) || '下一页';
+                log(`➡️ 后台点「${label}」翻到第 ${page + 1} 页`);
+
+                const clicked = humanClick(next);
+                let changed = clicked ? await waitFrameChange(frame, 'jable', beforeSig, 40, here) : false;
+
+                if (!changed && nextUrl && nextUrl !== here) {
+                    log('↪️ 点击没有反应，改为直接载入下一页地址');
+                    const ok = await loadFrame(frame, nextUrl);
+                    if (!ok) {
+                        log('⚠️ 下一页加载超时');
+                        break;
+                    }
+                    await waitForCards(frame, 'jable', 6000);
+                    changed = true;
+                }
+                if (!changed) {
+                    log('🏁 没有更多新内容，抓取结束');
+                    break;
+                }
+                await sleep(320);
+            }
+            if (touched) state.meta.jable = { lastSync: Date.now(), pages: page };
+            return { ok: true, totalNew };
+        } finally {
+            frame.remove();
+        }
+    }
+
+    async function scrapeJable(log, token) {
+        const entry = `${location.origin}${JABLE_FAVORITES_PATH}`;
+        const framed = await scrapeJableFrame(log, token, entry);
+        if (framed.ok) return framed.totalNew;
+        log('↪️ 后台框架读不到收藏页（可能禁止被嵌入），改用 ?page=N 直连');
+        return scrapeJableHttp(log, token, entry);
+    }
+
+    async function runSync() {
+        if (running) return;
+        const token = { cancelled: false };
+        runToken = token;
+        runStats = { added: 0, updated: 0, seen: new Set() };
+        setBusy(true);
+        ui.logLines = [];
+        paintLog();
+        pushLog(`🚀 开始同步 ${SITE_INFO[CURRENT_SITE].label} 收藏`);
+        if (!allItems().length) pushLog('👋 首次使用：正在抓取收藏，抓完可点「深度补全」补齐女优/题材');
+        setProgress(0.02, '准备中…');
+        try {
+            if (CURRENT_SITE === 'missav') await scrapeMissav(pushLog, token);
+            else await scrapeJable(pushLog, token);
+            const total = allItems().length;
+            if (token.cancelled) {
+                pushLog('⏹ 已手动停止');
+            } else {
+                const diff = runStats.added || runStats.updated
+                    ? `新增 ${runStats.added} · 更新 ${runStats.updated}`
+                    : '没有变化';
+                pushLog(`✅ 同步完成：${diff} · 库内共 ${formatNumber(total)} 部`);
+            }
+            const metaNow = Object.assign({}, state.meta[CURRENT_SITE] || {}, {
+                lastRun: { at: Date.now(), added: runStats.added, updated: runStats.updated, total }
+            });
+            state.meta[CURRENT_SITE] = metaNow;
+            if (!token.cancelled && runStats.seen.size >= Math.max(5, Math.ceil(total * 0.5))) {
+                const stale = allItems().filter(item => !runStats.seen.has(item.href)).map(item => item.id);
+                if (stale.length) metaNow.stale = stale;
+                else delete metaNow.stale;
+            } else {
+                delete metaNow.stale;
+            }
+            state.syncs.push({
+                at: Date.now(),
+                total
+            });
+            if (state.syncs.length > 60) state.syncs = state.syncs.slice(-60);
+            setProgress(1, `共收录 ${formatNumber(allItems().length)} 部`);
+        } catch (error) {
+            pushLog(`❌ 同步出错：${error && error.message ? error.message : error}`);
+        } finally {
+            bumpData();
+            persist(true);
+            runToken = null;
+            runStats = null;
+            setBusy(false);
+            refreshAll();
+        }
+    }
+
+    async function runEnrich() {
+        if (running) return;
+        const items = allItems().filter(item => item.code && item.href);
+        const codeMap = new Map();
+        for (const item of items) {
+            if (!item.code) continue;
+            if (!codeMap.has(item.code)) codeMap.set(item.code, item);
+        }
+        const now = Date.now();
+        const targets = [];
+        for (const [code, item] of codeMap) {
+            const cached = state.enriched[code];
+            const stale = !cached || !cached.checkedAt || now - cached.checkedAt > ENRICH_TTL;
+            const thin = !cached || !cached.actress || !cached.actress.length;
+            const oldParse = cached && cached.v !== ENRICH_VERSION;
+            const recentFailure = cached && cached.failed && !oldParse && now - (cached.checkedAt || 0) < 30 * 60 * 1000;
+            if (recentFailure) continue;
+            const fromExternal = cached && cached.source && cached.source !== '站内';
+            if (stale || thin || fromExternal || oldParse) targets.push({ code, item });
+        }
+        const limit = Math.max(1, Number(state.settings.enrichLimit) || 60);
+        const slice = targets.slice(0, limit);
+        if (!slice.length) {
+            ui.logLines = [];
+            pushLog('✨ 没有需要补全的番号');
+            return;
+        }
+        const token = { cancelled: false };
+        runToken = token;
+        setBusy(true);
+        ui.logLines = [];
+        pushLog(`✨ 开始补全：${slice.length} / ${targets.length} 个番号（只走站内详情页）`);
+        let done = 0;
+        try {
+            let warned = 0;
+            let failedCount = 0;
+            await mapPool(slice, 3, async entry => {
+                if (token.cancelled) return;
+                const code = entry.code;
+                let detail = null;
+                let reason = '';
+
+                try {
+                    if (!entry.item.href) throw new Error('缺少详情链接');
+                    const html = await withHostLimit('site', 120, () => fetchWithRetry(
+                        () => httpGet(entry.item.href, 20000), 2, 700
+                    ));
+                    if (isBlockedHtml(html)) throw new Error('页面被拦截');
+                    const parsed = parseDetail(toDoc(html), entry.item.href);
+                    if (!parsed || (!parsed.actress.length && !parsed.genre.length && !parsed.maker)) {
+                        throw new Error('详情页没有元数据');
+                    }
+                    detail = parsed;
+                } catch (error) {
+                    reason = error.message;
+                    detail = null;
+                }
+
+                if (!detail) {
+                    failedCount++;
+                    state.enriched[code] = {
+                        actress: [],
+                        genre: [],
+                        maker: '',
+                        failed: true,
+                        v: ENRICH_VERSION,
+                        checkedAt: Date.now()
+                    };
+                    if (warned < 5) {
+                        warned++;
+                        pushLog(`⚠️ ${code} 补全失败：${reason || '无数据'}`);
+                    }
+                } else {
+                    state.enriched[code] = {
+                        actress: detail.actress,
+                        genre: detail.genre,
+                        maker: detail.maker,
+                        title: detail.title,
+                        cover: detail.cover,
+                        source: '站内',
+                        v: ENRICH_VERSION,
+                        checkedAt: Date.now()
+                    };
+                    if (detail.cover && entry.item && !entry.item.cover) entry.item.cover = detail.cover;
+                }
+                done++;
+                setProgress(done / slice.length, `补全 ${done}/${slice.length} · ${code}`);
+                if (done % 5 === 0) {
+                    persistEnriched();
+                    pushLog(`🧾 已补全 ${done}/${slice.length} · 成功 ${done - failedCount}${failedCount ? ` · 失败 ${failedCount}` : ''}`);
+                }
+            });
+            pushLog(`✅ 详情补全完成：成功 ${done - failedCount} · 失败 ${failedCount}`);
+            setProgress(1, `补全 ${done} 个番号`);
+        } catch (error) {
+            pushLog(`❌ 补全出错：${error && error.message ? error.message : error}`);
+        } finally {
+            bumpData();
+            persist(true);
+            runToken = null;
+            setBusy(false);
+            refreshAll();
+        }
+    }
+
+
+    function isJunkEntry(item) {
+        if (!item) return true;
+        const title = String(item.title || '');
+        const cover = String(item.cover || '');
+        try {
+            if (item.href && !isVideoPath(new URL(item.href), item.site || CURRENT_SITE)) return true;
+        } catch (error) {  }
+        if (JUNK_TITLE_RE.test(title.trim())) return true;
+        if (!item.code && !item.duration && title.trim().length <= 8) return true;
+        if (!item.duration && title.trim().length <= 24 && /^(?:繁體中文|繁体中文|簡體中文|简体中文|日本語|한국어|語言|语言)/.test(title.trim())) return true;
+        if (/^(?:新聞|新闻|公告|通知|排行榜|指南|教程|客服)/.test(title) && title.length <= 12) return true;
+        if (/(?:AV\s*)?[線线]上看\s*$/i.test(title)) return true;
+        if (/\/logo|placeholder|now_printing|noimage|no-image|\/default\./i.test(cover)) return true;
+        return false;
+    }
+
+    let purgeRev = -1;
+
+    function purgeJunkItems() {
+        if (purgeRev === dataRev) return 0;
+        const list = allItems();
+        purgeRev = dataRev;
+        if (!list.length) return 0;
+        const coverCount = new Map();
+        for (const item of list) {
+            if (!item.cover) continue;
+            coverCount.set(item.cover, (coverCount.get(item.cover) || 0) + 1);
+        }
+        const withCover = list.filter(item => item.cover).length;
+        const coverHealthy = list.length >= 6 && withCover / list.length >= 0.6;
+        const emptyCount = list.filter(item => !item.cover && !item.duration).length;
+        const dropEmpty = coverHealthy && emptyCount >= 3;
+
+        let removed = 0;
+        for (const item of list) {
+            const sharedCover = item.cover && (coverCount.get(item.cover) || 0) >= 3;
+            const noCoverNoTime = dropEmpty && !item.cover && !item.duration;
+            if (isJunkEntry(item) || (sharedCover && !item.duration) || noCoverNoTime) {
+                delete state.items[item.id];
+                removed++;
+            }
+        }
+        if (removed) {
+            bumpData();
+            purgeRev = dataRev;
+            persist();
+        }
+        return removed;
+    }
+
+    const PLAYBACK_KEY_PREFIX = 'avSub:analyticsRecords_v1@';
+    const PLAYBACK_TTL = 8000;
+    const playbackCache = { at: 0, map: new Map() };
+
+    function readPlaybackMap() {
+        const key = `${PLAYBACK_KEY_PREFIX}${CURRENT_SITE}`;
+        let gmRaw = null;
+        let localRaw = null;
+        try {
+            gmRaw = GM.get(key, null);
+        } catch (error) { gmRaw = null; }
+        try {
+            localRaw = localStorage.getItem(key);
+        } catch (error) { localRaw = null; }
+        if (gmRaw && typeof gmRaw === 'object') return gmRaw;
+        const gmText = typeof gmRaw === 'string' ? gmRaw : '';
+        const localText = typeof localRaw === 'string' ? localRaw : '';
+        const text = localText.length > gmText.length ? localText : gmText;
+        if (!text) return [];
+        try {
+            const parsed = JSON.parse(text);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function playbackMap() {
+        const now = Date.now();
+        if (playbackCache.at && now - playbackCache.at < PLAYBACK_TTL) return playbackCache.map;
+        const map = new Map();
+        for (const record of readPlaybackMap()) {
+            const code = String((record && record.code) || '').toUpperCase();
+            if (!code) continue;
+            const duration = Number(record.duration) || 0;
+            const position = Number(record.lastPosition) || 0;
+            const ratio = Math.max(Number(record.maxProgress) || 0, duration > 0 ? Math.min(1, position / duration) : 0);
+            const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+            const prev = map.get(code);
+            if (prev && prev.percent >= percent) continue;
+            map.set(code, {
+                percent,
+                watchedAt: Number(record.watchedAt) || 0,
+                completed: ratio >= 0.95,
+                started: ratio > 0.02
+            });
+        }
+        playbackCache.at = now;
+        playbackCache.map = map;
+        return map;
+    }
+
+    function viewItems() {
+        const playbacks = playbackMap();
+        if (viewsRev === dataRev && viewsPlaybackAt === playbackCache.at) return viewsCache;
+        const list = allItems().map(item => {
+            const meta = item.code ? state.enriched[item.code] : null;
+            const code = item.code || '';
+            const title = (meta && meta.title ? cleanTitle(meta.title, item.code) || item.title : item.title) || item.code || '未命名';
+            const actress = (meta && meta.actress) || [];
+            const genre = (meta && meta.genre) || [];
+            const maker = (meta && meta.maker) || '';
+            return {
+                id: item.id,
+                site: item.site,
+                href: item.href,
+                code,
+                title,
+                cover: item.cover || (meta && meta.cover) || '',
+                duration: item.duration || '',
+                minutes: durationToMinutes(item.duration),
+                actress,
+                genre,
+                maker,
+                rank: item.rank || 0,
+                firstSeen: item.firstSeen || 0,
+                search: `${code} ${title} ${actress.join(' ')} ${genre.join(' ')} ${maker}`.toLowerCase(),
+                progress: playbacks.get(String(item.code || '').toUpperCase()) || null
+            };
+        });
+        viewsCache = list;
+        viewsRev = dataRev;
+        viewsPlaybackAt = playbackCache.at;
+        return list;
+    }
+
+    function tally(list, pick) {
+        const map = new Map();
+        for (const item of list) {
+            const values = pick(item);
+            if (!values) continue;
+            for (const value of values) {
+                if (!value) continue;
+                map.set(value, (map.get(value) || 0) + 1);
+            }
+        }
+        return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+    }
+
+    function computeStats(list) {
+        const stats = {
+            total: list.length,
+            pending: 0,
+            withCode: 0,
+            withActress: 0,
+            withGenre: 0,
+            withMaker: 0,
+            withDuration: 0,
+            watching: 0,
+            completed: 0,
+            unseen: 0,
+            minutes: 0,
+            sites: { missav: 0, jable: 0 },
+            actress: [],
+            genre: [],
+            maker: [],
+            prefix: [],
+            duplicates: 0,
+            codeSites: new Map()
+        };
+        for (const item of list) {
+            if (item.code) {
+                stats.withCode++;
+                if (!stats.codeSites.has(item.code)) stats.codeSites.set(item.code, new Set());
+                stats.codeSites.get(item.code).add(item.site);
+            }
+            if (item.actress.length) stats.withActress++;
+            if (item.genre.length) stats.withGenre++;
+            if (item.code && (!item.actress.length || !item.genre.length)) stats.pending++;
+            if (item.progress && item.progress.started) {
+                if (item.progress.completed) stats.completed++;
+                else stats.watching++;
+            } else {
+                stats.unseen++;
+            }
+            if (item.maker) stats.withMaker++;
+            if (item.minutes > 0) {
+                stats.withDuration++;
+                stats.minutes += item.minutes;
+            }
+            if (stats.sites[item.site] !== undefined) stats.sites[item.site]++;
+        }
+        for (const sites of stats.codeSites.values()) if (sites.size > 1) stats.duplicates++;
+        stats.actress = tally(list, item => item.actress).slice(0, 12);
+        stats.genre = tally(list, item => item.genre).slice(0, 12);
+        stats.maker = tally(list, item => [item.maker]).slice(0, 10);
+        stats.prefix = tally(list, item => (item.code ? [item.code.split('-')[0]] : [])).slice(0, 16);
+        stats.avgMinutes = stats.withDuration ? stats.minutes / stats.withDuration : 0;
+        return stats;
+    }
+
+
+    const ui = {
+        host: null,
+        root: null,
+        page: null,
+        logBox: null,
+        logLines: [],
+        progressFill: null,
+        progressText: null,
+        stopBtn: null,
+        actionButtons: [],
+        sourceButtons: [],
+        kpiGrid: null,
+        rankWrap: null,
+        trendWrap: null,
+        noticeWrap: null,
+        prefixWrap: null,
+        compositionWrap: null,
+        wallWrap: null,
+        wallCount: null,
+        chipWrap: null,
+        sourceWrap: null,
+        filter: {
+            actress: '',
+            genre: '',
+            prefix: '',
+            missing: '',
+            progress: '',
+            query: '',
+            view: state.settings.view || 'grid',
+            sort: state.settings.sort || 'rank',
+            limit: 48
+        },
+        wallEl: null,
+        wallWrap: null,
+        networkWrap: null,
+        lastRender: null,
+        observer: null,
+        open: false
+    };
+
+    const kpiPrev = new Map();
+
+    function buildKpi(label, unit, footer, iconPaths, tone, value, decimals) {
+        const kpi = el('div', 'fs-kpi');
+        const head = el('div', 'fs-kpi-head');
+        head.appendChild(el('span', 'fs-kpi-label', label));
+        const glyph = icon(iconPaths);
+        if (tone) glyph.classList.add(`is-${tone}`);
+        head.appendChild(glyph);
+        const valueBox = el('div', 'fs-kpi-value');
+        const num = el('span');
+        valueBox.appendChild(num);
+        if (unit) valueBox.appendChild(el('small', '', unit));
+        const foot = el('div', 'fs-kpi-foot', footer || '');
+        kpi.append(head, valueBox, foot);
+        const target = Number(value) || 0;
+        animateNumber(num, kpiPrev.get(label) || 0, target, decimals || 0);
+        kpiPrev.set(label, target);
+        return kpi;
+    }
+
+    function animateNumber(node, from, to, decimals) {
+        const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const start = Number(from) || 0;
+        const target = Number(to) || 0;
+        if (reduce || start === target) {
+            node.textContent = formatNumber(target, decimals);
+            return;
+        }
+        node.textContent = formatNumber(start, decimals);
+        const startedAt = performance.now();
+        const duration = 720;
+        const step = now => {
+            const progress = clamp((now - startedAt) / duration, 0, 1);
+            const eased = 1 - Math.pow(1 - progress, 3);
+            node.textContent = formatNumber(start + (target - start) * eased, decimals);
+            if (progress < 1) requestAnimationFrame(step);
+            else node.textContent = formatNumber(target, decimals);
+        };
+        requestAnimationFrame(step);
+        setTimeout(() => {
+            node.textContent = formatNumber(target, decimals);
+        }, duration + 160);
+    }
+
+    function card(titleText, subtitle, iconPaths) {
+        const section = el('section', 'fs-card');
+        const head = el('div', 'fs-card-head');
+        const title = el('h2', 'fs-card-title');
+        title.appendChild(icon(iconPaths));
+        title.appendChild(el('span', '', titleText));
+        head.appendChild(title);
+        if (subtitle) head.appendChild(el('p', 'fs-card-sub', subtitle));
+        section.appendChild(head);
+        return section;
+    }
+
+    function rankList(entries, options) {
+        const opts = options || {};
+        const wrap = el('div', 'fs-ranks');
+        if (!entries.length) {
+            wrap.appendChild(el('div', 'fs-mini-empty', opts.empty || '暂无数据，先同步收藏或补全详情'));
+            return wrap;
+        }
+        const max = entries[0][1] || 1;
+        entries.forEach(([name, count], index) => {
+            const row = el('button', 'fs-rank');
+            row.type = 'button';
+            row.title = opts.hint ? `${name} · ${count}` : `${name} · ${count}`;
+            const idx = el('span', 'fs-rank-idx', String(index + 1).padStart(2, '0'));
+            if (index === 0) idx.classList.add('is-gold');
+            else if (index === 1) idx.classList.add('is-silver');
+            else if (index === 2) idx.classList.add('is-bronze');
+            const body = el('div', 'fs-rank-body');
+            const head = el('div', 'fs-rank-head');
+            head.appendChild(el('span', 'fs-rank-name', name));
+            head.appendChild(el('span', 'fs-rank-val', formatNumber(count)));
+            const bar = el('div', 'fs-rank-bar');
+            const fill = el('div', 'fs-rank-fill');
+            fill.style.width = `${Math.max(4, (count / max) * 100)}%`;
+            if (opts.tone) fill.classList.add(`is-${opts.tone}`);
+            bar.appendChild(fill);
+            body.append(head, bar);
+            row.append(idx, body);
+            if (opts.onPick) {
+                row.addEventListener('click', () => opts.onPick(name));
+            }
+            wrap.appendChild(row);
+        });
+        return wrap;
+    }
+
+    let dupRev = -1;
+    let dupCache = [];
+
+    function findDuplicates() {
+        if (dupRev === dataRev) return dupCache;
+        const groups = new Map();
+        for (const item of allItems()) {
+            if (!item.code) continue;
+            if (!groups.has(item.code)) groups.set(item.code, []);
+            groups.get(item.code).push(item);
+        }
+        dupCache = Array.from(groups.entries())
+            .filter(entry => entry[1].length > 1)
+            .map(([code, items]) => ({ code, items }))
+            .sort((a, b) => b.items.length - a.items.length);
+        dupRev = dataRev;
+        return dupCache;
+    }
+
+    function cleanStale() {
+        const stale = (state.meta[CURRENT_SITE] || {}).stale || [];
+        if (!stale.length) return;
+        if (!window.confirm(`确定删除 ${stale.length} 条已不在收藏中的条目吗？\n只影响本站数据。`)) return;
+        for (const id of stale) delete state.items[id];
+        delete state.meta[CURRENT_SITE].stale;
+        commitData();
+        pushLog(`🧹 已清理 ${stale.length} 条未见条目`);
+    }
+
+    function dedupeItems() {
+        const groups = findDuplicates();
+        if (!groups.length) return 0;
+        const score = item => (item.cover ? 2 : 0) + (item.duration ? 1 : 0);
+        let removed = 0;
+        for (const group of groups) {
+            const keep = group.items.slice().sort((a, b) => score(b) - score(a) || (a.firstSeen || 0) - (b.firstSeen || 0))[0];
+            for (const item of group.items) {
+                if (item.id === keep.id) continue;
+                delete state.items[item.id];
+                removed++;
+            }
+        }
+        if (removed) {
+            commitData();
+            pushLog(`🧹 已合并 ${groups.length} 个重复番号，删除 ${removed} 条`);
+        }
+        return removed;
+    }
+
+    function monthBuckets(list, count) {
+        const size = count || 12;
+        const now = new Date();
+        const buckets = [];
+        for (let i = size - 1; i >= 0; i--) {
+            const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            buckets.push({
+                key: `${date.getFullYear()}-${date.getMonth() + 1}`,
+                label: `${date.getMonth() + 1}月`,
+                year: date.getFullYear(),
+                count: 0
+            });
+        }
+        const index = new Map(buckets.map(item => [item.key, item]));
+        for (const item of list) {
+            if (!item.firstSeen) continue;
+            const date = new Date(item.firstSeen);
+            const bucket = index.get(`${date.getFullYear()}-${date.getMonth() + 1}`);
+            if (bucket) bucket.count++;
+        }
+        return buckets;
+    }
+
+    function buildTrendSection(stats, list) {
+        const hours = Math.floor(stats.minutes / 60);
+        const section = card('收藏趋势', `最近 12 个月的新增节奏 · 累计 ${formatNumber(hours)} 小时`, ICONS.chart);
+        const buckets = monthBuckets(list, 12);
+        const max = Math.max(1, ...buckets.map(item => item.count));
+        const wrap = el('div', 'fs-trend');
+        for (const bucket of buckets) {
+            const col = el('div', 'fs-trend-col');
+            col.title = `${bucket.year} 年 ${bucket.label} · ${bucket.count} 部`;
+            const barWrap = el('div', 'fs-trend-bar-wrap');
+            const bar = el('div', 'fs-trend-bar');
+            bar.style.height = `${bucket.count ? Math.max(6, Math.round((bucket.count / max) * 100)) : 3}%`;
+            if (!bucket.count) bar.classList.add('is-empty');
+            barWrap.appendChild(bar);
+            col.append(el('span', 'fs-trend-count', bucket.count ? String(bucket.count) : ''), barWrap, el('span', 'fs-trend-label', bucket.label));
+            wrap.appendChild(col);
+        }
+        section.appendChild(wrap);
+        return section;
+    }
+
+    function buildSourceCard(site) {
+        const info = SITE_INFO[site];
+        const items = allItems();
+        const meta = state.meta[site] || {};
+        const cardEl = el('div', 'fs-source');
+
+        const main = el('div', 'fs-source-main');
+        const name = el('div', 'fs-source-name');
+        const dot = el('span', 'fs-site-dot');
+        dot.style.background = info.color;
+        name.append(dot, el('span', '', `${info.label} 收藏`));
+        const sub = el('div', 'fs-source-meta');
+        const lastRun = meta.lastRun;
+        const runText = lastRun && (lastRun.added || lastRun.updated)
+            ? ` · 新增 ${lastRun.added} · 更新 ${lastRun.updated}`
+            : '';
+        sub.textContent = items.length
+            ? `上次同步 ${formatTime(meta.lastSync)}${runText} · 共 ${meta.pages || 0} 页 · 数据仅存本机`
+            : (meta.lastSync ? `已清空 · 上次同步 ${formatTime(meta.lastSync)}，可重新同步` : '尚未抓取，登录后点右侧按钮');
+        main.append(name, sub);
+
+        const stat = el('div', 'fs-source-stat');
+        stat.append(el('strong', '', formatNumber(items.length)), el('span', '', '部'));
+
+        const btn = el('button', 'fs-btn fs-btn-primary fs-source-btn');
+        btn.type = 'button';
+        btn.dataset.always = '1';
+        btn.appendChild(icon(ICONS.sync));
+        btn.appendChild(el('span', '', `同步 ${info.label}`));
+        btn.addEventListener('click', () => {
+            if (running) return;
+            runSync();
+        });
+        ui.sourceButtons.push(btn);
+        cardEl.append(main, stat, btn);
+        return cardEl;
+    }
+
+    function buildSyncSection() {
+        const hint = CURRENT_SITE === 'jable'
+            ? 'Jable 收藏在收藏页内逐页翻取，本页只统计 Jable'
+            : 'MissAV 收藏按 ?page=N 分页抓取，本页只统计 MissAV';
+        const section = card('数据同步', hint, ICONS.sync);
+        const sources = el('div', 'fs-sync-grid');
+        sources.append(buildSourceCard(CURRENT_SITE));
+        ui.sourceWrap = sources;
+        const tools = el('div', 'fs-sync-tools');
+        const enrich = el('button', 'fs-btn');
+        enrich.type = 'button';
+        enrich.dataset.always = '1';
+        enrich.appendChild(icon(ICONS.spark));
+        enrich.appendChild(el('span', '', '深度补全详情'));
+        enrich.title = '抓取每部影片详情页，补全女优、题材、发行商';
+        enrich.addEventListener('click', () => {
+            if (running) return;
+            runEnrich();
+        });
+
+        const range = el('div', 'fs-enrich-range');
+        range.appendChild(el('span', '', '每轮补全'));
+        const select = el('select', 'fs-select');
+        for (const value of [30, 60, 120, 300, 600]) {
+            const option = el('option', '', String(value));
+            option.value = String(value);
+            if (Number(state.settings.enrichLimit) === value) option.selected = true;
+            select.appendChild(option);
+        }
+        select.addEventListener('change', () => {
+            state.settings.enrichLimit = Number(select.value) || 60;
+            persist();
+        });
+        range.appendChild(select);
+        range.appendChild(el('span', '', '个番号'));
+
+        const stop = el('button', 'fs-btn fs-btn-danger');
+        stop.type = 'button';
+        stop.dataset.always = '1';
+        stop.hidden = true;
+        stop.appendChild(icon(ICONS.stop));
+        stop.appendChild(el('span', '', '停止'));
+        stop.addEventListener('click', () => {
+            if (runToken) runToken.cancelled = true;
+        });
+        ui.stopBtn = stop;
+
+        tools.append(enrich, range, stop);
+        ui.actionButtons.push(enrich);
+
+        const progress = el('div', 'fs-progress-wrap');
+        const bar = el('div', 'fs-progress');
+        const fill = el('div', 'fs-progress-fill');
+        bar.appendChild(fill);
+        const label = el('div', 'fs-progress-text', '点击「同步」开始抓取收藏');
+        progress.append(bar, label);
+        ui.progressFill = fill;
+        ui.progressText = label;
+
+        const logHead = el('div', 'fs-log-head');
+        logHead.appendChild(el('span', '', '运行日志'));
+        const logBox = el('div', 'fs-log');
+        ui.logBox = logBox;
+        paintLog();
+
+        section.append(sources, tools, progress, logHead, logBox);
+        return section;
+    }
+
+    function buildComposition(stats) {
+        const section = card('收藏构成', '番号识别情况与元数据完整度', ICONS.layers);
+        const body = el('div', 'fs-composition');
+
+        const donutWrap = el('div', 'fs-donut-wrap');
+        const donut = el('div', 'fs-donut');
+        const total = stats.total || 1;
+        const segments = [
+            { label: '已识别番号', value: stats.withCode, color: SITE_INFO[CURRENT_SITE].color },
+            { label: '未识别番号', value: Math.max(0, stats.total - stats.withCode), color: 'rgba(148,163,184,.5)' }
+        ].filter(segment => segment.value > 0);
+        if (!segments.length) {
+            donut.style.background = 'rgba(148,163,184,.14)';
+        } else {
+            let acc = 0;
+            const stops = segments.map(segment => {
+                const from = (acc / total) * 360;
+                acc += segment.value;
+                const to = (acc / total) * 360;
+                return `${segment.color} ${from}deg ${to}deg`;
+            });
+            donut.style.background = `conic-gradient(${stops.join(', ')})`;
+        }
+        const center = el('div', 'fs-donut-center');
+        center.append(el('strong', '', formatNumber(stats.total)), el('span', '', '总收藏'));
+        donut.appendChild(center);
+        donutWrap.appendChild(donut);
+
+        const legend = el('div', 'fs-legend');
+        for (const segment of segments) {
+            const row = el('div', 'fs-legend-row');
+            const dot = el('span', 'fs-legend-dot');
+            dot.style.background = segment.color;
+            const pct = stats.total ? Math.round((segment.value / stats.total) * 100) : 0;
+            row.append(dot, el('span', 'fs-legend-label', segment.label), el('span', 'fs-legend-val', `${formatNumber(segment.value)} · ${pct}%`));
+            legend.appendChild(row);
+        }
+        if (!segments.length) legend.appendChild(el('div', 'fs-mini-empty', '暂无数据'));
+
+        const coverage = el('div', 'fs-coverage');
+        const coverageRows = [
+            { label: '女优信息', value: stats.withActress, tone: 'violet' },
+            { label: '题材标签', value: stats.withGenre, tone: 'pink' },
+            { label: '发行商', value: stats.withMaker, tone: 'emerald' },
+            { label: '番号识别', value: stats.withCode, tone: 'blue' }
+        ];
+        for (const row of coverageRows) {
+            const pct = stats.total ? Math.round((row.value / stats.total) * 100) : 0;
+            const line = el('div', 'fs-cov-row');
+            const head = el('div', 'fs-cov-head');
+            head.append(el('span', '', row.label), el('span', '', `${pct}%`));
+            const bar = el('div', 'fs-cov-bar');
+            const fill = el('div', 'fs-cov-fill');
+            fill.classList.add(`is-${row.tone}`);
+            fill.style.width = `${pct}%`;
+            bar.appendChild(fill);
+            line.append(head, bar);
+            coverage.appendChild(line);
+        }
+
+        body.append(donutWrap, legend, coverage);
+        section.appendChild(body);
+        return section;
+    }
+
+    function attachCover(img, url, label) {
+        const parent = img.parentElement;
+        const fallback = () => {
+            img.remove();
+            if (parent) parent.classList.remove('is-loading');
+            if (parent && !parent.querySelector('.fs-poster-fallback')) {
+                parent.classList.add('is-missing');
+                parent.appendChild(el('span', 'fs-poster-fallback', label || 'NO COVER'));
+            }
+        };
+        if (!url) {
+            fallback();
+            return;
+        }
+        if (parent) parent.classList.add('is-loading');
+        img.addEventListener('load', () => {
+            if (parent) parent.classList.remove('is-loading');
+        });
+        img.addEventListener('error', () => {
+            if (img.dataset.retry !== '1') {
+                img.dataset.retry = '1';
+                img.referrerPolicy = 'no-referrer';
+                img.src = url;
+                return;
+            }
+            fallback();
+        });
+        img.referrerPolicy = 'no-referrer';
+        img.src = url;
+    }
+
+    function buildRow(item) {
+        const row = el('a', 'fs-row');
+        row.href = item.href;
+        row.target = '_blank';
+        row.rel = 'noopener noreferrer';
+        row.title = `${item.code || ''} ${item.title || ''}`.trim();
+        const cover = el('div', 'fs-row-cover');
+        if (item.cover) {
+            const img = el('img', 'fs-row-img');
+            img.src = item.cover;
+            img.alt = item.code || item.title || '';
+            img.setAttribute('loading', 'lazy');
+            img.setAttribute('decoding', 'async');
+            img.addEventListener('error', () => img.remove());
+            cover.appendChild(img);
+        } else {
+            cover.appendChild(el('span', 'fs-row-noimg', item.code || '—'));
+        }
+        const main = el('div', 'fs-row-main');
+        main.appendChild(el('div', 'fs-row-title', item.title || item.code || '未命名'));
+        const sub = [item.code, item.actress.join(' / '), item.genre.slice(0, 3).join(' / ')].filter(Boolean).join(' · ');
+        main.appendChild(el('div', 'fs-row-sub', sub || '—'));
+        const meta = el('div', 'fs-row-meta');
+        if (item.progress && item.progress.started) {
+            const chip = el('span', 'fs-row-progress', item.progress.completed ? '已看完' : `${item.progress.percent}%`);
+            if (item.progress.completed) chip.classList.add('is-done');
+            meta.appendChild(chip);
+        }
+        if (item.duration) meta.appendChild(el('span', 'fs-row-dur', item.duration));
+        meta.appendChild(el('span', 'fs-row-site', (SITE_INFO[item.site] || SITE_INFO.missav).label));
+        row.append(cover, main, meta);
+        return row;
+    }
+
+    function buildPoster(item) {
+        const link = el('a', 'fs-poster');
+        link.href = item.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = item.title;
+
+        const media = el('div', 'fs-poster-media');
+        const img = el('img', 'fs-poster-img');
+        img.setAttribute('loading', 'lazy');
+        img.setAttribute('decoding', 'async');
+        img.alt = item.code || item.title;
+        media.appendChild(img);
+        attachCover(img, item.cover, item.code || 'NO COVER');
+
+        if (item.code) media.appendChild(el('span', 'fs-poster-code', item.code));
+        if (item.duration) media.appendChild(el('span', 'fs-poster-dur', item.duration));
+        const open = el('span', 'fs-poster-open');
+        open.appendChild(icon(ICONS.external));
+        media.appendChild(open);
+        if (item.code) {
+            const actions = el('div', 'fs-poster-actions');
+            const copyBtn = el('button', 'fs-icon-btn');
+            copyBtn.type = 'button';
+            copyBtn.dataset.act = 'copy';
+            copyBtn.dataset.code = item.code;
+            copyBtn.title = `复制番号 ${item.code}`;
+            copyBtn.appendChild(icon(ICONS.copy));
+            const searchBtn = el('button', 'fs-icon-btn');
+            searchBtn.type = 'button';
+            searchBtn.dataset.act = 'search';
+            searchBtn.dataset.code = item.code;
+            searchBtn.title = '在 JavDB 搜索该番号';
+            searchBtn.appendChild(icon(ICONS.search));
+            actions.append(copyBtn, searchBtn);
+            media.appendChild(actions);
+        }
+
+        if (item.progress && item.progress.started) {
+            const track = el('div', 'fs-poster-progress');
+            const fill = el('div', 'fs-poster-progress-fill');
+            fill.style.width = `${item.progress.percent}%`;
+            if (item.progress.completed) fill.classList.add('is-done');
+            track.appendChild(fill);
+            media.appendChild(track);
+            const chip = el('span', 'fs-poster-progress-chip', item.progress.completed ? '已看完' : `${item.progress.percent}%`);
+            if (item.progress.completed) chip.classList.add('is-done');
+            media.appendChild(chip);
+        }
+
+        const info = el('div', 'fs-poster-info');
+        info.appendChild(el('div', 'fs-poster-title', item.title || item.code || '未命名'));
+
+        const siteInfo = SITE_INFO[item.site] || SITE_INFO.missav;
+        const meta = el('div', 'fs-poster-meta');
+        const dot = el('span', 'fs-site-dot');
+        dot.style.background = siteInfo.color;
+        meta.appendChild(dot);
+        if (item.actress.length) {
+            meta.appendChild(el('span', 'fs-poster-actress', item.actress.join(' / ')));
+        } else {
+            meta.appendChild(el('span', 'fs-poster-actress', item.maker || siteInfo.label));
+        }
+        info.appendChild(meta);
+
+        link.append(media, info);
+        return link;
+    }
+
+    function matchQuery(item, query) {
+        const terms = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+        if (!terms.length) return true;
+        const hay = item.search || '';
+        return terms.every(term => hay.includes(term));
+    }
+
+    function filteredItems() {
+        const query = ui.filter.query.trim().toLowerCase();
+        let list = viewItems().slice();
+        if (ui.filter.actress) list = list.filter(item => item.actress.includes(ui.filter.actress));
+        if (ui.filter.genre) list = list.filter(item => item.genre.includes(ui.filter.genre));
+        if (ui.filter.prefix) {
+            const want = ui.filter.prefix.toUpperCase();
+            list = list.filter(item => String(item.code || '').split('-')[0].toUpperCase() === want);
+        }
+        if (ui.filter.progress) {
+            const mode = ui.filter.progress;
+            list = list.filter(item => {
+                const pb = item.progress;
+                if (mode === 'unseen') return !pb || !pb.started;
+                if (mode === 'watching') return Boolean(pb && pb.started && !pb.completed);
+                if (mode === 'done') return Boolean(pb && pb.completed);
+                return true;
+            });
+        }
+        if (ui.filter.missing) {
+            const kind = ui.filter.missing;
+            list = list.filter(item => {
+                if (kind === 'actress') return !item.actress.length;
+                if (kind === 'genre') return !item.genre.length;
+                if (kind === 'cover') return !item.cover;
+                if (kind === 'duration') return !item.minutes;
+                if (kind === 'code') return !item.code;
+                if (kind === 'pending') return Boolean(item.code) && (!item.actress.length || !item.genre.length);
+                return true;
+            });
+        }
+        if (query) list = list.filter(item => matchQuery(item, query));
+        const sort = ui.filter.sort;
+        list.sort((a, b) => {
+            if (sort === 'new') return (b.firstSeen || 0) - (a.firstSeen || 0);
+            if (sort === 'recent') return (b.progress ? b.progress.watchedAt : 0) - (a.progress ? a.progress.watchedAt : 0);
+            if (sort === 'code') return String(a.code || 'zzz').localeCompare(String(b.code || 'zzz'));
+            if (sort === 'duration') return (b.minutes || 0) - (a.minutes || 0);
+            if (a.site !== b.site) return a.site === 'missav' ? -1 : 1;
+            return (a.rank || 0) - (b.rank || 0);
+        });
+        return list;
+    }
+
+    function filteredStats(list) {
+        let watching = 0;
+        let completed = 0;
+        for (const item of list) {
+            const pb = item.progress;
+            if (!pb || !pb.started) continue;
+            if (pb.completed) completed++;
+            else watching++;
+        }
+        return { watching, completed, started: watching + completed };
+    }
+
+    function paintWall() {
+        if (!ui.wallEl) return;
+        const list = filteredItems();
+        const shown = list.slice(0, ui.filter.limit);
+        const progressStats = filteredStats(list);
+        ui.wallCount.textContent = `共 ${formatNumber(list.length)} 部 · 已显示 ${formatNumber(shown.length)} 部`
+            + (progressStats.started ? ` · 观看中 ${formatNumber(progressStats.watching)} · 已看完 ${formatNumber(progressStats.completed)}` : '');
+
+        const chips = ui.chipWrap;
+        chips.replaceChildren();
+        const chipDefs = [];
+        if (ui.filter.actress) chipDefs.push(['actress', `女优：${ui.filter.actress}`]);
+        if (ui.filter.genre) chipDefs.push(['genre', `题材：${ui.filter.genre}`]);
+        if (ui.filter.prefix) chipDefs.push(['prefix', `番号：${ui.filter.prefix}`]);
+        if (ui.filter.missing) chipDefs.push(['missing', `缺失：${MISSING_LABELS[ui.filter.missing] || ui.filter.missing}`]);
+        if (ui.filter.progress) chipDefs.push(['progress', `进度：${PROGRESS_LABELS[ui.filter.progress] || ui.filter.progress}`]);
+        if (ui.filter.query.trim()) chipDefs.push(['query', `搜索：${ui.filter.query.trim()}`]);
+        for (const [kind, label] of chipDefs) {
+            const chip = el('button', 'fs-chip');
+            chip.type = 'button';
+            chip.append(el('span', '', label), icon(ICONS.close));
+            chip.addEventListener('click', () => {
+                if (kind === 'actress') ui.filter.actress = '';
+                if (kind === 'genre') ui.filter.genre = '';
+                if (kind === 'prefix') ui.filter.prefix = '';
+                if (kind === 'missing') ui.filter.missing = '';
+                if (kind === 'progress') {
+                    ui.filter.progress = '';
+                    if (ui.progressSelect) ui.progressSelect.value = '';
+                }
+                if (kind === 'query') {
+                    ui.filter.query = '';
+                    if (ui.searchInput) ui.searchInput.value = '';
+                }
+                ui.filter.limit = 48;
+                paintWall();
+            });
+            chips.appendChild(chip);
+        }
+        chips.hidden = !chipDefs.length;
+
+        const listMode = ui.filter.view === 'list';
+        const signature = `${dataRev}|${ui.filter.query}|${ui.filter.actress}|${ui.filter.genre}|${ui.filter.prefix}|${ui.filter.missing}|${ui.filter.progress}|${ui.filter.sort}|${ui.filter.view}`;
+        const previous = ui.lastRender;
+        const canAppend = Boolean(previous)
+            && previous.signature === signature
+            && previous.count > 0
+            && shown.length > previous.count
+            && ui.wallEl.childElementCount === previous.count;
+
+        ui.wallEl.classList.toggle('is-list', listMode);
+        if (!shown.length) {
+            ui.wallEl.replaceChildren();
+            const empty = el('div', 'fs-empty');
+            const ico = el('div', 'fs-empty-ico');
+            ico.appendChild(icon(ICONS.film));
+            empty.append(ico, el('h3', '', list.length ? '没有匹配的影片' : '还没有收藏数据'),
+                el('p', '', list.length ? '换个关键词，或清除当前筛选条件' : '登录站点后点上方「同步 MissAV / 同步 Jable」，抓取完成后这里会自动生成海报墙'));
+            ui.wallEl.appendChild(empty);
+            ui.lastRender = null;
+        } else if (canAppend) {
+            const fragment = document.createDocumentFragment();
+            for (const item of shown.slice(previous.count)) fragment.appendChild(listMode ? buildRow(item) : buildPoster(item));
+            ui.wallEl.appendChild(fragment);
+            ui.lastRender = { signature, count: shown.length };
+        } else {
+            ui.wallEl.replaceChildren();
+            const fragment = document.createDocumentFragment();
+            for (const item of shown) fragment.appendChild(listMode ? buildRow(item) : buildPoster(item));
+            ui.wallEl.appendChild(fragment);
+            ui.lastRender = { signature, count: shown.length };
+        }
+
+        if (ui.moreBtn) {
+            ui.moreBtn.hidden = list.length <= shown.length;
+            if (!ui.moreBtn.hidden) ui.moreBtn.textContent = `加载更多（剩余 ${formatNumber(list.length - shown.length)} 部）`;
+        }
+    }
+
+    function svgNode(tag, attrs) {
+        const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        if (attrs) {
+            for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+        }
+        return node;
+    }
+
+    let networkRev = -1;
+    let networkGraph = null;
+
+    function buildCooccurrence(list, maxNodes) {
+        if (networkRev === dataRev && networkGraph && networkGraph.limit === maxNodes) return networkGraph;
+        const films = [];
+        const weight = new Map();
+        const edges = new Map();
+        for (const item of list) {
+            if (!item.actress || item.actress.length < 2) continue;
+            const names = Array.from(new Set(item.actress.map(name => String(name || '').trim()).filter(Boolean)));
+            if (names.length < 2) continue;
+            films.push(item);
+            for (const name of names) weight.set(name, (weight.get(name) || 0) + 1);
+            for (let i = 0; i < names.length; i++) {
+                for (let j = i + 1; j < names.length; j++) {
+                    const a = names[i] < names[j] ? names[i] : names[j];
+                    const b = names[i] < names[j] ? names[j] : names[i];
+                    const key = `${a}||${b}`;
+                    const edge = edges.get(key) || { a, b, count: 0 };
+                    edge.count += 1;
+                    edges.set(key, edge);
+                }
+            }
+        }
+        const ranked = Array.from(weight.entries())
+            .sort((x, y) => y[1] - x[1] || String(x[0]).localeCompare(String(y[0])))
+            .slice(0, maxNodes || 40);
+        const allowed = new Set(ranked.map(entry => entry[0]));
+        const nodes = ranked.map(([name, count]) => ({ name, count }));
+        const links = Array.from(edges.values())
+            .filter(edge => allowed.has(edge.a) && allowed.has(edge.b))
+            .sort((x, y) => y.count - x.count);
+        networkRev = dataRev;
+        networkGraph = { nodes, links, films: films.length, limit: maxNodes };
+        return networkGraph;
+    }
+
+    function layoutNetwork(nodes, edges, width, height) {
+        const index = new Map(nodes.map((node, i) => [node.name, i]));
+        const links = edges
+            .map(edge => ({ s: index.get(edge.a), t: index.get(edge.b), w: edge.count }))
+            .filter(link => link.s !== undefined && link.t !== undefined && link.s !== link.t);
+        const count = nodes.length;
+        const cx = width / 2;
+        const cy = height / 2;
+        nodes.forEach((node, i) => {
+            const angle = (i / Math.max(1, count)) * Math.PI * 2;
+            const radius = Math.min(width, height) * (0.16 + 0.16 * ((i % 3) / 2));
+            node.x = cx + Math.cos(angle) * radius;
+            node.y = cy + Math.sin(angle) * radius;
+            node.vx = 0;
+            node.vy = 0;
+        });
+        if (count < 2) return links;
+        const area = width * height;
+        const k = Math.sqrt(area / count) * 0.58;
+        const steps = count > 28 ? 220 : 300;
+        for (let step = 0; step < steps; step++) {
+            const alpha = 1 - step / steps;
+            for (let i = 0; i < count; i++) {
+                const a = nodes[i];
+                for (let j = i + 1; j < count; j++) {
+                    const b = nodes[j];
+                    let dx = a.x - b.x;
+                    let dy = a.y - b.y;
+                    let d2 = dx * dx + dy * dy;
+                    if (d2 < 0.01) {
+                        dx = Math.random() - 0.5;
+                        dy = Math.random() - 0.5;
+                        d2 = 0.01;
+                    }
+                    const d = Math.sqrt(d2);
+                    const force = (k * k) / d2;
+                    const fx = (dx / d) * force;
+                    const fy = (dy / d) * force;
+                    a.vx += fx;
+                    a.vy += fy;
+                    b.vx -= fx;
+                    b.vy -= fy;
+                }
+            }
+            for (const link of links) {
+                const a = nodes[link.s];
+                const b = nodes[link.t];
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                const target = k * (1 + 0.5 / Math.sqrt(link.w));
+                const force = (d - target) * 0.09 * Math.min(3, link.w) * alpha;
+                const fx = (dx / d) * force;
+                const fy = (dy / d) * force;
+                a.vx += fx;
+                a.vy += fy;
+                b.vx -= fx;
+                b.vy -= fy;
+            }
+            for (const node of nodes) {
+                node.vx += (cx - node.x) * 0.014;
+                node.vy += (cy - node.y) * 0.014;
+                node.x += node.vx * 0.5 * alpha;
+                node.y += node.vy * 0.5 * alpha;
+                node.vx *= 0.6;
+                node.vy *= 0.6;
+                const pad = 58;
+                node.x = Math.max(pad, Math.min(width - pad, node.x));
+                node.y = Math.max(pad, Math.min(height - pad, node.y));
+            }
+        }
+        fitNetwork(nodes, width, height);
+        return links;
+    }
+
+    function fitNetwork(nodes, width, height) {
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const node of nodes) {
+            if (node.x < minX) minX = node.x;
+            if (node.y < minY) minY = node.y;
+            if (node.x > maxX) maxX = node.x;
+            if (node.y > maxY) maxY = node.y;
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+        const padX = width < 500 ? 44 : (width < 800 ? 56 : 74);
+        const padY = width < 500 ? 32 : (width < 800 ? 40 : 46);
+        const boxW = Math.max(1, maxX - minX);
+        const boxH = Math.max(1, maxY - minY);
+        const scale = Math.min((width - padX * 2) / boxW, (height - padY * 2) / boxH, 2.1);
+        const midX = (minX + maxX) / 2;
+        const midY = (minY + maxY) / 2;
+        for (const node of nodes) {
+            node.x = width / 2 + (node.x - midX) * scale;
+            node.y = height / 2 + (node.y - midY) * scale;
+        }
+    }
+
+    function buildNetworkSection(list) {
+        const section = card('女优合作网络', '同一部作品同框即连线，线越粗合作越多；点节点可在海报墙筛选', ICONS.network);
+        const wrap = el('div', 'fs-network');
+        section.appendChild(wrap);
+        const graph = buildCooccurrence(list, 40);
+        if (!graph.nodes.length) {
+            wrap.appendChild(el('div', 'fs-mini-empty', '还没有合作数据：需要作品里至少有两位女优，点「深度补全」后自动生成'));
+            return section;
+        }
+
+        const viewportWidth = typeof window.innerWidth === 'number' ? window.innerWidth : 1200;
+        const width = viewportWidth < 640 ? 360 : (viewportWidth < 1000 ? 620 : 900);
+        const compact = width < 900;
+        const height = width < 500
+            ? 320
+            : (compact ? 360 : Math.min(460, Math.max(300, 220 + graph.nodes.length * 5)));
+        let links;
+        if (graph.layout && graph.layout.width === width && graph.layout.height === height) {
+            links = graph.layout.links;
+        } else {
+            links = layoutNetwork(graph.nodes, graph.links, width, height);
+            graph.layout = { width, height, links };
+        }
+        const maxCount = graph.nodes[0].count || 1;
+        const maxLink = links.length ? links[0].w : 1;
+
+        const svg = svgNode('svg', { viewBox: `0 0 ${width} ${height}`, class: 'fs-net-svg', role: 'img' });
+        const linkLayer = svgNode('g', { class: 'fs-net-links' });
+        const nodeLayer = svgNode('g', { class: 'fs-net-nodes' });
+        const linkEls = links.map(link => {
+            const a = graph.nodes[link.s];
+            const b = graph.nodes[link.t];
+            const line = svgNode('line', {
+                x1: a.x.toFixed(1),
+                y1: a.y.toFixed(1),
+                x2: b.x.toFixed(1),
+                y2: b.y.toFixed(1),
+                'stroke-width': (0.7 + (link.w / maxLink) * 2.4).toFixed(2)
+            });
+            line.classList.add('fs-net-link');
+            line.setAttribute('data-s', String(link.s));
+            line.setAttribute('data-t', String(link.t));
+            const title = svgNode('title');
+            title.textContent = `${a.name} × ${b.name} · 合作 ${link.w} 部`;
+            line.appendChild(title);
+            linkLayer.appendChild(line);
+            return line;
+        });
+
+        const labelled = new Set(graph.nodes.slice().sort((a, b) => b.count - a.count).slice(0, compact ? 9 : 12).map(node => node.name));
+        graph.nodes.forEach((node, index) => {
+            const radius = (compact ? 4.5 : 5) + Math.sqrt(node.count / maxCount) * (compact ? 7.5 : 10);
+            const group = svgNode('g', { class: 'fs-net-node', tabindex: '0', role: 'button' });
+            group.setAttribute('aria-label', `${node.name}，收藏 ${node.count} 部`);
+            const circle = svgNode('circle', {
+                cx: node.x.toFixed(1),
+                cy: node.y.toFixed(1),
+                r: radius.toFixed(1)
+            });
+            circle.classList.add('fs-net-dot');
+            const title = svgNode('title');
+            title.textContent = `${node.name} · 收藏 ${node.count} 部`;
+            group.append(circle, title);
+            if (labelled.has(node.name)) {
+                const label = svgNode('text', {
+                    x: node.x.toFixed(1),
+                    y: (node.y + radius + (compact ? 10 : 12)).toFixed(1),
+                    'text-anchor': 'middle'
+                });
+                label.classList.add('fs-net-label');
+                label.textContent = node.name;
+                group.appendChild(label);
+            }
+            const focus = () => {
+                svg.classList.add('is-focus');
+                group.classList.add('is-active');
+                for (const line of linkEls) {
+                    const hit = line.getAttribute('data-s') === String(index) || line.getAttribute('data-t') === String(index);
+                    line.classList.toggle('is-hot', hit);
+                    line.classList.toggle('is-cold', !hit);
+                }
+            };
+            const blur = () => {
+                svg.classList.remove('is-focus');
+                group.classList.remove('is-active');
+                for (const line of linkEls) line.classList.remove('is-hot', 'is-cold');
+            };
+            group.addEventListener('mouseenter', focus);
+            group.addEventListener('mouseleave', blur);
+            group.addEventListener('focus', focus);
+            group.addEventListener('blur', blur);
+            group.addEventListener('click', () => applyFilter('actress', node.name));
+            group.addEventListener('keydown', event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                applyFilter('actress', node.name);
+            });
+            nodeLayer.appendChild(group);
+        });
+
+        svg.append(linkLayer, nodeLayer);
+        wrap.appendChild(svg);
+
+        const topPair = links[0];
+        const foot = el('div', 'fs-net-foot');
+        foot.appendChild(el('span', '', `覆盖 ${formatNumber(graph.films)} 部双人以上作品 · ${formatNumber(graph.nodes.length)} 位女优 · ${formatNumber(links.length)} 条合作关系`));
+        if (topPair) {
+            const a = graph.nodes[topPair.s];
+            const b = graph.nodes[topPair.t];
+            const best = el('button', 'fs-net-best');
+            best.type = 'button';
+            best.textContent = `合作最多：${a.name} × ${b.name}（${topPair.w} 部）`;
+            best.title = '点击筛选这两位女优中排前的合作作品';
+            best.addEventListener('click', () => applyFilter('actress', a.count >= b.count ? a.name : b.name));
+            foot.appendChild(best);
+        }
+        wrap.appendChild(foot);
+        return section;
+    }
+
+    function buildWallSection() {
+        const section = card('收藏海报墙', '点海报直达影片页，支持按女优 / 题材 / 关键词筛选', ICONS.grid);
+        const toolbar = el('div', 'fs-wall-toolbar');
+
+        const searchBox = el('div', 'fs-search');
+        searchBox.appendChild(icon(ICONS.search));
+        const input = el('input', 'fs-search-input');
+        input.type = 'search';
+        input.placeholder = '搜索番号 / 标题 / 女优 / 题材';
+        input.value = ui.filter.query;
+        ui.searchInput = input;
+        let timer = 0;
+        input.addEventListener('input', () => {
+            ui.filter.query = input.value;
+            ui.filter.limit = 48;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(paintWall, 160);
+        });
+        searchBox.appendChild(input);
+
+        const randomBtn = el('button', 'fs-btn fs-random-btn');
+        randomBtn.type = 'button';
+        randomBtn.title = '随机抽一部（快捷键 R）';
+        randomBtn.appendChild(icon(ICONS.dice));
+        randomBtn.appendChild(el('span', '', '随机一部'));
+        randomBtn.addEventListener('click', openRandom);
+
+        const viewBtn = el('button', 'fs-btn fs-view-btn');
+        viewBtn.type = 'button';
+        viewBtn.title = '切换 海报 / 列表 视图';
+        const paintViewBtn = () => {
+            viewBtn.replaceChildren(
+                icon(ui.filter.view === 'list' ? ICONS.grid : ICONS.list),
+                el('span', '', ui.filter.view === 'list' ? '海报' : '列表')
+            );
+        };
+        paintViewBtn();
+        viewBtn.addEventListener('click', () => {
+            ui.filter.view = ui.filter.view === 'list' ? 'grid' : 'list';
+            state.settings.view = ui.filter.view;
+            persistSettings();
+            paintViewBtn();
+            paintWall();
+        });
+
+        const progressSelect = el('select', 'fs-select fs-progress-select');
+        progressSelect.title = '按播放进度筛选（数据来自观影行为统计）';
+        for (const [value, label] of [['', '全部进度'], ['unseen', '未观看'], ['watching', '观看中'], ['done', '已看完']]) {
+            const option = el('option', '', label);
+            option.value = value;
+            if (ui.filter.progress === value) option.selected = true;
+            progressSelect.appendChild(option);
+        }
+        progressSelect.addEventListener('change', () => {
+            ui.filter.progress = progressSelect.value;
+            ui.filter.limit = 48;
+            paintWall();
+        });
+        ui.progressSelect = progressSelect;
+
+        const select = el('select', 'fs-select');
+        for (const [value, label] of [['rank', '收藏顺序'], ['new', '最新收录'], ['code', '番号'], ['duration', '片长'], ['recent', '最近观看']]) {
+            const option = el('option', '', label);
+            option.value = value;
+            if (ui.filter.sort === value) option.selected = true;
+            select.appendChild(option);
+        }
+        select.addEventListener('change', () => {
+            ui.filter.sort = select.value;
+            ui.filter.limit = 48;
+            state.settings.sort = select.value;
+            persistSettings();
+            paintWall();
+        });
+
+        const count = el('span', 'fs-count', '共 0 部');
+        ui.wallCount = count;
+        toolbar.append(searchBox, randomBtn, viewBtn, progressSelect, select, count);
+
+        const chips = el('div', 'fs-chips');
+        chips.hidden = true;
+        ui.chipWrap = chips;
+
+        const grid = el('div', 'fs-wall');
+        grid.addEventListener('click', event => {
+            const target = event.target && event.target.closest ? event.target.closest('.fs-icon-btn') : null;
+            if (!target || !target.dataset || !target.dataset.act) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const code = target.dataset.code || '';
+            if (target.dataset.act === 'copy') copyText(code);
+            else if (target.dataset.act === 'search') openInNewTab(`https://javdb.com/search?q=${encodeURIComponent(code)}&f=all`);
+        });
+        ui.wallEl = grid;
+        ui.wallWrap = section;
+
+        const more = el('button', 'fs-btn fs-more');
+        more.type = 'button';
+        more.textContent = '加载更多';
+        more.hidden = true;
+        if (typeof IntersectionObserver === 'function') {
+            const observer = new IntersectionObserver(entries => {
+                if (!entries.some(entry => entry.isIntersecting)) return;
+                if (!ui.moreBtn || ui.moreBtn.hidden) return;
+                ui.filter.limit += 60;
+                paintWall();
+            }, { rootMargin: '240px 0px' });
+            observer.observe(more);
+            ui.observer = observer;
+        }
+
+        more.addEventListener('click', () => {
+            ui.filter.limit += 60;
+            paintWall();
+        });
+        ui.moreBtn = more;
+
+        const noticeWrap = el('div', 'fs-notices');
+        ui.noticeWrap = noticeWrap;
+        section.append(toolbar, chips, noticeWrap, grid, more);
+        return section;
+    }
+
+    function refreshAll() {
+        if (!ui.root) return;
+        const cleaned = purgeJunkItems();
+        if (cleaned) pushLog(`🧹 已剔除 ${cleaned} 条非影片条目`);
+        const list = viewItems();
+        const stats = computeStats(list);
+
+        if (ui.sourceWrap) {
+            const fresh = el('div', 'fs-sync-grid');
+            fresh.append(buildSourceCard(CURRENT_SITE));
+            ui.sourceWrap.replaceWith(fresh);
+            ui.sourceWrap = fresh;
+        }
+
+        if (ui.kpiGrid) {
+            const topActress = stats.actress[0] ? `${stats.actress[0][0]} ×${stats.actress[0][1]}` : '暂无女优数据';
+            const topGenre = stats.genre[0] ? `${stats.genre[0][0]} ×${stats.genre[0][1]}` : '暂无题材数据';
+            const codePct = stats.total ? Math.round((stats.withCode / stats.total) * 100) : 0;
+            const meta = state.meta[CURRENT_SITE] || {};
+            const syncFoot = meta.lastSync
+                ? `共 ${meta.pages || 0} 页 · 上次 ${formatTime(meta.lastSync)}`
+                : '还没有同步过';
+            const kpis = [
+                ['收藏总数', '部', syncFoot, ICONS.film, 'blue', stats.total, 0, 'all'],
+                ['女优覆盖', '位', topActress, ICONS.user, 'violet', stats.actress.length, 0, 'actress'],
+                ['题材覆盖', '类', topGenre, ICONS.tag, 'pink', stats.genre.length, 0, 'genre'],
+                ['番号识别率', '%', `已识别 ${formatNumber(stats.withCode)} 部`, ICONS.chart, 'emerald', codePct, 0, 'code'],
+                ['平均片长', '分钟', stats.withDuration ? `基于 ${formatNumber(stats.withDuration)} 部带时长` : '等待补全时长', ICONS.clock, 'amber', Math.round(stats.avgMinutes), 0, 'duration'],
+                ['待补全', '个', stats.pending ? '缺女优或题材，点「深度补全」' : '元数据已补全', ICONS.spark, 'amber', stats.pending, 0, 'pending']
+            ];
+            const grid = el('div', 'fs-kpi-grid');
+            for (const [label, unit, foot, paths, tone, value, decimals, missing] of kpis) {
+                const cardEl = buildKpi(label, unit, foot, paths, tone, value, decimals);
+                cardEl.classList.add('is-clickable');
+                cardEl.title = missing === 'all'
+                    ? '点击清除全部筛选'
+                    : `点击筛出${MISSING_LABELS[missing] || ''}的影片`;
+                cardEl.addEventListener('click', () => {
+                    if (missing === 'all') clearFilters();
+                    else applyFilter('missing', missing);
+                });
+                grid.appendChild(cardEl);
+            }
+            ui.kpiGrid.replaceWith(grid);
+            ui.kpiGrid = grid;
+        }
+
+        applyModuleVisibility();
+
+        if (ui.noticeWrap) {
+            ui.noticeWrap.replaceChildren();
+            const dupes = findDuplicates();
+            const extra = dupes.reduce((sum, group) => sum + group.items.length - 1, 0);
+            const stale = ((state.meta[CURRENT_SITE] || {}).stale || []).filter(id => state.items[id]);
+            if (stale.length) {
+                const bar = el('div', 'fs-notice');
+                bar.appendChild(el('span', '', `有 ${formatNumber(stale.length)} 条已不在收藏中（可能是取消收藏或换了路径）`));
+                const btn = el('button', 'fs-notice-btn', '清理');
+                btn.type = 'button';
+                btn.addEventListener('click', cleanStale);
+                bar.appendChild(btn);
+                ui.noticeWrap.appendChild(bar);
+            }
+
+            if (dupes.length) {
+                const bar = el('div', 'fs-notice');
+                bar.appendChild(el('span', '', `发现 ${dupes.length} 个重复番号（多出 ${formatNumber(extra)} 条），可能是不同语言路径的同一部`));
+                const btn = el('button', 'fs-notice-btn', '一键去重');
+                btn.type = 'button';
+                btn.addEventListener('click', dedupeItems);
+                bar.appendChild(btn);
+                ui.noticeWrap.appendChild(bar);
+            }
+        }
+
+        if (ui.trendWrap) {
+            const fresh = buildTrendSection(stats, list);
+            ui.trendWrap.replaceWith(fresh);
+            ui.trendWrap = fresh;
+        }
+
+        if (ui.rankWrap) {
+            const fresh = el('div', 'fs-duo');
+            const actressCard = card('女优 TOP 12', '按收藏中出现的作品数排序', ICONS.user);
+            actressCard.appendChild(rankList(stats.actress, {
+                tone: 'violet',
+                empty: '还没有女优数据，点「深度补全详情」后再看',
+                onPick: name => applyFilter('actress', name)
+            }));
+            if (stats.actress.length) {
+                actressCard.appendChild(el('div', 'fs-rank-hint', '点击任意女优，可在下方海报墙快速筛选'));
+            }
+            const genreCard = card('题材 TOP 12', '常见题材分布', ICONS.tag);
+            genreCard.appendChild(rankList(stats.genre, {
+                tone: 'pink',
+                empty: '还没有题材数据，点「深度补全详情」后再看',
+                onPick: name => applyFilter('genre', name)
+            }));
+            if (stats.genre.length) {
+                genreCard.appendChild(el('div', 'fs-rank-hint', '点击任意题材，可在下方海报墙快速筛选'));
+            }
+            fresh.append(actressCard, genreCard);
+            ui.rankWrap.replaceWith(fresh);
+            ui.rankWrap = fresh;
+        }
+
+        if (ui.prefixWrap) {
+            const fresh = el('div', 'fs-duo');
+            const prefixCard = card('番号前缀分布', '识别厂牌 / 系列，看收藏口味集中在哪里', ICONS.chart);
+            prefixCard.appendChild(rankList(stats.prefix, {
+                tone: 'blue',
+                empty: '还没有识别到番号',
+                onPick: name => applyFilter('prefix', name)
+            }));
+            if (stats.prefix.length) {
+                prefixCard.appendChild(el('div', 'fs-rank-hint', '点击任意厂牌，快速筛出同一番号前缀的作品'));
+            }
+            const composition = buildComposition(stats);
+            fresh.append(prefixCard, composition);
+            ui.prefixWrap.replaceWith(fresh);
+            ui.prefixWrap = fresh;
+        }
+
+        if (ui.networkWrap) {
+            const fresh = buildNetworkSection(list);
+            ui.networkWrap.replaceWith(fresh);
+            ui.networkWrap = fresh;
+        }
+
+        paintWall();
+    }
+
+    function clearFilters() {
+        ui.filter.query = '';
+        ui.filter.actress = '';
+        ui.filter.genre = '';
+        ui.filter.prefix = '';
+        ui.filter.missing = '';
+        ui.filter.progress = '';
+        ui.filter.limit = 48;
+        if (ui.searchInput) ui.searchInput.value = '';
+        if (ui.progressSelect) ui.progressSelect.value = '';
+        paintWall();
+    }
+
+    function applyModuleVisibility() {
+        const mods = Object.assign({ trend: true, rank: true, prefix: true, network: true, wall: true }, state.settings.modules || {});
+        if (ui.trendWrap) ui.trendWrap.hidden = !mods.trend;
+        if (ui.rankWrap) ui.rankWrap.hidden = !mods.rank;
+        if (ui.prefixWrap) ui.prefixWrap.hidden = !mods.prefix;
+        if (ui.networkWrap) ui.networkWrap.hidden = !mods.network;
+        if (ui.wallWrap) ui.wallWrap.hidden = !mods.wall;
+    }
+
+    function applyFilter(kind, value) {
+        if (kind === 'actress') ui.filter.actress = ui.filter.actress === value ? '' : value;
+        if (kind === 'progress') {
+            ui.filter.progress = ui.filter.progress === value ? '' : value;
+            if (ui.progressSelect) ui.progressSelect.value = ui.filter.progress;
+        }
+        if (kind === 'genre') ui.filter.genre = ui.filter.genre === value ? '' : value;
+        if (kind === 'prefix') ui.filter.prefix = ui.filter.prefix === value ? '' : value;
+        if (kind === 'missing') ui.filter.missing = ui.filter.missing === value ? '' : value;
+        ui.filter.limit = 48;
+        paintWall();
+        if (ui.wallEl && ui.wallEl.scrollIntoView) {
+            ui.wallEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
+
+    const CSS = `
+:host { all: initial; }
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.fs-page {
+  position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain; -webkit-tap-highlight-color: transparent;
+  background: #090a0f; color: #e6ecf7;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; color-scheme: dark;
+  --acc: #8fb2ff; --acc-soft: #c3d4ff; --acc2: #b49bff; --em: #34d399; --pink: #f472b6; --amber: #fbbf24;
+  --text: #e6ecf7; --sub: #9db0c7; --muted: #8494ab;
+  --card: rgba(148,163,184,.055); --line: rgba(148,163,184,.13);
+}
+.fs-page::-webkit-scrollbar { width: 10px; height: 10px; }
+.fs-page::-webkit-scrollbar-track { background: transparent; }
+.fs-page::-webkit-scrollbar-thumb { background: rgba(143,178,255,.22); border-radius: 999px; }
+.fs-page::-webkit-scrollbar-thumb:hover { background: rgba(143,178,255,.4); }
+.fs-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+.fs-bg::before {
+  content: ''; position: absolute; inset: 0;
+  background-image: linear-gradient(rgba(143,178,255,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(143,178,255,.045) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(circle at 50% 0, #000 0, transparent 72%);
+  mask-image: radial-gradient(circle at 50% 0, #000 0, transparent 72%);
+}
+.fs-bg::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(640px 320px at 100% 0, rgba(52,211,153,.10), transparent 70%),
+    radial-gradient(720px 360px at 0 100%, rgba(143,178,255,.10), transparent 70%),
+    radial-gradient(520px 260px at 50% -10%, rgba(180,155,255,.10), transparent 70%);
+}
+.fs-header {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 16px 28px;
+  background: rgba(9,10,15,.88);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.fs-brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.fs-brand-logo {
+  position: relative; isolation: isolate;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 12px;
+  background: linear-gradient(145deg, #5b7cf6 0%, #8b5cf6 58%, #b06ef2 100%);
+  border: 1px solid rgba(255,255,255,.26); color: #fff;
+  box-shadow: 0 10px 22px rgba(91,124,246,.34), inset 0 1px 0 rgba(255,255,255,.42);
+}
+.fs-brand-logo::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(120% 92% at 28% -6%, rgba(255,255,255,.34), transparent 62%);
+}
+.fs-brand-logo svg { width: 21px; height: 21px; stroke-width: 2; }
+.fs-brand-text { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.fs-brand-title { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+.fs-brand-badge {
+  font-size: 9.5px; letter-spacing: 1.4px; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px;
+  background: rgba(143,178,255,.15); color: var(--acc-soft);
+  border: 1px solid rgba(143,178,255,.34); white-space: nowrap;
+}
+.fs-header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; position: relative; }
+.fs-module-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 40; min-width: 168px; padding: 10px 12px; border-radius: 12px; background: #131a26; border: 1px solid rgba(148,163,184,.2); box-shadow: 0 18px 38px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 8px; }
+.fs-module-panel[hidden] { display: none; }
+.fs-module-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--sub); cursor: pointer; }
+.fs-module-row input { accent-color: #8fb2ff; width: 14px; height: 14px; cursor: pointer; }
+.fs-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 13px; border-radius: 9px;
+  border: 1px solid rgba(148,163,184,.24); background: rgba(148,163,184,.1);
+  color: var(--text); font-family: inherit; font-size: 12.5px; font-weight: 500;
+  cursor: pointer; transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+  white-space: nowrap;
+}
+.fs-btn:hover:not(:disabled) { background: rgba(148,163,184,.2); border-color: rgba(148,163,184,.4); color: #fff; }
+.fs-btn:active:not(:disabled) { transform: translateY(1px); }
+.fs-btn:disabled { opacity: .5; cursor: not-allowed; }
+.fs-btn .fs-ico svg { width: 15px; height: 15px; }
+.fs-btn-primary {
+  background: linear-gradient(135deg, #3b82f6, #2563eb); border-color: rgba(59,130,246,.5); color: #f8fafc;
+  box-shadow: 0 6px 16px rgba(37,99,235,.25);
+}
+.fs-btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, #4f8ef7, #2f6fe4); border-color: rgba(96,165,250,.7); }
+.fs-btn-danger { border-color: rgba(248,113,113,.36); background: rgba(248,113,113,.12); color: #fca5a5; }
+.fs-btn-danger:hover:not(:disabled) { background: rgba(248,113,113,.22); border-color: rgba(248,113,113,.55); color: #fee2e2; }
+.fs-btn-ghost-danger { border-color: rgba(248,113,113,.24); background: rgba(248,113,113,.06); color: #f0a6a6; }
+.fs-btn-ghost-danger:hover:not(:disabled) { background: rgba(248,113,113,.18); border-color: rgba(248,113,113,.5); color: #fecaca; }
+.fs-btn-close { border-color: rgba(143,178,255,.36); background: rgba(143,178,255,.14); color: var(--acc-soft); }
+.fs-btn-close:hover:not(:disabled) { background: rgba(143,178,255,.26); }
+.fs-ico { display: inline-flex; align-items: center; justify-content: center; }
+.fs-ico svg { width: 16px; height: 16px; }
+.fs-main { position: relative; z-index: 1; max-width: 1560px; margin: 0 auto; padding: 22px 28px 80px; }
+.fs-card {
+  padding: 18px; border-radius: 16px;
+  background: var(--card); border: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.fs-card-head { margin-bottom: 14px; }
+.fs-card-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: .2px; }
+.fs-card-title .fs-ico { color: var(--acc); }
+.fs-card-title .fs-ico svg { width: 17px; height: 17px; }
+.fs-card-sub { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); }
+.fs-sync-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.fs-source {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 16px 18px; border-radius: 12px;
+  background: linear-gradient(120deg, rgba(148,163,184,.075), rgba(148,163,184,.03));
+  border: 1px solid rgba(148,163,184,.13);
+}
+.fs-source-main { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.fs-source-name { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--sub); }
+.fs-source-meta { font-size: 11px; color: var(--muted); }
+.fs-source-stat { display: flex; align-items: baseline; gap: 4px; }
+.fs-source-stat strong { font-size: 30px; font-weight: 700; letter-spacing: -.6px; font-variant-numeric: tabular-nums; }
+.fs-source-stat span { font-size: 12px; color: var(--sub); }
+.fs-source-btn { flex: 0 0 auto; }
+.fs-site-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; box-shadow: 0 0 8px currentColor; }
+.fs-sync-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.fs-enrich-range { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.fs-select {
+  appearance: none; -webkit-appearance: none;
+  padding: 7px 26px 7px 10px; border-radius: 8px;
+  border: 1px solid rgba(148,163,184,.24); background-color: rgba(15,23,42,.7);
+  color: var(--text); font-family: inherit; font-size: 12px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%), linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+.fs-select:focus { outline: none; border-color: rgba(143,178,255,.7); box-shadow: 0 0 0 1px rgba(143,178,255,.4); }
+.fs-progress-wrap { margin-top: 14px; }
+.fs-progress { height: 6px; border-radius: 999px; background: rgba(148,163,184,.14); overflow: hidden; }
+.fs-progress-fill {
+  height: 100%; width: 0; border-radius: 999px;
+  background: linear-gradient(90deg, #8fb2ff, #b49bff);
+  transition: width .35s ease;
+}
+.fs-progress-fill.is-running {
+  background-image: linear-gradient(90deg, #8fb2ff, #b49bff, #34d399, #8fb2ff);
+  background-size: 300% 100%;
+  animation: fs-flow 2.2s linear infinite;
+}
+@keyframes fs-flow { from { background-position: 0 0; } to { background-position: 300% 0; } }
+.fs-progress-text { margin-top: 7px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fs-log-head { margin: 16px 0 7px; font-size: 11px; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+.fs-log {
+  max-height: 128px; overflow-y: auto;
+  padding: 9px 11px; border-radius: 9px;
+  background: rgba(9,10,15,.6); border: 1px solid rgba(148,163,184,.1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; line-height: 1.75; color: var(--sub);
+}
+.fs-log:empty::after { content: '暂无日志'; color: rgba(132,148,171,.6); }
+.fs-log-line { white-space: pre-wrap; word-break: break-word; }
+.fs-log-line + .fs-log-line { border-top: 1px solid rgba(148,163,184,.06); }
+.fs-kpi-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 1180px) { .fs-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.fs-kpi {
+  padding: 15px 16px; border-radius: 14px;
+  background: linear-gradient(160deg, rgba(148,163,184,.075), rgba(148,163,184,.035));
+  border: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 8px;
+  transition: border-color .2s ease, transform .2s ease;
+}
+.fs-kpi:hover { border-color: rgba(143,178,255,.32); transform: translateY(-2px); }
+.fs-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fs-kpi-label { font-size: 11.5px; color: var(--sub); letter-spacing: .2px; }
+.fs-kpi-head .fs-ico { padding: 6px; border-radius: 9px; background: rgba(143,178,255,.14); color: var(--acc); }
+.fs-kpi-head .fs-ico.is-emerald { background: rgba(16,185,129,.14); color: var(--em); }
+.fs-kpi-head .fs-ico.is-violet { background: rgba(167,139,250,.14); color: var(--acc2); }
+.fs-kpi-head .fs-ico.is-pink { background: rgba(244,114,182,.14); color: var(--pink); }
+.fs-kpi-head .fs-ico.is-amber { background: rgba(251,191,36,.14); color: var(--amber); }
+.fs-kpi-value { font-size: 30px; font-weight: 700; letter-spacing: -.6px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.fs-kpi-value small { font-size: 12px; font-weight: 500; color: var(--sub); margin-left: 4px; letter-spacing: 0; }
+.fs-kpi-foot { font-size: 11px; color: var(--muted); margin-top: auto; }
+.fs-duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; align-items: start; }
+.fs-ranks { display: flex; flex-direction: column; gap: 2px; }
+.fs-rank {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 7px 6px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font-family: inherit; text-align: left;
+  cursor: pointer; width: 100%;
+  transition: background .16s ease;
+}
+.fs-rank:hover { background: rgba(143,178,255,.07); }
+.fs-rank-idx {
+  flex: 0 0 22px; width: 22px; height: 22px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+  background: rgba(148,163,184,.14); color: var(--sub);
+}
+.fs-rank-idx.is-gold { background: rgba(250,204,21,.2); color: #fde047; }
+.fs-rank-idx.is-silver { background: rgba(203,213,225,.18); color: #e2e8f0; }
+.fs-rank-idx.is-bronze { background: rgba(251,146,60,.2); color: #fdba74; }
+.fs-rank-body { flex: 1 1 auto; min-width: 0; }
+.fs-rank-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin-bottom: 5px; }
+.fs-rank-name { overflow: hidden; text-overflow: ellipsis; white-space: normal; word-break: break-word; color: #dbe4f2; }
+.fs-rank-val { color: var(--muted); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.fs-rank-bar { height: 5px; border-radius: 999px; background: rgba(148,163,184,.12); overflow: hidden; }
+.fs-rank-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #8fb2ff, #818cf8); transition: width .5s cubic-bezier(.2,.8,.2,1); }
+.fs-rank-fill.is-violet { background: linear-gradient(90deg, #a78bfa, #8fb2ff); }
+.fs-rank-fill.is-pink { background: linear-gradient(90deg, #f472b6, #a78bfa); }
+.fs-rank-fill.is-emerald { background: linear-gradient(90deg, #34d399, #22d3ee); }
+.fs-rank-fill.is-blue { background: linear-gradient(90deg, #60a5fa, #8fb2ff); }
+.fs-composition { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 18px; align-items: center; }
+.fs-donut-wrap { display: flex; align-items: center; justify-content: center; }
+.fs-donut {
+  position: relative; width: 152px; height: 152px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 34px rgba(143,178,255,.1);
+}
+.fs-donut::after {
+  content: ''; position: absolute; inset: 18px; border-radius: 50%;
+  background: #0b0d14; border: 1px solid rgba(148,163,184,.1);
+}
+.fs-donut-center { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.fs-donut-center strong { font-size: 24px; font-weight: 700; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.fs-donut-center span { font-size: 10px; color: var(--muted); }
+.fs-legend { display: flex; flex-direction: column; gap: 7px; }
+.fs-legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.fs-legend-dot { width: 8px; height: 8px; border-radius: 3px; flex: 0 0 8px; }
+.fs-legend-label { color: var(--sub); }
+.fs-legend-val { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fs-coverage { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px; margin-top: 4px; }
+.fs-cov-row { display: flex; flex-direction: column; gap: 5px; }
+.fs-cov-head { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--sub); }
+.fs-cov-head span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fs-cov-bar { height: 5px; border-radius: 999px; background: rgba(148,163,184,.12); overflow: hidden; }
+.fs-cov-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #60a5fa, #8fb2ff); transition: width .5s ease; }
+.fs-cov-fill.is-violet { background: linear-gradient(90deg, #a78bfa, #8fb2ff); }
+.fs-cov-fill.is-pink { background: linear-gradient(90deg, #f472b6, #a78bfa); }
+.fs-cov-fill.is-emerald { background: linear-gradient(90deg, #34d399, #22d3ee); }
+.fs-wall-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.fs-search {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  flex: 1 1 260px; min-width: 200px; max-width: 380px;
+  padding: 0 11px; height: 36px; border-radius: 9px;
+  background: rgba(15,23,42,.72); border: 1px solid rgba(148,163,184,.2);
+  color: var(--muted);
+}
+.fs-search:focus-within { border-color: rgba(143,178,255,.65); box-shadow: 0 0 0 1px rgba(143,178,255,.35); }
+.fs-search .fs-ico svg { width: 15px; height: 15px; }
+.fs-search-input {
+  flex: 1 1 auto; min-width: 0; height: 100%; border: 0; background: transparent;
+  color: var(--text); font-family: inherit; font-size: 13px; outline: none;
+}
+.fs-search-input::placeholder { color: rgba(132,148,171,.85); }
+.fs-search-input::-webkit-search-cancel-button { display: none; }
+.fs-seg { display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(148,163,184,.1); }
+.fs-seg-btn {
+  border: 0; background: transparent; color: var(--sub);
+  font-family: inherit; font-size: 12px; padding: 6px 13px; border-radius: 999px; cursor: pointer;
+  transition: color .16s ease, background .16s ease;
+}
+.fs-seg-btn:hover { color: #e2e8f0; }
+.fs-seg-btn.is-on { background: rgba(143,178,255,.2); color: #e0f2fe; box-shadow: inset 0 0 0 1px rgba(143,178,255,.2); }
+.fs-count { margin-left: auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fs-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+.fs-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid rgba(143,178,255,.32); background: rgba(143,178,255,.1);
+  color: var(--acc-soft); font-family: inherit; font-size: 11.5px;
+}
+.fs-chip:hover { background: rgba(143,178,255,.2); }
+.fs-chip .fs-ico svg { width: 11px; height: 11px; }
+.fs-poster-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(9,10,15,.72); pointer-events: none; }
+.fs-poster-progress-fill { height: 100%; background: linear-gradient(90deg, #5b7cf6, #8b5cf6); box-shadow: 0 0 8px rgba(139,92,246,.5); }
+.fs-poster-progress-fill.is-done { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,.45); }
+.fs-poster-progress-chip {
+  position: absolute; right: 7px; bottom: 26px; z-index: 2;
+  padding: 1px 6px; border-radius: 5px; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  background: rgba(9,10,15,.82); color: var(--acc-soft); border: 1px solid rgba(143,178,255,.3);
+  pointer-events: none;
+}
+.fs-poster-progress-chip.is-done { color: #6ee7b7; border-color: rgba(52,211,153,.42); }
+.fs-row-progress { color: var(--acc-soft); font-variant-numeric: tabular-nums; }
+.fs-row-progress.is-done { color: var(--em); }
+.fs-progress-select { min-width: 98px; }
+.fs-network { padding: 2px 0 0; }
+.fs-net-svg { display: block; width: 100%; height: auto; touch-action: manipulation; }
+.fs-net-link { stroke: rgba(143,178,255,.23); stroke-linecap: round; transition: stroke .16s ease, opacity .16s ease; }
+.fs-net-link.is-hot { stroke: rgba(143,178,255,.68); }
+.fs-net-link.is-cold { opacity: .12; }
+.fs-net-dot { fill: rgba(143,178,255,.24); stroke: rgba(143,178,255,.72); stroke-width: 1.2; cursor: pointer; transition: fill .16s ease, stroke .16s ease, r .16s ease; }
+.fs-net-node { cursor: pointer; outline: none; }
+.fs-net-node:hover .fs-net-dot, .fs-net-node.is-active .fs-net-dot, .fs-net-node:focus-visible .fs-net-dot { fill: rgba(143,178,255,.62); stroke: #dbe6ff; }
+.fs-net-label { fill: var(--sub); font-size: 10.5px; pointer-events: none; paint-order: stroke; stroke: rgba(9,10,15,.85); stroke-width: 2.6px; }
+.fs-net-node.is-active .fs-net-label { fill: #ffffff; }
+.fs-net-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 2px 2px; font-size: 11.5px; color: var(--muted); }
+.fs-net-best { border: 1px solid rgba(143,178,255,.28); background: rgba(143,178,255,.1); color: var(--acc-soft); border-radius: 999px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
+.fs-net-best:hover { background: rgba(143,178,255,.2); color: #fff; }
+.fs-wall { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 1024px) { .fs-wall { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.fs-poster {
+  display: flex; flex-direction: column; overflow: hidden;
+  border-radius: 12px; background: #0d1017; border: 1px solid rgba(148,163,184,.13);
+  text-decoration: none; color: inherit;
+  transition: transform .2s cubic-bezier(.2,.8,.2,1), border-color .2s ease, box-shadow .2s ease;
+}
+.fs-poster:hover { transform: translateY(-4px); border-color: rgba(143,178,255,.45); box-shadow: 0 14px 30px rgba(2,6,23,.6), 0 0 0 1px rgba(143,178,255,.15); }
+.fs-poster-media { position: relative; aspect-ratio: 16 / 9; background: linear-gradient(135deg, #131828, #0d1017); overflow: hidden; }
+.fs-poster-img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .35s ease, opacity .3s ease; opacity: 0; }
+.fs-poster-img[src] { opacity: 1; }
+.fs-poster:hover .fs-poster-img { transform: scale(1.06); }
+.fs-poster-media.is-missing::before {
+  content: ''; position: absolute; inset: 0;
+  background: repeating-linear-gradient(135deg, rgba(143,178,255,.05) 0 8px, transparent 8px 16px);
+}
+.fs-poster-fallback {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; letter-spacing: .5px;
+  color: rgba(143,178,255,.7); text-align: center; padding: 8px;
+}
+.fs-poster-code {
+  position: absolute; top: 7px; left: 7px;
+  padding: 2px 7px; border-radius: 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; font-weight: 600; letter-spacing: .4px;
+  background: rgba(9,10,15,.8); color: var(--acc-soft); border: 1px solid rgba(143,178,255,.28);
+  backdrop-filter: blur(4px);
+}
+.fs-poster-dur {
+  position: absolute; bottom: 7px; right: 7px;
+  padding: 1px 6px; border-radius: 5px;
+  font-size: 10px; font-variant-numeric: tabular-nums;
+  background: rgba(9,10,15,.78); color: #cbd5e1;
+}
+.fs-poster-open {
+  position: absolute; top: 7px; right: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: rgba(9,10,15,.78); color: #cbd5e1;
+  opacity: 0; transform: translateY(-4px); transition: opacity .18s ease, transform .18s ease;
+}
+.fs-poster-open svg { width: 12px; height: 12px; }
+.fs-poster:hover .fs-poster-open { opacity: 1; transform: translateY(0); }
+.fs-poster-info { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+@media (min-width: 1280px) {
+  .fs-poster-info { padding: 11px 12px 12px; }
+  .fs-poster-title { font-size: 12.5px; min-height: 37px; }
+  .fs-poster-code { font-size: 11px; padding: 2px 8px; }
+  .fs-poster-dur { font-size: 10.5px; }
+  .fs-poster-actress { font-size: 11px; }
+}
+.fs-poster-title {
+  font-size: 12px; line-height: 1.42; color: #dfe7f3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word; min-height: 34px;
+}
+.fs-poster-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fs-poster-actress { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-more { display: flex; margin: 16px auto 0; }
+.fs-empty { grid-column: 1 / -1; padding: 56px 20px; text-align: center; }
+.fs-empty-ico {
+  display: inline-flex; padding: 16px; border-radius: 50%;
+  background: rgba(148,163,184,.1); color: var(--sub);
+}
+.fs-empty-ico svg { width: 28px; height: 28px; }
+.fs-empty h3 { margin: 14px 0 7px; font-size: 16px; font-weight: 600; }
+.fs-empty p { margin: 0 auto; max-width: 460px; font-size: 12px; line-height: 1.75; color: var(--muted); }
+.fs-mini-empty { padding: 14px 0; font-size: 12px; color: var(--muted); }
+.fs-footer { margin-top: 22px; text-align: center; font-size: 11px; color: rgba(132,148,171,.75); line-height: 1.8; }
+.fs-trend { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.fs-trend-col { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; }
+.fs-trend-bar-wrap { width: 100%; height: 104px; display: flex; align-items: flex-end; }
+.fs-trend-bar { width: 100%; border-radius: 6px 6px 2px 2px; background: linear-gradient(180deg, rgba(143,178,255,.95), rgba(143,178,255,.25)); transition: height .45s cubic-bezier(.2,.8,.2,1); }
+.fs-trend-bar.is-empty { background: rgba(148,163,184,.16); }
+.fs-trend-count { height: 13px; font-size: 10px; color: var(--sub); font-variant-numeric: tabular-nums; }
+.fs-trend-label { font-size: 10.5px; color: var(--muted); }
+.fs-random-btn { white-space: nowrap; }
+.fs-rank-hint { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px dashed rgba(148,163,184,.16); font-size: 11px; color: var(--muted); }
+.fs-rank-hint::before { content: '↳'; color: var(--acc); font-size: 12px; }
+.fs-kpi.is-clickable { cursor: pointer; transition: border-color .18s ease, transform .18s ease; }
+.fs-kpi.is-clickable:hover { border-color: rgba(143,178,255,.38); transform: translateY(-1px); }
+.fs-wall.is-list { display: flex; flex-direction: column; gap: 6px; }
+.fs-row { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 10px; border-radius: 10px; background: rgba(22,28,39,.72); border: 1px solid rgba(148,163,184,.1); text-decoration: none; color: inherit; }
+.fs-row:hover { border-color: rgba(143,178,255,.34); background: rgba(30,39,55,.92); }
+.fs-row-cover { width: 88px; aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: #131822; display: flex; align-items: center; justify-content: center; }
+.fs-row-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fs-row-noimg { font-size: 10px; color: var(--muted); padding: 0 4px; text-align: center; }
+.fs-row-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.fs-row-title { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-row-sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-row-meta { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); flex: none; }
+.fs-row-dur { font-variant-numeric: tabular-nums; }
+.fs-poster-actions { position: absolute; left: 9px; bottom: 9px; display: flex; gap: 8px; opacity: 0; transform: translateY(5px); transition: opacity .18s ease, transform .18s ease; z-index: 3; }
+.fs-poster:hover .fs-poster-actions { opacity: 1; transform: none; }
+.fs-icon-btn { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; border: 1.5px solid rgba(226,232,240,.55); background: rgba(8,11,17,.92); color: #ffffff; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.55); backdrop-filter: blur(6px); transition: background .16s ease, color .16s ease, border-color .16s ease, transform .16s ease; }
+.fs-icon-btn:hover { background: #8fb2ff; color: #0a0f18; border-color: #8fb2ff; transform: translateY(-1px); }
+.fs-icon-btn:active { transform: translateY(0); }
+.fs-icon-btn svg { width: 18px; height: 18px; stroke-width: 2.1; }
+.fs-poster-media.is-loading::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, rgba(30,41,59,.35) 20%, rgba(71,85,105,.55) 40%, rgba(30,41,59,.35) 60%); background-size: 200% 100%; animation: fs-shimmer 1.1s linear infinite; }
+@keyframes fs-shimmer { from { background-position: 120% 0; } to { background-position: -80% 0; } }
+@media (hover: none) { .fs-poster-actions { opacity: 1; transform: none; } }
+.fs-notices { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.fs-notices:empty { display: none; }
+.fs-notice { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.26); font-size: 12px; color: #f0d18d; line-height: 1.5; }
+.fs-notice-btn { margin-left: auto; flex: none; padding: 5px 12px; border-radius: 7px; border: 1px solid rgba(251,191,36,.42); background: rgba(251,191,36,.16); color: #fde7b0; font-size: 12px; font-weight: 600; cursor: pointer; }
+.fs-notice-btn:hover:not(:disabled) { background: rgba(251,191,36,.26); }
+@media (max-width: 860px) {
+  .fs-header { padding: 12px 14px; gap: 10px; }
+  .fs-brand-title { font-size: 15px; }
+  .fs-brand-logo { width: 34px; height: 34px; border-radius: 10px; }
+  .fs-brand-logo svg { width: 18px; height: 18px; }
+  .fs-brand-badge { display: none; }
+  .fs-header-actions .fs-btn span:not(.fs-ico) { display: none; }
+  .fs-header-actions .fs-btn { padding: 9px 10px; }
+  .fs-main { padding: 16px 14px 64px; }
+  .fs-duo { grid-template-columns: minmax(0, 1fr); }
+  .fs-composition { grid-template-columns: minmax(0, 1fr); }
+  .fs-donut-wrap { justify-content: flex-start; }
+  .fs-wall { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .fs-row { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .fs-row-cover { width: 64px; }
+  .fs-trend { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .fs-trend-col:nth-child(-n+6) { display: none; }
+  .fs-trend-bar-wrap { height: 84px; }
+  .fs-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .fs-source { gap: 12px; padding: 14px; }
+  .fs-source-main { flex: 1 1 100%; }
+  .fs-source-stat strong { font-size: 26px; }
+  .fs-source-btn { flex: 1 1 100%; justify-content: center; }
+  .fs-kpi-value { font-size: 24px; }
+  .fs-search { max-width: none; }
+  .fs-count { width: 100%; margin-left: 0; }
+}
+@media (min-width: 640px) and (max-width: 860px) {
+  .fs-wall { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fs-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fs-duo { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fs-composition { grid-template-columns: 168px minmax(0, 1fr); }
+  .fs-trend { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .fs-trend-col:nth-child(-n+6) { display: flex; }
+}
+@media (max-width: 520px) {
+  .fs-brand-text { display: none; }
+  .fs-header { padding: 10px 12px; gap: 8px; }
+  .fs-header-actions { gap: 6px; }
+  .fs-header-actions .fs-btn { padding: 9px 8px; }
+  .fs-main { padding: 14px 12px 56px; }
+  .fs-card { padding: 14px; border-radius: 14px; margin-bottom: 12px; }
+  .fs-card-head { margin-bottom: 11px; }
+  .fs-card-title { font-size: 13.5px; }
+  .fs-card-sub { font-size: 11px; }
+  .fs-kpi-grid { gap: 8px; }
+  .fs-kpi { padding: 12px 13px; border-radius: 12px; }
+  .fs-kpi-label { font-size: 11px; }
+  .fs-kpi-value { font-size: 22px; }
+  .fs-kpi-foot { font-size: 10.5px; }
+  .fs-wall-toolbar { gap: 8px; }
+  .fs-wall-toolbar .fs-select,
+  .fs-wall-toolbar .fs-progress-select { flex: 1 1 44%; min-width: 0; }
+  .fs-search { flex: 1 1 100%; }
+  .fs-count { width: 100%; margin-left: 0; }
+  .fs-poster-title { font-size: 12px; }
+  .fs-poster-meta { font-size: 10.5px; }
+  .fs-poster-progress-chip { right: 6px; bottom: 24px; font-size: 9px; padding: 1px 5px; }
+  .fs-net-foot { font-size: 11px; }
+  .fs-net-best { font-size: 10.5px; padding: 3px 9px; }
+  .fs-net-label { font-size: 11px; }
+}
+@media (hover: none) and (max-width: 520px) {
+  .fs-icon-btn { width: 30px; height: 30px; border-radius: 8px; }
+  .fs-icon-btn svg { width: 15px; height: 15px; }
+  .fs-poster-actions { left: 7px; bottom: 8px; gap: 5px; }
+  .fs-search-input { font-size: 16px; }
+  .fs-select { padding-top: 9px; padding-bottom: 9px; font-size: 13px; }
+  .fs-chip { padding: 7px 11px; font-size: 12px; }
+  .fs-rank { padding-top: 8px; padding-bottom: 8px; }
+}
+@media (max-width: 460px) {
+  .fs-wall { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fs-seg-btn { padding: 6px 10px; font-size: 11.5px; }
+}
+`;
+
+    function buildPage() {
+        const page = el('div', 'fs-page');
+        ui.page = page;
+        const bg = el('div', 'fs-bg');
+        page.appendChild(bg);
+
+        const header = el('header', 'fs-header');
+        const brand = el('div', 'fs-brand');
+        const logo = icon(ICONS.logo);
+        logo.classList.add('fs-brand-logo');
+        const brandText = el('div', 'fs-brand-text');
+        const title = el('h1', 'fs-brand-title', '影片收藏大屏');
+        const badge = el('span', 'fs-brand-badge', 'COLLECTION WALL');
+        brandText.append(title, badge);
+        brand.append(logo, brandText);
+
+        const actions = el('div', 'fs-header-actions');
+        const syncBtn = el('button', 'fs-btn fs-btn-primary');
+        syncBtn.type = 'button';
+        syncBtn.dataset.always = '1';
+        syncBtn.appendChild(icon(ICONS.sync));
+        syncBtn.appendChild(el('span', '', '同步收藏'));
+        syncBtn.addEventListener('click', () => {
+            if (running) return;
+            runSync();
+        });
+        const enrichBtn = el('button', 'fs-btn');
+        enrichBtn.type = 'button';
+        enrichBtn.dataset.always = '1';
+        enrichBtn.appendChild(icon(ICONS.spark));
+        enrichBtn.appendChild(el('span', '', '深度补全'));
+        enrichBtn.addEventListener('click', () => {
+            if (running) return;
+            runEnrich();
+        });
+        const exportBtn = el('button', 'fs-btn');
+        exportBtn.type = 'button';
+        exportBtn.appendChild(icon(ICONS.download));
+        exportBtn.appendChild(el('span', '', '导出'));
+        exportBtn.addEventListener('click', exportJson);
+        const closeBtn = el('button', 'fs-btn fs-btn-close');
+        closeBtn.type = 'button';
+        const clearItemsBtn = el('button', 'fs-btn fs-btn-ghost-danger');
+        clearItemsBtn.type = 'button';
+        clearItemsBtn.title = '清空所有影片（详情缓存保留）';
+        clearItemsBtn.appendChild(icon(ICONS.trash));
+        clearItemsBtn.appendChild(el('span', '', '清空所有影片'));
+        clearItemsBtn.addEventListener('click', clearAllItems);
+        const clearMetaBtn = el('button', 'fs-btn fs-btn-ghost-danger');
+        clearMetaBtn.type = 'button';
+        clearMetaBtn.title = '清空所有详情缓存（女优 / 题材 / 发行商）';
+        clearMetaBtn.appendChild(icon(ICONS.trash));
+        clearMetaBtn.appendChild(el('span', '', '清空所有详情'));
+        clearMetaBtn.addEventListener('click', clearAllDetails);
+
+        const moduleBtn = el('button', 'fs-btn fs-module-btn');
+        moduleBtn.type = 'button';
+        moduleBtn.title = '首页模块显示 / 隐藏';
+        moduleBtn.appendChild(icon(ICONS.settings));
+        const modulePanel = el('div', 'fs-module-panel');
+        modulePanel.hidden = true;
+        const MODULE_DEFS = [['trend', '收藏趋势'], ['rank', '数据排行'], ['prefix', '番号与构成'], ['network', '女优网络'], ['wall', '海报墙']];
+        for (const [key, label] of MODULE_DEFS) {
+            const row = el('label', 'fs-module-row');
+            const box = el('input');
+            box.type = 'checkbox';
+            box.checked = !(state.settings.modules && state.settings.modules[key] === false);
+            box.addEventListener('change', () => {
+                state.settings.modules = Object.assign({}, state.settings.modules || {}, { [key]: box.checked });
+                persistSettings();
+                applyModuleVisibility();
+            });
+            row.append(box, el('span', '', label));
+            modulePanel.appendChild(row);
+        }
+        moduleBtn.addEventListener('click', event => {
+            event.stopPropagation();
+            modulePanel.hidden = !modulePanel.hidden;
+        });
+        modulePanel.addEventListener('click', event => event.stopPropagation());
+
+        closeBtn.appendChild(icon(ICONS.close));
+        closeBtn.appendChild(el('span', '', '关闭'));
+        closeBtn.addEventListener('click', closeDashboard);
+        ui.actionButtons.push(syncBtn, enrichBtn, exportBtn, clearItemsBtn, clearMetaBtn);
+        actions.append(syncBtn, enrichBtn, exportBtn, clearItemsBtn, clearMetaBtn, moduleBtn, closeBtn);
+        actions.appendChild(modulePanel);
+        header.append(brand, actions);
+
+        const main = el('main', 'fs-main');
+        main.appendChild(buildSyncSection());
+
+        const kpiGrid = el('div', 'fs-kpi-grid');
+        main.appendChild(kpiGrid);
+        ui.kpiGrid = kpiGrid;
+
+        const trendWrap = el('div');
+        main.appendChild(trendWrap);
+        ui.trendWrap = trendWrap;
+
+        const rankWrap = el('div', 'fs-duo');
+        main.appendChild(rankWrap);
+        ui.rankWrap = rankWrap;
+
+        const prefixWrap = el('div', 'fs-duo');
+        main.appendChild(prefixWrap);
+        ui.prefixWrap = prefixWrap;
+
+        const networkWrap = el('div');
+        main.appendChild(networkWrap);
+        ui.networkWrap = networkWrap;
+
+        main.appendChild(buildWallSection());
+
+        const footer = el('div', 'fs-footer');
+        footer.append(
+            el('div', '', `只统计 ${SITE_INFO[CURRENT_SITE].label} 的收藏，数据只保存在本机（GM 存储），不会上传`),
+            el('div', '', '另一个站点请到它自己的页面打开本大屏，两份数据互不影响')
+        );
+        main.appendChild(footer);
+
+        page.append(header, main);
+        return page;
+    }
+
+    function openInNewTab(url) {
+        if (typeof GM_openInTab === 'function') {
+            try {
+                GM_openInTab(url, { active: true, insert: true, setParent: true });
+                return;
+            } catch (error) { /* ignore */ }
+        }
+        try {
+            const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            if (pageWin && typeof pageWin.open === 'function') {
+                const win = pageWin.open(url, '_blank');
+                if (win) {
+                    try { win.focus(); } catch (error) { /* ignore */ }
+                    return;
+                }
+            }
+        } catch (error) { /* ignore */ }
+        try {
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.target = '_blank';
+            anchor.rel = 'noopener noreferrer';
+            anchor.style.cssText = 'position:fixed;left:-9999px;top:0;';
+            (document.body || document.documentElement).appendChild(anchor);
+            anchor.click();
+            setTimeout(() => anchor.remove(), 1200);
+        } catch (error) { /* ignore */ }
+    }
+
+    function copyText(value) {
+        const text = String(value || '').trim();
+        if (!text) return;
+        const done = () => pushLog(`📋 已复制 ${text}`);
+        const fallback = () => {
+            try {
+                const area = document.createElement('textarea');
+                area.value = text;
+                area.style.cssText = 'position:fixed;left:-9999px;top:0;';
+                document.body.appendChild(area);
+                area.select();
+                document.execCommand('copy');
+                area.remove();
+                done();
+            } catch (error) {
+                pushLog('⚠️ 复制失败，请手动选择');
+            }
+        };
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done, fallback);
+                return;
+            }
+        } catch (error) { /* ignore */ }
+        fallback();
+    }
+
+    function openRandom() {
+        const list = filteredItems();
+        if (!list.length) {
+            pushLog('🎲 没有可随机的影片');
+            return;
+        }
+        const item = list[Math.floor(Math.random() * list.length)];
+        pushLog(`🎲 随机一部：${item.code || item.title}`);
+        openInNewTab(item.href);
+    }
+
+    function onShortcut(event) {
+        if (!ui.open) return;
+        let node = event.target;
+        try {
+            if (typeof event.composedPath === 'function') {
+                const path = event.composedPath();
+                if (path && path.length) node = path[0];
+            }
+        } catch (error) {  }
+        const tag = (node && node.tagName) || '';
+        if (/^(?:INPUT|TEXTAREA|SELECT)$/.test(tag) || (node && node.isContentEditable) || event.metaKey || event.ctrlKey || event.altKey) return;
+        if (event.key === '/') {
+            event.preventDefault();
+            if (ui.searchInput) ui.searchInput.focus();
+        } else if (event.key === 'r' || event.key === 'R') {
+            event.preventDefault();
+            openRandom();
+        }
+    }
+
+
+    function dashboardUrl() {
+        return CURRENT_SITE === 'jable'
+            ? `${location.origin}${JABLE_FAVORITES_PATH}?favscreen=1#fav-screen`
+            : `${location.origin}${MISSAV_SAVED_PATH}?page=1&favscreen=1#fav-screen`;
+    }
+
+    function isDashboardRoute() {
+        if (location.hash === '#fav-screen') return true;
+        return /[?&]favscreen=1(?:&|$)/.test(location.search);
+    }
+
+    function openDashboardTab() {
+        openInNewTab(dashboardUrl());
+    }
+
+    function ensureGuardStyle() {
+        if (document.getElementById('fav-screen-guard')) return;
+        const style = document.createElement('style');
+        style.id = 'fav-screen-guard';
+        style.textContent = [
+            'html.fs-mode,html.fs-mode body{margin:0!important;padding:0!important;height:100%!important;background:#090a0f!important;overflow:hidden!important}',
+            'html.fs-mode body>*:not(#fav-screen-root){display:none!important}',
+            'html.fs-mode #fav-screen-root{display:block!important}'
+        ].join('');
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    function silenceMedia() {
+        const stop = node => {
+            try {
+                if (node.pause) node.pause();
+                node.muted = true;
+                node.volume = 0;
+            } catch (error) {  }
+        };
+        for (const node of document.querySelectorAll('video, audio')) stop(node);
+        let observer = null;
+        try {
+            observer = new MutationObserver(records => {
+                for (const record of records) {
+                    for (const node of record.addedNodes) {
+                        if (!node || node.nodeType !== 1) continue;
+                        if (/^(?:VIDEO|AUDIO)$/.test(node.tagName)) stop(node);
+                        else if (node.querySelectorAll) node.querySelectorAll('video, audio').forEach(stop);
+                    }
+                }
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+        } catch (error) {  }
+        setTimeout(() => {
+            if (observer) observer.disconnect();
+            for (const node of document.querySelectorAll('video, audio')) stop(node);
+        }, 6000);
+    }
+
+    function mountDashboard() {
+        if (ui.root) return;
+        if (document.getElementById('fav-screen-root')) return;
+        if (!document.body) {
+            document.addEventListener('DOMContentLoaded', mountDashboard, { once: true });
+            return;
+        }
+        ui.open = true;
+        ui.lastRender = null;
+        document.title = '影片收藏大屏 — 增强助手';
+        document.documentElement.classList.add('fs-mode');
+        document.documentElement.style.background = '#090a0f';
+        document.documentElement.style.colorScheme = 'dark';
+        document.documentElement.style.overflow = 'hidden';
+        ensureGuardStyle();
+        silenceMedia();
+        try {
+            document.body.replaceChildren();
+        } catch (error) {
+            document.body.innerHTML = '';
+        }
+        document.body.style.cssText = 'margin:0;padding:0;background:#090a0f;overflow:hidden;';
+
+        const host = el('div');
+        host.id = 'fav-screen-root';
+        host.style.cssText = 'position:fixed;inset:0;z-index:2147483600;';
+        ui.host = host;
+        ui.root = host.attachShadow({ mode: 'open' });
+        applyShadowCss(ui.root, CSS);
+        ui.page = buildPage();
+        ui.root.appendChild(ui.page);
+        document.body.appendChild(host);
+
+        refreshAll();
+        document.addEventListener('keydown', onEscape, true);
+        document.addEventListener('keydown', onShortcut, true);
+        if (!allItems().length) runSync();
+
+        const guard = setInterval(() => {
+            if (!ui.root) {
+                clearInterval(guard);
+                return;
+            }
+            if (!document.getElementById('fav-screen-root')) document.body.appendChild(host);
+        }, 1500);
+    }
+
+    function onEscape(event) {
+        if (event.key === 'Escape' && ui.open) closeDashboard();
+    }
+
+    function closeDashboard() {
+        if (!ui.open) return;
+        ui.open = false;
+        document.removeEventListener('keydown', onEscape, true);
+        document.removeEventListener('keydown', onShortcut, true);
+        if (ui.observer) {
+            ui.observer.disconnect();
+            ui.observer = null;
+        }
+        try {
+            window.close();
+        } catch (error) {  }
+        setTimeout(() => {
+            if (!ui.root) return;
+            location.href = CURRENT_SITE === 'jable'
+                ? `${location.origin}${JABLE_FAVORITES_PATH}`
+                : `${location.origin}${MISSAV_SAVED_PATH}?page=1`;
+        }, 260);
+    }
+
+
+    function download(filename, content, type) {
+        const blob = new Blob([content], { type: type || 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = el('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.style.display = 'none';
+        (document.body || document.documentElement).appendChild(anchor);
+        anchor.click();
+        setTimeout(() => {
+            anchor.remove();
+            URL.revokeObjectURL(url);
+        }, 1200);
+    }
+
+    function stamp() {
+        const date = new Date();
+        const pad = num => String(num).padStart(2, '0');
+        return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+    }
+
+    function clearAllItems() {
+        if (running) return;
+        const count = allItems().length;
+        if (!count) {
+            pushLog('📭 当前站点没有影片可清空');
+            return;
+        }
+        const label = SITE_INFO[CURRENT_SITE].label;
+        if (!window.confirm(`确定清空 ${label} 的全部 ${count} 部影片吗？\n只影响本站数据，详情缓存会保留（可单独清理）。`)) return;
+        state.items = {};
+        state.syncs = [];
+        commitData();
+        setProgress(0, '影片已清空，可重新点「同步收藏」');
+        pushLog(`🗑 已清空 ${formatNumber(count)} 部影片`);
+    }
+
+    function clearAllDetails() {
+        if (running) return;
+        const count = Object.keys(state.enriched).length;
+        if (!count) {
+            pushLog('📭 当前站点没有详情缓存可清空');
+            return;
+        }
+        if (!window.confirm(`确定清空 ${count} 条详情缓存（女优 / 题材 / 发行商）吗？\n影片列表不受影响，清空后需重新点「深度补全」。`)) return;
+        state.enriched = {};
+        commitData();
+        setProgress(0, '详情缓存已清空，可重新点「深度补全」');
+        pushLog(`🗑 已清空 ${formatNumber(count)} 条详情缓存`);
+    }
+
+    function exportJson() {
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            items: allItems(),
+            enriched: state.enriched
+        };
+        download(`影片收藏-${stamp()}.json`, JSON.stringify(payload, null, 2));
+        pushLog(`💾 已导出 JSON：${allItems().length} 部`);
+    }
+
+
+
+    function boot() {
+        if (isDashboardRoute()) {
+            mountDashboard();
+            return;
+        }
+        window.addEventListener('hashchange', () => {
+            if (isDashboardRoute() && !ui.root) mountDashboard();
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot, { once: true });
+    } else {
+        boot();
+    }
+
+    return {
+        open: openDashboardTab,
+        close: closeDashboard,
+        isOpen: () => Boolean(ui.open),
+        count: () => allItems().length
+    };
+
+    })();
+    try {
+        window.__avFavScreen = FavScreen;
+    } catch (error) {  }
+    /* ================= 影片收藏大屏 结束 ================= */
+
     registerPanelMenus();
     } catch (error) {
         console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
