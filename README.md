@@ -1,6 +1,6 @@
 # 🚀 MissAV & Jable 综合增强助手
 
-![Version](https://img.shields.io/badge/version-16.00-blue.svg)
+![Version](https://img.shields.io/badge/version-16.02-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-PC%20(Desktop)-orange.svg)
 ![Mobile](https://img.shields.io/badge/mobile-Android%20%2F%20iOS-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
@@ -11,7 +11,8 @@
 
 移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退。
 
-
+> **项目地址**：<https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant>
+> **问题反馈**：[Issues](https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/issues)
 
 ---
 
