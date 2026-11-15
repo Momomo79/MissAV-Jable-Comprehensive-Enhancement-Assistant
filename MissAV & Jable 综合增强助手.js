@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.03
+// @version      16.04
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -8912,11 +8912,93 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const filled = info.title || info.actress.length || info.genre.length || info.maker || info.cover;
         return filled ? info : null;
     }
+    function parseJavdbSearchHit(html, code) {
+        const doc = parseHtmlDocument(html);
+        if (!doc) return '';
+        const needle = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!needle) return '';
+        let loose = '';
+        for (const anchor of doc.querySelectorAll('a[href^="/v/"]')) {
+            const href = anchor.getAttribute('href') || '';
+            if (!/^\/v\/[a-zA-Z0-9]+$/.test(href)) continue;
+            const strong = anchor.querySelector('.video-title strong');
+            const hit = String(strong ? strong.textContent : '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (hit && hit === needle) return `https://javdb.com${href}`;
+            if (!loose && hit && hit.indexOf(needle) >= 0) loose = `https://javdb.com${href}`;
+        }
+        return loose;
+    }
+
+    function parseJavdbHtmlMovie(html, code, url) {
+        const doc = parseHtmlDocument(html);
+        if (!doc) return null;
+        const text = node => String(node && node.textContent || '').replace(/\s+/g, ' ').trim();
+        const valueOf = label => {
+            for (const strong of doc.querySelectorAll('.panel-block strong')) {
+                const name = text(strong).replace(/[：:]\s*$/, '');
+                if (!name || name.indexOf(label) < 0) continue;
+                const block = strong.closest('.panel-block') || strong.parentElement;
+                if (!block) continue;
+                return block.querySelector('.value') || block;
+            }
+            return null;
+        };
+        const listOf = (label, prefix) => {
+            const box = valueOf(label);
+            if (!box) return [];
+            const out = [];
+            for (const anchor of box.querySelectorAll(`a[href^="${prefix}"]`)) {
+                const name = text(anchor);
+                if (name && !out.includes(name)) out.push(name);
+            }
+            return out;
+        };
+        const actress = listOf('演員', '/actors/').concat(listOf('演员', '/actors/'));
+        const genre = listOf('類別', '/tags').concat(listOf('类别', '/tags'));
+        const makerBox = valueOf('片商') || valueOf('發行商') || valueOf('发行商') || valueOf('製作商');
+        let maker = '';
+        if (makerBox) {
+            const anchor = makerBox.querySelector('a');
+            maker = text(anchor || makerBox).split(',')[0].trim();
+        }
+        const head = doc.querySelector('h2.title') || doc.querySelector('h2');
+        let title = text(head);
+        if (title && code) title = title.replace(new RegExp(String(code).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '').trim();
+        const image = doc.querySelector('meta[property="og:image"]');
+        const info = {
+            title,
+            actress: actress.slice(0, 20),
+            genre: genre.slice(0, 20),
+            maker,
+            cover: image ? String(image.getAttribute('content') || '') : '',
+            url
+        };
+        return info.actress.length || info.genre.length || info.maker ? info : null;
+    }
+
+    async function fetchJavDbHtmlInfo(code) {
+        const clean = normalizeVideoCode(code);
+        if (!clean) return null;
+        const listHtml = await fetchHtml(`https://javdb.com/search?q=${encodeURIComponent(clean)}&f=all`, { timeout: 12000 });
+        if (!listHtml) return null;
+        const detailUrl = parseJavdbSearchHit(listHtml, clean);
+        if (!detailUrl) return null;
+        const detailHtml = await fetchHtml(detailUrl, { timeout: 12000 });
+        if (!detailHtml) return null;
+        return parseJavdbHtmlMovie(detailHtml, clean, detailUrl);
+    }
+
     async function fetchJavDbBackupInfo(code) {
         const clean = normalizeVideoCode(code);
         if (!clean || !/\d/.test(clean)) return null;
         if (JAVDB_BACKUP_CACHE.has(clean)) return JAVDB_BACKUP_CACHE.get(clean);
         const task = (async () => {
+            try {
+                const htmlInfo = await fetchJavDbHtmlInfo(clean);
+                if (htmlInfo) return htmlInfo;
+            } catch (_) {
+                // fall through to api
+            }
             let movie = null;
             try {
                 movie = await searchJavDbMovie(clean);
@@ -21116,6 +21198,82 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
     }
 
+    async function runJavdbEnrich() {
+        if (running) return;
+        const pending = [];
+        const seen = new Set();
+        for (const item of allItems()) {
+            const code = String(item.code || '').toUpperCase();
+            if (!code || seen.has(code)) continue;
+            const meta = state.enriched[code] || {};
+            const actress = meta.actress || [];
+            const genre = meta.genre || [];
+            if (actress.length && genre.length) continue;
+            seen.add(code);
+            pending.push(code);
+        }
+        if (!pending.length) {
+            ui.logLines = [];
+            pushLog('✅ 当前没有待补全的条目');
+            return;
+        }
+        const token = { cancelled: false };
+        runToken = token;
+        setBusy(true);
+        ui.logLines = [];
+        pushLog(`🧭 JavDB 补全：共 ${formatNumber(pending.length)} 个待补全条目（缺女优或题材）`);
+        pushLog('🧭 只覆盖这些条目的女优 / 题材 / 片商，数据以 JavDB 为准；其余条目不受影响');
+        setProgress(0.02, '准备中…');
+        let done = 0;
+        let ok = 0;
+        let fail = 0;
+        try {
+            await mapPool(pending, 3, async code => {
+                if (token.cancelled) return;
+                await sleep(120 + Math.floor(Math.random() * 180));
+                let info = null;
+                try {
+                    info = await fetchJavDbBackupInfo(code);
+                } catch (error) {
+                    info = null;
+                }
+                const hasData = Boolean(info && ((info.actress && info.actress.length) || (info.genre && info.genre.length) || info.maker));
+                if (!hasData) {
+                    fail++;
+                    if (fail <= 3) pushLog(`⚠️ JavDB 未找到：${code}`);
+                } else {
+                    const prev = state.enriched[code] || {};
+                    state.enriched[code] = Object.assign({}, prev, {
+                        actress: info.actress && info.actress.length ? info.actress : (prev.actress || []),
+                        genre: info.genre && info.genre.length ? info.genre : (prev.genre || []),
+                        maker: info.maker || prev.maker || '',
+                        source: 'JavDB',
+                        failed: false,
+                        v: ENRICH_VERSION,
+                        checkedAt: Date.now()
+                    });
+                    ok++;
+                }
+                done++;
+                setProgress(done / pending.length, `JavDB 补全 ${done}/${pending.length}`);
+                if (done % 5 === 0) {
+                    persistEnriched();
+                    pushLog(`🧾 JavDB 补全 ${done}/${pending.length} · 成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
+                }
+            });
+            pushLog(`✅ JavDB 补全完成：成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
+            setProgress(1, `JavDB 补全 ${done} 个番号`);
+        } catch (error) {
+            pushLog(`❌ JavDB 补全出错：${error && error.message ? error.message : error}`);
+        } finally {
+            bumpData();
+            persist(true);
+            runToken = null;
+            setBusy(false);
+            refreshAll();
+        }
+    }
+
     function isJunkEntry(item) {
         if (!item) return true;
         const title = String(item.title || '');
@@ -21600,6 +21758,17 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             runEnrich();
         });
 
+        const javdb = el('button', 'fs-btn');
+        javdb.type = 'button';
+        javdb.dataset.always = '1';
+        javdb.appendChild(icon(ICONS.external));
+        javdb.appendChild(el('span', '', 'JavDB 补全'));
+        javdb.title = '只重抓「待补全」的条目（缺女优或题材），数据以 JavDB 为准；部分内容需登录 JavDB 才能查看，请先登录；批量请求有封号风险，建议隔一段时间再跑';
+        javdb.addEventListener('click', () => {
+            if (running) return;
+            runJavdbEnrich();
+        });
+
         const range = el('div', 'fs-enrich-range');
         range.appendChild(el('span', '', '每轮补全'));
         const select = el('select', 'fs-select');
@@ -21627,8 +21796,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         });
         ui.stopBtn = stop;
 
-        tools.append(enrich, range, stop);
-        ui.actionButtons.push(enrich);
+        tools.append(enrich, javdb, range, stop);
+        ui.actionButtons.push(enrich, javdb);
+
+        const syncNote = el('div', 'fs-sync-note', 'JavDB 补全只重抓「待补全」的条目（缺女优或题材），用 JavDB 的女优 / 题材 / 片商覆盖；同步与「深度补全详情」仍走站内详情页。');
+        const syncWarn = el('div', 'fs-sync-note fs-sync-warn', '⚠️ 部分条目需要登录 JavDB 才能查阅，请先登录再补全；补全会连续发起大量请求，短时间内频繁操作有封号风险，建议少量多次、隔一段时间再跑。');
 
         const progress = el('div', 'fs-progress-wrap');
         const bar = el('div', 'fs-progress');
@@ -21645,7 +21817,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         ui.logBox = logBox;
         paintLog();
 
-        section.append(sources, tools, progress, logHead, logBox);
+        section.append(sources, tools, syncNote, syncWarn, progress, logHead, logBox);
         return section;
     }
 
@@ -22127,7 +22299,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const padY = width < 500 ? 32 : (width < 800 ? 40 : 46);
         const boxW = Math.max(1, maxX - minX);
         const boxH = Math.max(1, maxY - minY);
-        const scale = Math.min((width - padX * 2) / boxW, (height - padY * 2) / boxH, 2.1);
+        const cap = nodes.length <= 8 ? 3.6 : (nodes.length <= 16 ? 2.8 : 2.1);
+        const scale = Math.min((width - padX * 2) / boxW, (height - padY * 2) / boxH, cap);
         const midX = (minX + maxX) / 2;
         const midY = (minY + maxY) / 2;
         for (const node of nodes) {
@@ -22150,8 +22323,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const width = viewportWidth < 640 ? 360 : (viewportWidth < 1000 ? 620 : 900);
         const compact = width < 900;
         const height = width < 500
-            ? 320
-            : (compact ? 360 : Math.min(460, Math.max(300, 220 + graph.nodes.length * 5)));
+            ? 300
+            : (compact ? 330 : Math.min(440, Math.max(250, 196 + graph.nodes.length * 6)));
         let links;
         if (graph.layout && graph.layout.width === width && graph.layout.height === height) {
             links = graph.layout.links;
@@ -22162,18 +22335,41 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const maxCount = graph.nodes[0].count || 1;
         const maxLink = links.length ? links[0].w : 1;
 
+        const legend = el('div', 'fs-net-legend');
+        const legendDot = el('span', '');
+        legendDot.appendChild(el('i', ''));
+        legendDot.appendChild(el('em', '', '圆点越大收藏越多'));
+        const legendLine = el('span', '');
+        legendLine.appendChild(el('i', 'is-line'));
+        legendLine.appendChild(el('em', '', '连线越粗合作越多'));
+        const legendTip = el('span', '');
+        legendTip.appendChild(el('em', '', '悬停高亮 · 点击筛选'));
+        legend.append(legendDot, legendLine, legendTip);
+        wrap.appendChild(legend);
+
         const svg = svgNode('svg', { viewBox: `0 0 ${width} ${height}`, class: 'fs-net-svg', role: 'img' });
+        const defs = svgNode('defs');
+        const glow = svgNode('radialGradient', { id: 'fsNetGlow', cx: '50%', cy: '50%', r: '50%' });
+        glow.append(
+            svgNode('stop', { offset: '0%', 'stop-color': '#8fb2ff', 'stop-opacity': '0.5' }),
+            svgNode('stop', { offset: '62%', 'stop-color': '#8fb2ff', 'stop-opacity': '0.14' }),
+            svgNode('stop', { offset: '100%', 'stop-color': '#8fb2ff', 'stop-opacity': '0' })
+        );
+        defs.appendChild(glow);
+        svg.appendChild(defs);
         const linkLayer = svgNode('g', { class: 'fs-net-links' });
         const nodeLayer = svgNode('g', { class: 'fs-net-nodes' });
         const linkEls = links.map(link => {
             const a = graph.nodes[link.s];
             const b = graph.nodes[link.t];
+            const ratio = link.w / maxLink;
             const line = svgNode('line', {
                 x1: a.x.toFixed(1),
                 y1: a.y.toFixed(1),
                 x2: b.x.toFixed(1),
                 y2: b.y.toFixed(1),
-                'stroke-width': (0.7 + (link.w / maxLink) * 2.4).toFixed(2)
+                'stroke-width': (0.7 + ratio * 2.6).toFixed(2),
+                'stroke-opacity': (0.16 + ratio * 0.5).toFixed(2)
             });
             line.classList.add('fs-net-link');
             line.setAttribute('data-s', String(link.s));
@@ -22185,43 +22381,70 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             return line;
         });
 
-        const labelled = new Set(graph.nodes.slice().sort((a, b) => b.count - a.count).slice(0, compact ? 9 : 12).map(node => node.name));
+        const labelled = new Set(graph.nodes.slice().sort((a, b) => b.count - a.count).slice(0, compact ? 9 : 14).map(node => node.name));
+        const nodeGroups = [];
+        const neighbours = new Map();
+        for (const link of links) {
+            if (!neighbours.has(link.s)) neighbours.set(link.s, new Set());
+            if (!neighbours.has(link.t)) neighbours.set(link.t, new Set());
+            neighbours.get(link.s).add(link.t);
+            neighbours.get(link.t).add(link.s);
+        }
         graph.nodes.forEach((node, index) => {
-            const radius = (compact ? 4.5 : 5) + Math.sqrt(node.count / maxCount) * (compact ? 7.5 : 10);
+            const ratio = Math.sqrt(node.count / maxCount);
+            const radius = (compact ? 4.5 : 5) + ratio * (compact ? 7.5 : 10);
             const group = svgNode('g', { class: 'fs-net-node', tabindex: '0', role: 'button' });
             group.setAttribute('aria-label', `${node.name}，收藏 ${node.count} 部`);
+            const halo = svgNode('circle', {
+                cx: node.x.toFixed(1),
+                cy: node.y.toFixed(1),
+                r: (radius * 2.1).toFixed(1),
+                fill: 'url(#fsNetGlow)'
+            });
+            halo.classList.add('fs-net-halo');
             const circle = svgNode('circle', {
                 cx: node.x.toFixed(1),
                 cy: node.y.toFixed(1),
                 r: radius.toFixed(1)
             });
             circle.classList.add('fs-net-dot');
+            circle.style.fill = `rgba(143,178,255,${(0.16 + ratio * 0.36).toFixed(2)})`;
+            circle.style.stroke = `rgba(186,208,255,${(0.5 + ratio * 0.4).toFixed(2)})`;
             const title = svgNode('title');
             title.textContent = `${node.name} · 收藏 ${node.count} 部`;
-            group.append(circle, title);
+            group.append(halo, circle, title);
             if (labelled.has(node.name)) {
+                const below = index % 2 === 0;
+                const anchor = node.x < 54 ? 'start' : (node.x > width - 54 ? 'end' : 'middle');
                 const label = svgNode('text', {
                     x: node.x.toFixed(1),
-                    y: (node.y + radius + (compact ? 10 : 12)).toFixed(1),
-                    'text-anchor': 'middle'
+                    y: (node.y + (below ? radius + (compact ? 10 : 12) : -(radius + (compact ? 6 : 7)))).toFixed(1),
+                    'text-anchor': anchor
                 });
                 label.classList.add('fs-net-label');
                 label.textContent = node.name;
                 group.appendChild(label);
             }
+            nodeGroups.push(group);
             const focus = () => {
                 svg.classList.add('is-focus');
                 group.classList.add('is-active');
+                const near = neighbours.get(index) || new Set();
                 for (const line of linkEls) {
                     const hit = line.getAttribute('data-s') === String(index) || line.getAttribute('data-t') === String(index);
                     line.classList.toggle('is-hot', hit);
                     line.classList.toggle('is-cold', !hit);
                 }
+                nodeGroups.forEach((other, otherIndex) => {
+                    if (other === group || near.has(otherIndex)) other.classList.remove('is-cold');
+                    else other.classList.add('is-cold');
+                });
             };
             const blur = () => {
                 svg.classList.remove('is-focus');
                 group.classList.remove('is-active');
                 for (const line of linkEls) line.classList.remove('is-hot', 'is-cold');
+                for (const other of nodeGroups) other.classList.remove('is-cold');
             };
             group.addEventListener('mouseenter', focus);
             group.addEventListener('mouseleave', blur);
@@ -22669,6 +22892,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 .fs-source-btn { flex: 0 0 auto; }
 .fs-site-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; box-shadow: 0 0 8px currentColor; }
 .fs-sync-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.fs-sync-note { margin-top: 9px; font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+.fs-sync-note + .fs-sync-note { margin-top: 4px; }
+.fs-sync-warn { color: #e9b872; }
 .fs-enrich-range { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
 .fs-select {
   appearance: none; -webkit-appearance: none;
@@ -22830,14 +23056,21 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 .fs-row-progress.is-done { color: var(--em); }
 .fs-progress-select { min-width: 98px; }
 .fs-network { padding: 2px 0 0; }
-.fs-net-svg { display: block; width: 100%; height: auto; touch-action: manipulation; }
-.fs-net-link { stroke: rgba(143,178,255,.23); stroke-linecap: round; transition: stroke .16s ease, opacity .16s ease; }
-.fs-net-link.is-hot { stroke: rgba(143,178,255,.68); }
-.fs-net-link.is-cold { opacity: .12; }
-.fs-net-dot { fill: rgba(143,178,255,.24); stroke: rgba(143,178,255,.72); stroke-width: 1.2; cursor: pointer; transition: fill .16s ease, stroke .16s ease, r .16s ease; }
-.fs-net-node { cursor: pointer; outline: none; }
-.fs-net-node:hover .fs-net-dot, .fs-net-node.is-active .fs-net-dot, .fs-net-node:focus-visible .fs-net-dot { fill: rgba(143,178,255,.62); stroke: #dbe6ff; }
-.fs-net-label { fill: var(--sub); font-size: 10.5px; pointer-events: none; paint-order: stroke; stroke: rgba(9,10,15,.85); stroke-width: 2.6px; }
+.fs-net-svg { display: block; width: 100%; height: auto; touch-action: manipulation; border-radius: 12px; background: radial-gradient(circle at 50% 42%, rgba(143,178,255,.07), rgba(143,178,255,0) 62%); }
+.fs-net-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin: 0 2px 10px; font-size: 11px; color: var(--muted); }
+.fs-net-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.fs-net-legend em { font-style: normal; }
+.fs-net-legend i { width: 7px; height: 7px; border-radius: 50%; background: rgba(143,178,255,.72); box-shadow: 0 0 7px rgba(143,178,255,.55); }
+.fs-net-legend i.is-line { width: 16px; height: 2px; border-radius: 2px; background: rgba(143,178,255,.55); box-shadow: none; }
+.fs-net-link { stroke: rgba(143,178,255,.55); stroke-linecap: round; transition: stroke .16s ease, opacity .16s ease; }
+.fs-net-link.is-hot { stroke: rgba(160,195,255,.95); }
+.fs-net-link.is-cold { opacity: .08; }
+.fs-net-halo { pointer-events: none; }
+.fs-net-dot { stroke-width: 1.3; cursor: pointer; transition: fill .16s ease, stroke .16s ease; }
+.fs-net-node { cursor: pointer; outline: none; transition: opacity .16s ease; }
+.fs-net-node.is-cold { opacity: .16; }
+.fs-net-node:hover .fs-net-dot, .fs-net-node.is-active .fs-net-dot, .fs-net-node:focus-visible .fs-net-dot { fill: rgba(190,212,255,.92); stroke: #ffffff; }
+.fs-net-label { fill: var(--sub); font-size: 10.5px; font-weight: 500; pointer-events: none; paint-order: stroke; stroke: rgba(9,10,15,.88); stroke-width: 3px; stroke-linejoin: round; }
 .fs-net-node.is-active .fs-net-label { fill: #ffffff; }
 .fs-net-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 2px 2px; font-size: 11.5px; color: var(--muted); }
 .fs-net-best { border: 1px solid rgba(143,178,255,.28); background: rgba(143,178,255,.1); color: var(--acc-soft); border-radius: 999px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
