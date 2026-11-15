@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.02
+// @version      16.03
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
-// @icon         https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
-// @icon64       https://picui.ogmua.cn/s1/2026/09/27/6ab8f61cabe08.ico
+// @icon         https://jable.tv/favicon.ico
+// @icon64       https://jable.tv/favicon.ico
 // @match        *://missav.ws/*
 // @match        *://missav.live/*
 // @match        *://missav.ai/*
@@ -2531,7 +2531,7 @@
         .custom-ui-layer {
             position: fixed;
             inset: 0;
-            z-index: 2147483600;
+            z-index: 2147483647;
             pointer-events: none;
             display: block;
             margin: 0;
@@ -3841,6 +3841,23 @@
         state.uiLayer = layer;
         return layer;
     }
+    function raisePanelLayer() {
+        const layer = state.uiLayer;
+        if (!layer || !layer.isConnected) return;
+        const host = document.body;
+        if (!host || host.lastElementChild === layer) return;
+        if (state.panel && state.panel.classList.contains('panel-dragging')) return;
+        const active = document.activeElement;
+        if (active && state.panel && state.panel.contains(active)) return;
+        host.appendChild(layer);
+    }
+    function keepPanelOnTop() {
+        raisePanelLayer();
+        [80, 400, 1200].forEach(delay => setTimeout(raisePanelLayer, delay));
+        if (state.stackObserver || !document.body || typeof MutationObserver !== 'function') return;
+        state.stackObserver = new MutationObserver(() => raisePanelLayer());
+        state.stackObserver.observe(document.body, { childList: true });
+    }
     const VIEWPORT_TTL = 150;
     let viewportCacheBox = null;
     let viewportCacheAt = 0;
@@ -4916,6 +4933,33 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (panel) panel.classList.toggle('panel-menu-hidden', hidden);
         log(hidden ? '👁️ 面板已完全隐藏，可在油猴菜单里点「显示菜单」恢复' : '👁️ 面板已重新显示');
     }
+    function resetPanelLayout() {
+        settings.panelX = 20;
+        settings.panelY = 88;
+        settings.isMinimized = false;
+        settings.hideMenu = false;
+        store.set('panelX', 20);
+        store.set('panelY', 88);
+        store.set('isMinimized', false);
+        store.set('hideMenu', '0');
+        const panel = document.querySelector('.custom-control-panel');
+        if (panel) {
+            panel.classList.remove('panel-collapsed', 'panel-menu-hidden', 'panel-dragging');
+            panel.style.left = '20px';
+            panel.style.top = '88px';
+            panel.style.width = '';
+            const gear = panel.querySelector('.panel-gear');
+            if (gear) {
+                gear.setAttribute('aria-expanded', 'true');
+                gear.title = '折叠设置面板';
+            }
+            document.body.classList.toggle('avx-panel-open', true);
+            if (typeof state.applyPanelSkin === 'function') state.applyPanelSkin();
+            clampPanelPosition(panel);
+        }
+        log('🧭 面板已重置：位置、折叠与隐藏状态全部恢复');
+    }
+
     let panelMenusRegistered = false;
     function registerPanelMenus() {
         if (panelMenusRegistered) return;
@@ -4923,6 +4967,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         try {
             GM_registerMenuCommand('完全隐藏菜单', () => setMenuHidden(true));
             GM_registerMenuCommand('显示菜单', () => setMenuHidden(false));
+            GM_registerMenuCommand('重置面板', () => resetPanelLayout());
             panelMenusRegistered = true;
         } catch (error) {
             debugLog(error, 'panel-menu');
@@ -5901,6 +5946,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
 
         getUiLayer().appendChild(panel);
+        keepPanelOnTop();
+        panel.addEventListener('pointerdown', raisePanelLayer, true);
+        panel.addEventListener('mouseenter', raisePanelLayer, true);
         applyUiStyles();
         const persistAnchor = () => {
             settings.panelX = panel.offsetLeft;
