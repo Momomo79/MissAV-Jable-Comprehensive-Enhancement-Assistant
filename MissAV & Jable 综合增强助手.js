@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.04
+// @version      16.05
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -2167,7 +2167,7 @@
         } catch (error) {
             debugLog(error);
         }
-    }, 3000);
+    }, 6000);
     const WINDOW_OPEN_PATCHED = Symbol.for('av-helper.windowOpenPatched');
     function isCrossSiteWindow(target) {
 
@@ -2211,7 +2211,7 @@
     let iframePatchAt = 0;
     function patchAllIframeWindows(force = false) {
         const now = Date.now();
-        if (!force && now - iframePatchAt < 2000) return;
+        if (!force && now - iframePatchAt < 5000) return;
         iframePatchAt = now;
 
         for (const frame of document.querySelectorAll('iframe')) {
@@ -2372,12 +2372,14 @@
             if (AD_SIGNATURE_RE.test(adSignatureOf(element)) || adOverlayHeuristic(element)) element.remove();
         }
     }
-    const GLOBAL_SWEEP_INTERVAL = 1200;
+    const GLOBAL_SWEEP_INTERVAL = 2600;
     function startAdObserver() {
         if (state.adObserver || !document.body) return;
         const pending = [];
         let frames = false;
         let globalSweepAt = 0;
+        let lastFullSweepAt = 0;
+        let lastBodyCount = -1;
         const sweep = throttle(() => {
             if (!pending.length) return;
             const batch = new Set(pending.splice(0, pending.length));
@@ -2401,9 +2403,15 @@
             if (patchFrames) patchAllIframeWindows(true);
             for (const node of nodes) sweepAdNodes(node);
             const stamp = Date.now();
+            const bodyCount = document.body ? document.body.children.length : 0;
+            const structuralChange = bodyCount !== lastBodyCount;
             if (!globalSweepAt || stamp - globalSweepAt > GLOBAL_SWEEP_INTERVAL) {
                 globalSweepAt = stamp;
-                sweepFloatingAds();
+                lastBodyCount = bodyCount;
+                if (structuralChange || stamp - lastFullSweepAt > 8000) {
+                    lastFullSweepAt = stamp;
+                    sweepFloatingAds();
+                }
                 pruneLiveWidgets();
                 prunePromoLinks();
             }
@@ -4111,6 +4119,14 @@
 @media (pointer: coarse) {
     :where(.avx2) .avx-ico::after { content: ""; position: absolute; inset: -9px; border-radius: 12px; }
     :where(.avx2) .avx-capsule .avx-ico::after { inset: -11px; }
+    :where(.avx2) button, :where(.avx2) .avx-tab, :where(.avx2) .avx-ico { touch-action: manipulation; }
+    :where(.avx2) input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+    :where(.avx2) select,
+    :where(.avx2) textarea { font-size: 16px; }
+    .fs-search-input, .fs-select { font-size: 16px; }
+    .fs-select-bar .fs-btn { min-height: 40px; padding: 9px 14px; }
+    .fs-poster-check { width: 26px; height: 26px; border-radius: 8px; }
+    .fs-icon-btn { min-width: 34px; min-height: 34px; }
 }
 :where(.avx2) .avx-ico:hover { background: rgba(255,255,255,.06); color: var(--text); border-color: var(--line); }
 :where(.avx2) .avx-ico svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -6888,7 +6904,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 if (!container) return;
                 bindPlayer(video, container, true);
             }
-        }, 1200));
+        }, 1800));
     }
     function createQuickControls() {
         const container = state.container;
@@ -8997,7 +9013,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 const htmlInfo = await fetchJavDbHtmlInfo(clean);
                 if (htmlInfo) return htmlInfo;
             } catch (_) {
-                // fall through to api
             }
             let movie = null;
             try {
@@ -16196,6 +16211,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const mediaDelta = mediaTime - session.lastMediaTime;
         session.lastMediaTime = mediaTime;
         if (isPageHidden() || wallDelta > 120) return;
+        if (state.video.paused && !session.dirty) return;
         if (!state.video.paused && !state.video.seeking && mediaDelta > 0) {
             const jumped = mediaDelta > wallDelta * 8 + 2;
             session.watchedSeconds += jumped ? wallDelta : mediaDelta;
@@ -21496,6 +21512,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         wallCount: null,
         chipWrap: null,
         sourceWrap: null,
+        selectMode: false,
+        selected: new Set(),
+        selectBtn: null,
+        selectBar: null,
+        paintSelectBtn: null,
         filter: {
             actress: '',
             genre: '',
@@ -22001,6 +22022,20 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             media.appendChild(chip);
         }
 
+        if (ui.selectMode) {
+            link.classList.toggle('is-selected', ui.selected.has(item.id));
+            const check = el('span', 'fs-poster-check');
+            check.appendChild(icon('<path d="M5 12.5l4.5 4.5L19 7"/>'));
+            media.appendChild(check);
+            link.addEventListener('click', event => {
+                if (!ui.selectMode) return;
+                if (event.target.closest && event.target.closest('[data-act]')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                toggleSelect(item.id, link);
+            });
+        }
+
         const info = el('div', 'fs-poster-info');
         info.appendChild(el('div', 'fs-poster-title', item.title || item.code || '未命名'));
 
@@ -22018,6 +22053,284 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 
         link.append(media, info);
         return link;
+    }
+
+    function toggleSelect(id, node) {
+        if (ui.selected.has(id)) ui.selected.delete(id);
+        else ui.selected.add(id);
+        if (node) node.classList.toggle('is-selected', ui.selected.has(id));
+        updateSelectBar();
+    }
+
+    function setSelectMode(on) {
+        ui.selectMode = Boolean(on);
+        if (!ui.selectMode) ui.selected.clear();
+        if (ui.paintSelectBtn) ui.paintSelectBtn();
+        paintWall();
+        updateSelectBar();
+    }
+
+    function buildSelectBar() {
+        const bar = el('div', 'fs-select-bar');
+        const count = el('span', 'fs-select-count', '未选择');
+        count.dataset.role = 'count';
+        const all = el('button', 'fs-btn fs-btn-mini', '全选');
+        all.type = 'button';
+        all.addEventListener('click', () => {
+            for (const item of filteredItems().slice(0, 500)) ui.selected.add(item.id);
+            paintWall();
+            updateSelectBar();
+        });
+        const invert = el('button', 'fs-btn fs-btn-mini', '反选');
+        invert.type = 'button';
+        invert.addEventListener('click', () => {
+            for (const item of filteredItems().slice(0, 500)) {
+                if (ui.selected.has(item.id)) ui.selected.delete(item.id);
+                else ui.selected.add(item.id);
+            }
+            paintWall();
+            updateSelectBar();
+        });
+        const go = el('button', 'fs-btn fs-btn-danger fs-btn-mini', '取消收藏');
+        go.type = 'button';
+        go.dataset.role = 'go';
+        go.title = '到站点取消收藏，成功后删除本地记录';
+        go.addEventListener('click', runUnfavorite);
+        const exit = el('button', 'fs-btn fs-btn-mini', '退出');
+        exit.type = 'button';
+        exit.addEventListener('click', () => setSelectMode(false));
+        bar.append(count, all, invert, go, exit);
+        return bar;
+    }
+
+    function updateSelectBar() {
+        let bar = ui.selectBar;
+        if (!ui.selectMode) {
+            if (bar) bar.hidden = true;
+            return;
+        }
+        if (!bar) {
+            bar = buildSelectBar();
+            ui.selectBar = bar;
+            (ui.page || document.body).appendChild(bar);
+        }
+        bar.hidden = false;
+        const count = bar.querySelector('[data-role="count"]');
+        if (count) count.textContent = ui.selected.size ? `已选 ${ui.selected.size} 部` : '未选择';
+        const go = bar.querySelector('[data-role="go"]');
+        if (go) go.disabled = !ui.selected.size || running;
+    }
+
+    function findFavoriteCandidates(doc) {
+        if (!doc || !doc.querySelectorAll) return [];
+        const list = [];
+        const push = (node, score) => {
+            if (!node) return;
+            if (list.some(entry => entry.node === node)) return;
+            list.push({ node, score, len: (node.textContent || '').replace(/\s+/g, '').length });
+        };
+        for (const node of doc.querySelectorAll('button, a, [role="button"]')) {
+            const attrs = Array.from(node.attributes || []).map(attr => `${attr.name}=${attr.value}`).join(' ');
+            const cls = typeof node.className === 'string' ? node.className : '';
+            if (/toggleSave/i.test(attrs)) {
+                push(node, 12);
+                continue;
+            }
+            if (node.hasAttribute && node.hasAttribute('data-fav-video-id')) {
+                const favType = node.getAttribute('data-fav-type');
+                if (favType === '1' || favType === '2') continue;
+                push(node, favType === '0' ? 14 : 12);
+                continue;
+            }
+            if (/\b(?:text-primary|text-nord4)\b/.test(cls) && (node.textContent || '').indexOf('收藏') >= 0) {
+                push(node, 11);
+                continue;
+            }
+            if (/\bfav\b/.test(cls) && /data-fav/i.test(attrs)) {
+                push(node, 11);
+                continue;
+            }
+            if (node.closest && node.closest('nav, header, .navbar, .header, .menu, .sidebar')) continue;
+            const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+            const icon = Array.from(node.querySelectorAll('i, svg, use')).map(child => `${child.getAttribute('class') || ''} ${child.getAttribute('xlink:href') || ''} ${child.getAttribute('fill') || ''}`).join(' ');
+            if (/bookmark/i.test(icon) && !/heart/i.test(icon)) continue;
+            const label = `${text} ${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''} ${cls} ${icon}`;
+            let score = 0;
+            if (/^(?:收藏|已收藏|取消收藏|加入收藏|移除收藏)$/.test(text)) score = 4;
+            else if (/取消收藏|已收藏|移除收藏/.test(text)) score = 3;
+            else if (/收藏/.test(text) && text.length <= 12) score = 2;
+            else if (/icon-heart|fa-heart|\bheart\b|favorite|bookmark/i.test(label) && text.length <= 8) score = 3;
+            if (score) push(node, score);
+        }
+        list.sort((a, b) => b.score - a.score || a.len - b.len);
+        return list.slice(0, 4).map(entry => entry.node);
+    }
+
+    function findFavoriteToggle(doc) {
+        return findFavoriteCandidates(doc)[0] || null;
+    }
+
+    function favoriteState(node) {
+        if (!node) return 'unknown';
+        const cls = typeof node.className === 'string' ? node.className : '';
+        const text = (node.textContent || '').replace(/\s+/g, '').trim();
+        if (node.hasAttribute && node.hasAttribute('data-fav-video-id')) {
+            const favType = node.getAttribute('data-fav-type');
+            if (favType === '1' || favType === '2') return 'unknown';
+            return /\bactive\b/.test(cls) ? 'on' : 'off';
+        }
+        if (/\btext-primary\b/.test(cls)) return 'on';
+        if (/\btext-nord4\b/.test(cls)) return 'off';
+        const all = `${text} ${cls} ${node.getAttribute('aria-pressed') || ''} ${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''}`;
+        if (/已收藏|取消收藏|移除收藏|已加入/.test(all)) return 'on';
+        if (/\b(is-active|favorited|saved|liked|selected)\b/i.test(cls)) return 'on';
+        if (/^(加入收藏|收藏至)$/.test(text)) return 'off';
+        return 'unknown';
+    }
+
+    function favoriteCount(node) {
+        if (!node) return null;
+        const match = String(node.textContent || '').match(/(\d[\d,]*)/);
+        if (!match) return null;
+        const value = Number(match[1].replace(/,/g, ''));
+        return Number.isFinite(value) ? value : null;
+    }
+
+    function favoriteSnapshot(node) {
+        if (!node) return '';
+        return String(node.outerHTML || '').replace(/\s+/g, ' ').trim();
+    }
+
+    async function unfavoriteOne(frame, item) {
+        const loaded = await loadFrame(frame, item.href, 20000);
+        if (!loaded) return { ok: false, reason: '详情页加载超时' };
+        await sleep(600);
+        try {
+            const win = frame.contentWindow;
+            if (win) {
+                win.confirm = () => true;
+                win.alert = () => { };
+                win.onbeforeunload = null;
+            }
+        } catch (error) {  }
+
+        const readState = () => {
+            const node = findFavoriteToggle(frameDoc(frame));
+            return { node, state: favoriteState(node) };
+        };
+
+        let current = readState();
+        if (!current.node) {
+            let peek = '';
+            try {
+                const doc = frameDoc(frame);
+                peek = Array.from(doc.querySelectorAll('button, a, [role="button"], .btn'))
+                    .map(node => `${node.tagName.toLowerCase()}.${String(node.className || '').split(' ')[0]}|${(node.textContent || '').trim().slice(0, 10)}`)
+                    .filter(text => /收藏|favorite|fav|save|heart/i.test(text))
+                    .slice(0, 3)
+                    .join(' / ');
+            } catch (error) {  }
+            return { ok: false, reason: `未找到收藏按钮${peek ? `（候选：${peek}）` : ''}` };
+        }
+
+        const hasCount = favoriteCount(current.node) !== null;
+        if (current.state === 'off' && !hasCount) {
+            if (await loadFrame(frame, item.href, 20000)) {
+                await sleep(1200);
+                current = readState();
+                if (!current.node) return { ok: true, note: '重载后按钮消失，视为已取消' };
+                if (current.state === 'off') return { ok: true, note: '站点本来就没收藏，已清理本地记录' };
+            } else {
+                return { ok: true, note: '站点本来就没收藏，已清理本地记录' };
+            }
+        }
+
+        const candidates = findFavoriteCandidates(frameDoc(frame));
+        const anchor = candidates[0] || current.node;
+        const first = favoriteSnapshot(anchor);
+        const countBefore = favoriteCount(anchor);
+        for (const node of candidates.slice(0, 2)) {
+            humanClick(node);
+            await sleep(1500);
+            const after = readState();
+            if (!after.node) return { ok: true };
+            const countAfter = favoriteCount(after.node);
+            if (countBefore !== null && countAfter !== null) {
+                if (countAfter < countBefore) return { ok: true };
+                if (countAfter > countBefore) {
+                    humanClick(after.node);
+                    await sleep(800);
+                    return { ok: false, reason: '点成了加入收藏，已自动撤销' };
+                }
+                if (favoriteSnapshot(after.node) !== first) return { ok: true };
+            }
+            if (after.state === 'off' && countBefore === null) return { ok: true };
+            await sleep(900);
+            const late = readState();
+            if (late.node && late.state === 'off' && countBefore === null) return { ok: true };
+        }
+
+        if (await loadFrame(frame, item.href, 20000)) {
+            await sleep(900);
+            const reloaded = readState();
+            if (!reloaded.node) return { ok: true };
+            if (reloaded.state === 'off') return { ok: true };
+            if (favoriteSnapshot(reloaded.node) !== first) return { ok: true };
+        }
+        const peek = String((candidates[0] && candidates[0].outerHTML) || '').replace(/\s+/g, ' ').slice(0, 150);
+        return { ok: false, reason: `点击后状态未变化（按钮：${peek}）` };
+    }
+
+    async function runUnfavorite() {
+        if (running) return;
+        const items = Array.from(ui.selected).map(id => state.items[id]).filter(Boolean);
+        if (!items.length) return;
+        const label = (SITE_INFO[CURRENT_SITE] || {}).label || CURRENT_SITE;
+        if (!window.confirm(`即将取消 ${items.length} 部影片的收藏：\n· 会到 ${label} 逐个取消收藏\n· 成功后再删除大屏本地记录\n\n确定继续？`)) return;
+        if (!window.confirm(`再次确认：这 ${items.length} 部会从站点收藏中移除，只能重新手动收藏。\n\n真的要执行吗？`)) return;
+
+        const token = { cancelled: false };
+        runToken = token;
+        setBusy(true);
+        ui.logLines = [];
+        pushLog(`🗑️ 开始取消收藏：${items.length} 部（站点 + 本地）`);
+        setProgress(0.02, '准备中…');
+        const frame = createHiddenFrame();
+        let ok = 0;
+        let fail = 0;
+        try {
+            for (let index = 0; index < items.length; index++) {
+                if (token.cancelled) break;
+                const item = items[index];
+                const result = await unfavoriteOne(frame, item);
+                if (result.ok) {
+                    delete state.items[item.id];
+                    ui.selected.delete(item.id);
+                    ok++;
+                    if (result.note) pushLog(`ℹ️ ${item.code || item.id}：${result.note}`);
+                } else {
+                    fail++;
+                    if (fail <= 5) pushLog(`⚠️ ${item.code || item.id} 取消失败：${result.reason}`);
+                }
+                setProgress((index + 1) / items.length, `取消收藏 ${index + 1}/${items.length}`);
+                if ((index + 1) % 5 === 0) {
+                    commitData();
+                    pushLog(`🧾 已处理 ${index + 1}/${items.length} · 成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
+                }
+                await sleep(320);
+            }
+            pushLog(`✅ 取消收藏完成：成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
+            setProgress(1, `取消收藏 ${ok} 部`);
+        } catch (error) {
+            pushLog(`❌ 取消收藏出错：${error && error.message ? error.message : error}`);
+        } finally {
+            frame.remove();
+            runToken = null;
+            setBusy(false);
+            commitData();
+            if (!ui.selected.size) setSelectMode(false);
+            else updateSelectBar();
+        }
     }
 
     function matchQuery(item, query) {
@@ -22524,6 +22837,21 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             paintWall();
         });
 
+        const selectBtn = el('button', 'fs-btn fs-select-btn');
+        selectBtn.type = 'button';
+        selectBtn.title = '批量选择影片，可批量取消收藏（会同步到站点）';
+        const paintSelectBtn = () => {
+            selectBtn.replaceChildren(
+                icon('<path d="M4 6h9M4 12h9M4 18h5"/><path d="M16.5 16.2l2.2 2.2 3.8-3.9"/>'),
+                el('span', '', ui.selectMode ? '退出选择' : '批量选择')
+            );
+            selectBtn.classList.toggle('is-on', ui.selectMode);
+        };
+        paintSelectBtn();
+        ui.paintSelectBtn = paintSelectBtn;
+        ui.selectBtn = selectBtn;
+        selectBtn.addEventListener('click', () => setSelectMode(!ui.selectMode));
+
         const progressSelect = el('select', 'fs-select fs-progress-select');
         progressSelect.title = '按播放进度筛选（数据来自观影行为统计）';
         for (const [value, label] of [['', '全部进度'], ['unseen', '未观看'], ['watching', '观看中'], ['done', '已看完']]) {
@@ -22556,7 +22884,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 
         const count = el('span', 'fs-count', '共 0 部');
         ui.wallCount = count;
-        toolbar.append(searchBox, randomBtn, viewBtn, progressSelect, select, count);
+        toolbar.append(searchBox, randomBtn, viewBtn, selectBtn, progressSelect, select, count);
 
         const chips = el('div', 'fs-chips');
         chips.hidden = true;
@@ -22779,6 +23107,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 .fs-page {
   position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior: contain; -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
   background: #090a0f; color: #e6ecf7;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; color-scheme: dark;
@@ -23077,8 +23406,18 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 .fs-net-best:hover { background: rgba(143,178,255,.2); color: #fff; }
 .fs-wall { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 1024px) { .fs-wall { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.fs-btn, .fs-icon-btn, .fs-chip, .fs-tab { touch-action: manipulation; }
+.fs-btn.is-on { background: rgba(143,178,255,.18); border-color: rgba(143,178,255,.55); color: #fff; }
+.fs-btn-mini { padding: 6px 12px; font-size: 11.5px; }
+.fs-poster-check { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 7px; border: 1.5px solid rgba(148,163,184,.55); background: rgba(9,10,15,.72); color: transparent; display: flex; align-items: center; justify-content: center; z-index: 3; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+.fs-poster-check svg { width: 14px; height: 14px; stroke-width: 2.4; }
+.fs-poster.is-selected { outline: 2px solid rgba(143,178,255,.85); outline-offset: -2px; }
+.fs-poster.is-selected .fs-poster-check { background: var(--acc); border-color: var(--acc); color: #0b1020; }
+.fs-select-bar { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 2147483200; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-radius: 999px; background: rgba(13,16,23,.95); border: 1px solid rgba(148,163,184,.28); box-shadow: 0 16px 36px rgba(0,0,0,.55); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); max-width: calc(100vw - 24px); flex-wrap: wrap; }
+.fs-select-count { font-size: 12px; color: var(--sub); white-space: nowrap; }
 .fs-poster {
   display: flex; flex-direction: column; overflow: hidden;
+  content-visibility: auto; contain-intrinsic-size: 220px 186px;
   border-radius: 12px; background: #0d1017; border: 1px solid rgba(148,163,184,.13);
   text-decoration: none; color: inherit;
   transition: transform .2s cubic-bezier(.2,.8,.2,1), border-color .2s ease, box-shadow .2s ease;
@@ -23197,9 +23536,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
   .fs-wall { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .fs-row { grid-template-columns: 64px minmax(0, 1fr) auto; }
   .fs-row-cover { width: 64px; }
-  .fs-trend { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .fs-trend-col:nth-child(-n+6) { display: none; }
-  .fs-trend-bar-wrap { height: 84px; }
+  .fs-trend { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 3px; }
+  .fs-trend-bar-wrap { height: 76px; }
+  .fs-trend-count { font-size: 9px; }
+  .fs-trend-label { font-size: 9px; }
+  .fs-trend-col:nth-child(even) .fs-trend-label { display: none; }
   .fs-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .fs-source { gap: 12px; padding: 14px; }
   .fs-source-main { flex: 1 1 100%; }
@@ -23217,12 +23558,19 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
   .fs-trend { grid-template-columns: repeat(12, minmax(0, 1fr)); }
   .fs-trend-col:nth-child(-n+6) { display: flex; }
 }
+@media (max-width: 420px) {
+  .fs-header { padding: 9px 10px; gap: 6px; }
+  .fs-header-actions { gap: 4px; }
+  .fs-header-actions .fs-btn { padding: 8px 7px; }
+  .fs-brand-logo { width: 30px; height: 30px; }
+  .fs-kpi-grid { gap: 8px; }
+}
 @media (max-width: 520px) {
   .fs-brand-text { display: none; }
   .fs-header { padding: 10px 12px; gap: 8px; }
   .fs-header-actions { gap: 6px; }
   .fs-header-actions .fs-btn { padding: 9px 8px; }
-  .fs-main { padding: 14px 12px 56px; }
+  .fs-main { padding: 14px 12px calc(60px + env(safe-area-inset-bottom, 0px)); }
   .fs-card { padding: 14px; border-radius: 14px; margin-bottom: 12px; }
   .fs-card-head { margin-bottom: 11px; }
   .fs-card-title { font-size: 13.5px; }
