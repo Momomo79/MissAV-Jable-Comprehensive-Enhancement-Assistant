@@ -1,6 +1,6 @@
 # 🚀 MissAV & Jable 综合增强助手
 
-![Version](https://img.shields.io/badge/version-16.04-blue.svg)
+![Version](https://img.shields.io/badge/version-16.05-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-PC%20(Desktop)-orange.svg)
 ![Mobile](https://img.shields.io/badge/mobile-Android%20%2F%20iOS-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
@@ -11,8 +11,6 @@
 
 移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退。
 
-> **项目地址**：<https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant>
-> **问题反馈**：[Issues](https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/issues)
 
 ---
 
@@ -111,11 +109,12 @@
 - **两站点独立**：MissAV 走 `/saved?page=N` 逐页直连（被拦截时改用页内框架读取），Jable 走收藏页翻页（直连失败时在后台隐藏 iframe 里点击翻页）；数据分别存 `favScreen::v2::missav` / `favScreen::v2::jable`，互不混合。
 - **深度补全**：只读站内详情页补齐女优 / 题材 / 发行商，并发 3，每轮条数可调，结果缓存 7 天。
 - **六张可点 KPI**：收藏总数、女优覆盖、题材覆盖、番号识别率、平均片长、待补全。点任意一张直接在下方海报墙筛出对应条目，再点一次取消；点「收藏总数」等于清除全部筛选。
-- **收藏趋势**：最近 12 个月的新增节奏，窄屏自动收敛为 6 个月。
+- **收藏趋势**：最近 12 个月的新增节奏，窄屏同样保留 12 个月（隔月显示标签，不再被裁成 6 个月）。
 - **排行与构成**：女优 TOP 12、题材 TOP 12（点击任意一行即按该女优 / 题材过滤）、番号前缀分布、番号识别率与完整度环形图。
 - **女优合作网络**：同一部作品同框的女优之间连线，线越粗合作越多、节点越大作品越多，最多 40 位；悬停高亮相邻连线，点击节点立刻按该女优筛选并滚动定位；手机 / 平板 / 桌面三档画布，底部给出「合作最多的一对」。
 - **播放进度对接**：直接读取观影统计，海报底部 3px 进度条（看完变绿）+ 右下角 `62%` / `已看完` 角标；工具栏可按未观看 / 观看中 / 已看完筛选，排序新增「最近观看」。
 - **海报墙**：搜索番号 / 标题 / 女优 / 题材（160ms 防抖）、随机一部（`R`）、海报与列表双视图、五种排序（收藏顺序 / 最新收录 / 番号 / 片长 / 最近观看）、悬停复制番号与 JavDB 搜索、懒加载骨架屏、无限滚动。
+- **批量选择 / 取消收藏**：工具栏「批量选择」进入勾选模式，海报右上角出现勾选框（全选 / 反选只作用于当前筛选结果），底部浮条显示已选数量。点「取消收藏」需两次确认，随后逐条打开详情页取消站点收藏（MissAV 识别 `toggleSave` 按钮的 `text-primary` / `text-nord4`，Jable 识别 `data-fav-video-id` 红心并比对收藏计数），**成功才删除本地记录**，失败保留并写明原因。
 - **模块显隐**：齿轮里可单独关掉收藏趋势、数据排行、番号与构成、女优网络、海报墙，只看关心的部分。
 - **维护工具**：清理未见条目（整轮抓完且覆盖 ≥50% 才提示，带二次确认）、重复番号一键去重、清空影片与清空详情分开操作。
 - **导出**：收藏条目 + 详情缓存打包成 JSON 下载。
