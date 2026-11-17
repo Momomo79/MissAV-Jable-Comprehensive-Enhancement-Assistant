@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.05
+// @version      16.06
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -19697,11 +19697,35 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return doc.body || doc.documentElement;
     }
 
+    const RECO_TEXT_RE = /推荐|推薦|猜你喜欢|猜你喜歡|相关推荐|相關推薦|热门|熱門|精选|精選|你可能|recommend|related|popular|trending|you may also/i;
+
+    function isRecommendAnchor(anchor) {
+        if (!anchor || !anchor.closest) return false;
+        if (anchor.closest('aside, footer, nav')) return true;
+        return Boolean(anchor.closest('[class*="recommend"], [class*="related"], [id*="recommend"], [id*="related"], [class*="sidebar"]'));
+    }
+
+    function recommendZones(doc) {
+        const zones = [];
+        if (!doc || !doc.querySelectorAll) return zones;
+        for (const heading of doc.querySelectorAll('h1, h2, h3, h4, .section-title, .title, .heading, .block-title')) {
+            const text = String(heading.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!text || text.length > 24) continue;
+            if (!RECO_TEXT_RE.test(text)) continue;
+            const zone = heading.closest('section, article, .section, .block, .module, .row, .list, .grid') || heading.parentElement;
+            if (!zone) continue;
+            if (zone.querySelectorAll('a[href]').length < 2) continue;
+            zones.push(zone);
+        }
+        return zones;
+    }
+
     function collectCards(doc, site, baseUrl) {
         if (!doc || !doc.querySelectorAll) return [];
         const scope = listScope(doc, site) || doc;
         const out = [];
         const seen = new Set();
+        const recoZones = recommendZones(doc);
         const anchors = scope.querySelectorAll('a[href]');
         for (const anchor of anchors) {
             const raw = anchor.getAttribute('href') || '';
@@ -19715,6 +19739,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 continue;
             }
             if (!isVideoPath(parsed, site)) continue;
+            if (isRecommendAnchor(anchor)) continue;
+            if (recoZones.length && recoZones.some(zone => zone.contains(anchor))) continue;
             const href = `${parsed.origin}${parsed.pathname}`;
             if (seen.has(href)) continue;
 
@@ -20433,6 +20459,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return location.origin;
     }
 
+    const SAVED_EMPTY_RE = /未有记录|暂无记录|暫無記錄|還沒有收藏|还没有收藏|暂无收藏|暫無收藏|No records|Nothing saved|Nothing here yet/i;
+
+    function isSavedEmptyDoc(doc) {
+        if (!doc) return false;
+        const text = String((doc.body && doc.body.textContent) || '');
+        if (!SAVED_EMPTY_RE.test(text)) return false;
+        return !doc.querySelector('#list_videos_my_favourite_videos, .list_videos_my_favourite_videos');
+    }
+
     async function scrapeMissav(log, token) {
         const origin = siteOrigin();
         const base = `${origin}${MISSAV_SAVED_PATH}`;
@@ -20499,6 +20534,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 }
             }
             if (!doc) break;
+
+            if (page === 1 && isSavedEmptyDoc(doc)) {
+                state.meta[CURRENT_SITE] = Object.assign({}, state.meta[CURRENT_SITE] || {}, { emptyFavorites: true });
+                log('📭 站点收藏为空（页面显示未有记录）');
+                break;
+            }
 
             const cards = collectCards(doc, 'missav', url);
             const signature = cards.slice(0, 12).map(card => card.path).join('|');
@@ -20795,6 +20836,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 return { ok: false, totalNew: 0 };
             }
             const first = await waitForCards(frame, 'jable', 8000);
+            if (first && isSavedEmptyDoc(first)) {
+                state.meta[CURRENT_SITE] = Object.assign({}, state.meta[CURRENT_SITE] || {}, { emptyFavorites: true });
+                log('📭 站点收藏为空（页面显示未有记录）');
+                return { ok: true, totalNew: 0 };
+            }
             const firstCards = first ? collectCards(first, 'jable', frameUrl(frame) || entry) : [];
             if (!firstCards.length) {
                 log('⚠️ 后台框架里没有读到收藏卡片');
@@ -21035,6 +21081,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 else delete metaNow.stale;
             } else {
                 delete metaNow.stale;
+            }
+            if (metaNow.emptyFavorites) {
+                const allIds = allItems().map(item => item.id);
+                if (allIds.length) metaNow.stale = allIds;
+                else delete metaNow.stale;
+                pushLog(`📭 站点收藏为 0，本地 ${formatNumber(allIds.length)} 条已标记为未见，可在提示条点「清理未见」移除`);
+            } else {
+                delete metaNow.emptyFavorites;
             }
             state.syncs.push({
                 at: Date.now(),
