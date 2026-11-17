@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.06
+// @version      16.07
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -19708,16 +19708,27 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function recommendZones(doc) {
         const zones = [];
         if (!doc || !doc.querySelectorAll) return zones;
-        for (const heading of doc.querySelectorAll('h1, h2, h3, h4, .section-title, .title, .heading, .block-title')) {
+        const pushZone = node => {
+            if (!node || zones.includes(node)) return;
+            if (node.querySelectorAll('a[href]').length < 2) return;
+            zones.push(node);
+        };
+        for (const heading of doc.querySelectorAll('h1, h2, h3, h4, h5, h6, .section-title, .title, .heading, .block-title')) {
             const text = String(heading.textContent || '').replace(/\s+/g, ' ').trim();
             if (!text || text.length > 24) continue;
             if (!RECO_TEXT_RE.test(text)) continue;
-            const zone = heading.closest('section, article, .section, .block, .module, .row, .list, .grid') || heading.parentElement;
-            if (!zone) continue;
-            if (zone.querySelectorAll('a[href]').length < 2) continue;
-            zones.push(zone);
+            pushZone(heading.closest('section, article, .section, .block, .module, .row, .list, .grid') || heading.parentElement);
         }
-        return zones;
+        for (const leaf of doc.querySelectorAll('div, span, p, strong, b')) {
+            if (leaf.children.length) continue;
+            const text = String(leaf.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!text || text.length > 12) continue;
+            if (!RECO_TEXT_RE.test(text)) continue;
+            pushZone(leaf.closest('section, article, .section, .block, .module, .row, .list, .grid, div'));
+        }
+        if (!zones.length) return zones;
+        const allLinks = doc.querySelectorAll('a[href]').length;
+        return zones.filter(zone => zone.querySelectorAll('a[href]').length < Math.max(3, allLinks * 0.8));
     }
 
     function collectCards(doc, site, baseUrl) {
@@ -20400,7 +20411,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         let added = 0;
         let updated = 0;
         const now = Date.now();
+        state.ignored = state.ignored || {};
         cards.forEach((card, index) => {
+            if (state.ignored[card.href]) return;
             const id = `${site}::${card.path}`;
             const rank = pageIndex * 1000 + index;
             const existing = state.items[id];
@@ -20459,7 +20472,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return location.origin;
     }
 
-    const SAVED_EMPTY_RE = /未有记录|暂无记录|暫無記錄|還沒有收藏|还没有收藏|暂无收藏|暫無收藏|No records|Nothing saved|Nothing here yet/i;
+    const SAVED_EMPTY_RE = /未有记录|未有紀錄|未有記錄|暂无记录|暫無記錄|暫無紀錄|還沒有收藏|还没有收藏|暂无收藏|暫無收藏|沒有收藏|没有收藏|尚未收藏|No records|No saved|Nothing saved|Nothing here yet/i;
 
     function isSavedEmptyDoc(doc) {
         if (!doc) return false;
@@ -20505,7 +20518,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                             useFrame = true;
                             doc = null;
                         } else if (!probe.length) {
-                            log('⚠️ 没有解析到卡片：请确认已登录 MissAV 并停留在收藏页');
+                            if (isSavedEmptyDoc(doc)) {
+                                state.meta[CURRENT_SITE] = Object.assign({}, state.meta[CURRENT_SITE] || {}, { emptyFavorites: true });
+                                log('📭 站点收藏为空（页面显示未有记录）');
+                            } else {
+                                log('⚠️ 没有解析到卡片：请确认已登录 MissAV 并停留在收藏页');
+                            }
                             break;
                         }
                     }
@@ -20527,7 +20545,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     log(`⚠️ 第 ${page} 页加载超时`);
                     break;
                 }
-                doc = await waitForCards(frame, 'missav', 5000);
+                doc = await waitForCards(frame, 'missav', 8000);
+                if (!doc) doc = frameDoc(frame);
                 if (!doc) {
                     log('⚠️ 无法读取框架内容，请确认脚本运行在 MissAV 站点上');
                     break;
@@ -20541,7 +20560,34 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 break;
             }
 
-            const cards = collectCards(doc, 'missav', url);
+            let cards = collectCards(doc, 'missav', url);
+            let retried = 0;
+            while (!cards.length && retried < 2 && !isSavedEmptyDoc(doc)) {
+                retried++;
+                log(`↻ 第 ${page} 页没读到卡片，重试 ${retried}/2`);
+                await sleep(700 * retried);
+                const retryUrl = `${url}${url.includes('?') ? '&' : '?'}_av=${Date.now()}`;
+                if (useFrame && frame) {
+                    if (!(await loadFrame(frame, retryUrl))) break;
+                    await waitForCards(frame, 'missav', 7000);
+                    doc = frameDoc(frame);
+                } else {
+                    try {
+                        doc = toDoc(await httpGet(retryUrl));
+                    } catch (error) {
+                        doc = null;
+                    }
+                }
+                if (!doc) break;
+                cards = collectCards(doc, 'missav', url);
+            }
+            if (cards.length >= 4) {
+                const withCover = cards.filter(card => card.cover);
+                if (withCover.length >= Math.max(3, Math.ceil(cards.length * 0.6)) && withCover.length < cards.length) {
+                    log(`🩹 第 ${page} 页忽略 ${cards.length - withCover.length} 张无封面卡片（疑似推荐位）`);
+                    cards = withCover;
+                }
+            }
             const signature = cards.slice(0, 12).map(card => card.path).join('|');
             const declared = detectMaxPage(doc);
             if (declared > maxPage) {
@@ -21077,16 +21123,31 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             state.meta[CURRENT_SITE] = metaNow;
             if (!token.cancelled && runStats.seen.size >= Math.max(5, Math.ceil(total * 0.5))) {
                 const stale = allItems().filter(item => !runStats.seen.has(item.href)).map(item => item.id);
-                if (stale.length) metaNow.stale = stale;
+                const junk = stale.filter(id => {
+                    const item = state.items[id];
+                    return item && !item.cover;
+                });
+                for (const id of junk) delete state.items[id];
+                if (junk.length) pushLog(`🧹 已自动清理 ${formatNumber(junk.length)} 条无封面的残留条目`);
+                const rest = stale.filter(id => !junk.includes(id));
+                if (rest.length) metaNow.stale = rest;
                 else delete metaNow.stale;
             } else {
                 delete metaNow.stale;
             }
             if (metaNow.emptyFavorites) {
                 const allIds = allItems().map(item => item.id);
-                if (allIds.length) metaNow.stale = allIds;
-                else delete metaNow.stale;
-                pushLog(`📭 站点收藏为 0，本地 ${formatNumber(allIds.length)} 条已标记为未见，可在提示条点「清理未见」移除`);
+                if (!allIds.length) {
+                    pushLog('📭 站点收藏为 0，本地没有残留记录');
+                    delete metaNow.stale;
+                } else if (window.confirm(`站点收藏显示为 0 条。\n是否清空本地这 ${allIds.length} 条记录？\n（如果你刚退出登录，请选「取消」）`)) {
+                    for (const id of allIds) delete state.items[id];
+                    delete metaNow.stale;
+                    pushLog(`📭 站点收藏为 0，已清空本地 ${formatNumber(allIds.length)} 条残留记录`);
+                } else {
+                    metaNow.stale = allIds;
+                    pushLog(`📭 站点收藏为 0，本地 ${formatNumber(allIds.length)} 条已标记为未见，可在提示条手动清理`);
+                }
             } else {
                 delete metaNow.emptyFavorites;
             }
@@ -22150,10 +22211,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         go.dataset.role = 'go';
         go.title = '到站点取消收藏，成功后删除本地记录';
         go.addEventListener('click', runUnfavorite);
+        const drop = el('button', 'fs-btn fs-btn-mini', '移出列表');
+        drop.type = 'button';
+        drop.title = '只从大屏移除，并加入忽略列表（不影响站点收藏，同步也不再收录）';
+        drop.addEventListener('click', dropSelectedLocal);
         const exit = el('button', 'fs-btn fs-btn-mini', '退出');
         exit.type = 'button';
         exit.addEventListener('click', () => setSelectMode(false));
-        bar.append(count, all, invert, go, exit);
+        bar.append(count, all, invert, go, drop, exit);
         return bar;
     }
 
@@ -22333,6 +22398,27 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         const peek = String((candidates[0] && candidates[0].outerHTML) || '').replace(/\s+/g, ' ').slice(0, 150);
         return { ok: false, reason: `点击后状态未变化（按钮：${peek}）` };
+    }
+
+    function dropSelectedLocal() {
+        const items = Array.from(ui.selected).map(id => state.items[id]).filter(Boolean);
+        if (!items.length) return;
+        if (!window.confirm(`从大屏移除这 ${items.length} 条？\n不影响站点收藏，同步时也会跳过它们。`)) return;
+        state.ignored = state.ignored || {};
+        for (const item of items) {
+            state.ignored[item.href] = Date.now();
+            delete state.items[item.id];
+            ui.selected.delete(item.id);
+        }
+        const keys = Object.keys(state.ignored);
+        if (keys.length > 500) {
+            keys.sort((a, b) => (state.ignored[a] || 0) - (state.ignored[b] || 0));
+            for (const key of keys.slice(0, keys.length - 500)) delete state.ignored[key];
+        }
+        commitData();
+        pushLog(`🚫 已移出 ${items.length} 条并加入忽略列表`);
+        if (!ui.selected.size) setSelectMode(false);
+        else updateSelectBar();
     }
 
     async function runUnfavorite() {
