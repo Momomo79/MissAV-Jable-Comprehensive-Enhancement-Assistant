@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.07
+// @version      16.10
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -58,8 +58,8 @@
 // @license      MIT
 // @homepageURL  https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant
 // @supportURL   https://github.com/Momomo79/MissAV-Jable-Comprehensive-Enhancement-Assistant/issues
-// @downloadURL  https://update.sleazyfork.org/scripts/595477/MissAV%20%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.user.js
-// @updateURL    https://update.sleazyfork.org/scripts/595477/MissAV%20%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.meta.js
+// @downloadURL https://update.sleazyfork.org/scripts/595477/MissAV%20%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.user.js
+// @updateURL https://update.sleazyfork.org/scripts/595477/MissAV%20%20Jable%20%E7%BB%BC%E5%90%88%E5%A2%9E%E5%BC%BA%E5%8A%A9%E6%89%8B.meta.js
 // ==/UserScript==
 (function () {
     'use strict';
@@ -1455,6 +1455,86 @@
         if (Object.keys(index).length > CACHE_MAX_ENTRIES) cacheSweep(0);
         return true;
     }
+    const SCRIPT_CACHE_PREFIXES = [INFO_CACHE_PREFIX, ACTRESS_CACHE_PREFIX, 'busActor:', 'wikiActor:'];
+    const SCRIPT_CACHE_KEYS = [WHOS_FRAMES_KEY];
+    function isScriptCacheKey(key) {
+        if (!key || key === CACHE_INDEX_KEY) return false;
+        if (SCRIPT_CACHE_KEYS.indexOf(key) >= 0) return true;
+        if (key === JAVDB_DETAIL_CACHE_KEY || key === SOCIAL_ICON_X_STORE) return true;
+        return SCRIPT_CACHE_PREFIXES.some(prefix => key.indexOf(prefix) === 0);
+    }
+    function scriptCacheEntries() {
+        const seen = new Set();
+        const entries = [];
+        const push = key => {
+            if (!key || seen.has(key) || key === CACHE_INDEX_KEY) return;
+            seen.add(key);
+            let size = 0;
+            try {
+                size = (localStorage.getItem(STORAGE_PREFIX + key) || '').length;
+            } catch (_) {
+                size = 0;
+            }
+            entries.push({ key, size });
+        };
+        try {
+            for (const key of Object.keys(cacheIndexRead())) push(key);
+        } catch (error) {
+            debugLog(error, 'cache-scan-index');
+        }
+        try {
+            const scanned = [];
+            for (let index = 0; index < localStorage.length; index += 1) {
+                const full = localStorage.key(index);
+                if (full && full.indexOf(STORAGE_PREFIX) === 0) scanned.push(full.slice(STORAGE_PREFIX.length));
+            }
+            for (const key of scanned) {
+                if (isScriptCacheKey(key)) push(key);
+            }
+        } catch (error) {
+            debugLog(error, 'cache-scan-storage');
+        }
+        return entries;
+    }
+    function scriptCacheStats() {
+        const entries = scriptCacheEntries();
+        return {
+            count: entries.length,
+            bytes: entries.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
+        };
+    }
+    function clearScriptCache() {
+        const entries = scriptCacheEntries();
+        let bytes = 0;
+        for (const item of entries) {
+            const fullKey = STORAGE_PREFIX + item.key;
+            bytes += Number(item.size) || 0;
+            READ_CACHE_MEMO.delete(item.key);
+            PERSIST_QUEUE.delete(fullKey);
+            PERSIST_WRITTEN.delete(fullKey);
+            try {
+                localStorage.removeItem(fullKey);
+            } catch (error) {
+                debugLog(error, 'cache-clear');
+            }
+        }
+        READ_CACHE_MEMO.clear();
+        try {
+            cacheIndexSave({});
+        } catch (error) {
+            debugLog(error, 'cache-clear-index');
+        }
+        try {
+            javdbDetailMemo.clear();
+        } catch (_) {}
+        try {
+            javdbIdMemo.clear();
+        } catch (_) {}
+        try {
+            whosFrameMemo = null;
+        } catch (_) {}
+        return { count: entries.length, bytes };
+    }
     function stripTags(html) {
         return String(html ?? '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
     }
@@ -1638,6 +1718,7 @@
         loginUser: loginVault.read('loginUser'),
         loginPass: loginVault.read('loginPass'),
         autoLogin: store.getBool('autoLogin', true),
+        fullTitle: store.getBool('fullTitle', true),
         loginPanelOpen: store.getBool('loginPanelOpen', false),
         backupFields: store.getKeyName('backupFields', 'name,code'),
         backupLimit: store.getNumber('backupLimit', 50, 1, 2000),
@@ -1694,6 +1775,7 @@
         loginVault.write('loginUser', settings.loginUser || '');
         loginVault.write('loginPass', settings.loginPass || '');
         store.set('autoLogin', settings.autoLogin);
+        store.set('fullTitle', settings.fullTitle);
         store.set('loginPanelOpen', settings.loginPanelOpen);
         store.set('backupFields', settings.backupFields);
         store.set('backupLimit', settings.backupLimit);
@@ -2375,14 +2457,15 @@
     const GLOBAL_SWEEP_INTERVAL = 2600;
     function startAdObserver() {
         if (state.adObserver || !document.body) return;
-        const pending = [];
+        const pending = new Set();
         let frames = false;
         let globalSweepAt = 0;
         let lastFullSweepAt = 0;
         let lastBodyCount = -1;
         const sweep = throttle(() => {
-            if (!pending.length) return;
-            const batch = new Set(pending.splice(0, pending.length));
+            if (!pending.size) return;
+            const batch = new Set(pending);
+            pending.clear();
             const nodes = [];
             for (const node of batch) {
                 if (isOwnUiNode(node)) continue;
@@ -2421,18 +2504,18 @@
             for (const record of records) {
                 if (record.type === 'attributes') {
                     if (record.target && record.target.tagName === 'A') {
-                        pending.push(record.target);
+                        pending.add(record.target);
                     }
                     continue;
                 }
                 for (const node of record.addedNodes) {
                     if (node.nodeType !== 1) continue;
                     if (isOwnUiNode(node)) continue;
-                    pending.push(node);
+                    pending.add(node);
                     if (!frames && (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe')))) frames = true;
                 }
             }
-            if (pending.length) sweep();
+            if (pending.size) sweep();
         });
         trackObserver(state.adObserver, document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
     }
@@ -3913,11 +3996,13 @@
         const box = viewportBox();
         const edge = panelEdgeGap();
         const width = panel.offsetWidth || PANEL_WIDTH;
-        const maxX = Math.max(edge, box.w - width - edge);
-        panel.style.left = `${clamp(panel.offsetLeft || settings.panelX, edge, maxX)}px`;
         const height = panel.offsetHeight || 60;
+        const left = panel.offsetLeft || settings.panelX;
+        const top = panel.offsetTop || settings.panelY;
+        const maxX = Math.max(edge, box.w - width - edge);
         const maxY = Math.max(edge, box.h - height - edge);
-        panel.style.top = `${clamp(panel.offsetTop || settings.panelY, edge, maxY)}px`;
+        panel.style.left = `${clamp(left, edge, maxX)}px`;
+        panel.style.top = `${clamp(top, edge, maxY)}px`;
     }
     function makeDraggable(element, handle, keys = { x: 'panelX', y: 'panelY' }, onEnd = null) {
         let originX = 0;
@@ -3925,6 +4010,8 @@
         let startX = 0;
         let startY = 0;
         let moved = false;
+        let dragW = 0;
+        let dragH = 0;
         let saveTimer = 0;
         let suppressHandleClickUntil = 0;
         const TOUCH_DRAG_THRESHOLD = 6;
@@ -3948,8 +4035,8 @@
             }
             moved = true;
             const box = viewportBox();
-            const maxX = Math.max(0, box.w - element.offsetWidth);
-            const maxY = Math.max(0, box.h - element.offsetHeight);
+            const maxX = Math.max(0, box.w - dragW);
+            const maxY = Math.max(0, box.h - dragH);
             element.style.left = `${clamp(originX + event.clientX - startX, 0, maxX)}px`;
             element.style.top = `${clamp(originY + event.clientY - startY, 0, maxY)}px`;
             scheduleSave();
@@ -3975,6 +4062,8 @@
             element.classList.add('panel-dragging');
             originX = element.offsetLeft;
             originY = element.offsetTop;
+            dragW = element.offsetWidth;
+            dragH = element.offsetHeight;
             startX = event.clientX;
             startY = event.clientY;
             moved = false;
@@ -3992,6 +4081,8 @@
             if (!touch) return;
             originX = element.offsetLeft;
             originY = element.offsetTop;
+            dragW = element.offsetWidth;
+            dragH = element.offsetHeight;
             startX = touch.clientX;
             startY = touch.clientY;
             let armed = false;
@@ -4007,8 +4098,8 @@
                 }
                 moveEvent.preventDefault();
                 const box = viewportBox();
-                const maxX = Math.max(0, box.w - element.offsetWidth);
-                const maxY = Math.max(0, box.h - element.offsetHeight);
+                const maxX = Math.max(0, box.w - dragW);
+                const maxY = Math.max(0, box.h - dragH);
                 element.style.left = `${clamp(originX + dx, 0, maxX)}px`;
                 element.style.top = `${clamp(originY + dy, 0, maxY)}px`;
                 scheduleSave();
@@ -4041,6 +4132,77 @@
         if (!root) return;
         for (const input of root.querySelectorAll('input[type="range"]')) syncRangeFill(input);
     }
+    applyFullTitleMode();
+    GM_addStyle(`
+        html.av-full-title .thumbnail h6,
+        html.av-full-title .thumbnail .text-secondary,
+        html.av-full-title .thumbnail .truncate,
+        html.av-full-title .video-img-box .title,
+        html.av-full-title .video-img-box .truncate,
+        html.av-full-title .video-title,
+        html.av-full-title .video-title a,
+        html.av-full-title .item .title,
+        html.av-full-title .card .title,
+        html.av-full-title [class*="line-clamp"] {
+            display: block !important;
+            overflow: visible !important;
+            white-space: normal !important;
+            text-overflow: clip !important;
+            -webkit-line-clamp: unset !important;
+            -webkit-box-orient: unset !important;
+            max-height: none !important;
+        }
+    `);
+    GM_addStyle(`
+        html.av-full-title-detail h1.text-base,
+        html.av-full-title-detail h1.text-lg,
+        html.av-full-title-detail .video-info h1,
+        html.av-full-title-detail .video-info h2,
+        html.av-full-title-detail .video-detail h1,
+        html.av-full-title-detail .video-detail h2,
+        html.av-full-title-detail .video-detail-title,
+        html.av-full-title-detail .detail h1,
+        html.av-full-title-detail .mobile-title,
+        html.av-full-title-detail section.video-info > .info-header h1,
+        html.av-full-title-detail section.video-info > .info-header h4,
+        html.av-full-title-detail .video-info .video-title,
+        html.av-full-title-detail .video-detail .video-title,
+        html.av-full-title-detail .detail .video-title,
+        html.av-full-title-detail .video-info h1 .truncate,
+        html.av-full-title-detail .video-info h2 .truncate,
+        html.av-full-title-detail .video-detail h1 .truncate,
+        html.av-full-title-detail .detail h1 .truncate,
+        html.av-full-title-detail section.video-info > .info-header h1 .truncate,
+        html.av-full-title-detail section.video-info > .info-header h4 .truncate {
+            display: block !important;
+            overflow: visible !important;
+            white-space: normal !important;
+            text-overflow: clip !important;
+            -webkit-line-clamp: unset !important;
+            -webkit-box-orient: unset !important;
+            max-height: none !important;
+        }
+    `);
+
+    function isPlaybackPage() {
+        const host = (location.hostname || '').toLowerCase();
+        const path = location.pathname || '/';
+        if (host.includes('jable')) return /^\/videos\/[^/]+\/?$/i.test(path);
+        if (host.includes('missav')) {
+            if (/\/(?:search|actress(?:es)?|genres?|makers?|labels?|series|tags?|favorites|history|playlists?)\//i.test(path)) return false;
+            return /[a-z0-9]{2,10}-\d{2,5}\/?$/i.test(path);
+        }
+        return false;
+    }
+    function applyFullTitleMode() {
+        const on = settings.fullTitle !== false;
+        const playback = isPlaybackPage();
+        document.documentElement.classList.toggle('av-full-title', on && !playback);
+        document.documentElement.classList.toggle('av-full-title-detail', on && playback);
+        const host = document.getElementById('fav-screen-root');
+        if (host) host.classList.toggle('is-full-title', on);
+    }
+
     let uiStylesApplied = false;
     function applyUiStyles() {
         const mobileSolid = AV_PLATFORM.isMobile ? Math.max(0.92, Number(settings.opacity) || 0) : null;
@@ -5380,6 +5542,13 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             body.scrollTop = 0;
             syncRangeFills(body);
             paintKpis(key);
+            if (key === 'setup' && state.refreshCacheNote) {
+                try {
+                    state.refreshCacheNote();
+                } catch (error) {
+                    debugLog(error, 'cache-note');
+                }
+            }
             try { lockBodyHeight(); } catch (e) { debugLog('panel-lock-height', e); }
             requestAnimationFrame(() => { try { lockBodyHeight(); } catch (e) {} });
         };
@@ -5400,13 +5569,25 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const box = viewportBox();
             const width = panel.offsetWidth || PANEL_WIDTH;
             const height = panel.offsetHeight || 60;
-            panel.style.bottom = 'auto';
             const edge = panelEdgeGap();
+            panel.style.bottom = 'auto';
             panel.style.left = `${clamp(Number(settings.panelX) || 0, edge, Math.max(edge, box.w - width - edge))}px`;
             panel.style.top = `${clamp(Number(settings.panelY) || 0, edge, Math.max(edge, box.h - height - edge))}px`;
         };
         state.layoutPanel = layoutPanel;
-        window.addEventListener('resize', () => { lockBodyHeight(); });
+        let lockBodyFrame = 0;
+        const queueLockBodyHeight = () => {
+            if (lockBodyFrame) return;
+            lockBodyFrame = requestAnimationFrame(() => {
+                lockBodyFrame = 0;
+                try {
+                    lockBodyHeight();
+                } catch (error) {
+                    debugLog(error, 'panel-lock-height');
+                }
+            });
+        };
+        window.addEventListener('resize', queueLockBodyHeight, { passive: true });
         const PANEL_MOTION_MS = 300;
         const PANEL_MOTION_CLOSE_MS = 280;
         const PANEL_MOTION_EASE = 'cubic-bezier(.4,0,.2,1)';
@@ -5902,8 +6083,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             store.set('compactUi', on);
             if (state.applyPanelSkin) state.applyPanelSkin();
         }, true);
+        const fullTitleRow = avxSwitchRow('完整标题', '取消标题截断，列表与海报墙显示完整片名', settings.fullTitle !== false, on => {
+            settings.fullTitle = on;
+            store.set('fullTitle', on);
+            applyFullTitleMode();
+        }, true);
         lookCard.insertBefore(widthField, sliderRow);
         lookCard.insertBefore(compactRow, widthField);
+        lookCard.insertBefore(fullTitleRow, widthField);
         setupPane.appendChild(lookCard);
         const platCard = avxCard('运行平台', '');
         const platRow = avxEl('div', 'avx-chips');
@@ -5934,6 +6121,29 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             mobileCard.appendChild(mobilePanel);
             setupPane.appendChild(mobileCard);
         }
+        const cacheCard = avxCard('缓存清理', '只清脚本缓存');
+        const cacheBtn = avxBtn('清除', { variant: 'danger', small: true });
+        cacheBtn.title = '清除本站的剧照、短评、评分、影单、关键帧、女优资料等脚本缓存，三个大屏的数据与全部设置都会保留';
+        const cacheNote = avxEl('div', 'avx-note', '');
+        const refreshCacheNote = () => {
+            const stats = scriptCacheStats();
+            cacheNote.textContent = stats.count
+                ? `当前站点有 ${stats.count} 项脚本缓存，约 ${formatBytes(stats.bytes)}；清除后下次进入详情页会重新抓取。`
+                : '当前站点暂无脚本缓存。';
+        };
+        cacheBtn.addEventListener('click', () => {
+            const result = clearScriptCache();
+            refreshCacheNote();
+            if (!result.count) {
+                log('🧹 本站没有需要清理的脚本缓存');
+                return;
+            }
+            log(`🧹 已清除本站脚本缓存 ${result.count} 项，释放约 ${formatBytes(result.bytes)}`);
+        });
+        cacheCard.append(mkActionRow('清除本站缓存', '剧照 / 短评 / 关键帧等，不动大屏数据', '清除', cacheBtn), cacheNote);
+        setupPane.appendChild(cacheCard);
+        state.refreshCacheNote = refreshCacheNote;
+        refreshCacheNote();
         const quickCard = avxCard('快捷操作', '设置随改随存');
         const actionRow = avxEl('div', 'avx-actions');
         resetPosBtn.classList.remove('btn', 'btn-primary', 'btn-ghost');
@@ -6208,7 +6418,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     function quickPointerInsidePlayer() {
         const host = state.container?.isConnected ? state.container : state.video;
-        const box = host?.getBoundingClientRect?.();
+        const box = host ? cachedQuickRect(host) || host.getBoundingClientRect?.() : null;
         if (!box) return false;
         return (
             quickPointerX >= box.left &&
@@ -6387,16 +6597,20 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
     }
     function clearDockPadding(host) {
-        const record = [];
+        const chain = [];
         let node = host;
         for (let depth = 0; depth < 4 && node && node !== document.body && node !== document.documentElement; depth += 1) {
-            const pad = Number.parseFloat(getComputedStyle(node).paddingBottom) || 0;
-            if (pad > 0) {
-                record.push([node, node.style.getPropertyValue('padding-bottom'), node.style.getPropertyPriority('padding-bottom')]);
-                node.style.setProperty('padding-bottom', '0px', 'important');
-            }
+            chain.push(node);
             node = node.parentElement;
         }
+        const pads = chain.map(item => Number.parseFloat(getComputedStyle(item).paddingBottom) || 0);
+        const record = [];
+        chain.forEach((item, index) => {
+            if (pads[index] > 0) {
+                record.push([item, item.style.getPropertyValue('padding-bottom'), item.style.getPropertyPriority('padding-bottom')]);
+                item.style.setProperty('padding-bottom', '0px', 'important');
+            }
+        });
         return record;
     }
     function restoreDockPadding() {
@@ -6589,7 +6803,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             drag = {
                 pointerId: event.pointerId,
                 offsetX: event.clientX - (rect.left + rect.width / 2),
-                offsetY: event.clientY - (rect.top + rect.height / 2)
+                offsetY: event.clientY - (rect.top + rect.height / 2),
+                w: rect.width,
+                h: rect.height
             };
             quick.classList.add('quick-dragging');
             if (event.pointerType === 'mouse') {
@@ -6604,16 +6820,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         };
         const onMove = event => {
             if (!drag || event.pointerId !== drag.pointerId) return;
-            const rect = quick.getBoundingClientRect();
             const vw = window.innerWidth || document.documentElement.clientWidth || 0;
             const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-            if (!(vw > 0 && vh > 0) || !rect.width) return;
+            if (!(vw > 0 && vh > 0) || !drag.w) return;
             const padX = 6;
             const padY = 8;
-            const minX = rect.width / 2 + padX;
-            const maxX = vw - rect.width / 2 - padX;
-            const minY = rect.height / 2 + padY;
-            const maxY = vh - rect.height / 2 - padY;
+            const minX = drag.w / 2 + padX;
+            const maxX = vw - drag.w / 2 - padX;
+            const minY = drag.h / 2 + padY;
+            const maxY = vh - drag.h / 2 - padY;
             const x = maxX > minX ? clamp(event.clientX - drag.offsetX, minX, maxX) : vw / 2;
             const y = maxY > minY ? clamp(event.clientY - drag.offsetY, minY, maxY) : vh / 2;
             setImportantStyle(quick, { left: `${Math.round(x)}px`, top: `${Math.round(y)}px` });
@@ -7108,16 +7323,21 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             setTheater(false, { silent: true });
             return;
         }
+        const setWinPx = (node, prop, px) => {
+            const next = `${px}px`;
+            if (node.style.getPropertyValue(prop) === next) return;
+            node.style.setProperty(prop, next, 'important');
+        };
         const apply = padding => {
             const live = theaterState;
             if (!live || live !== current) return;
             const size = theaterSizeFor(current.column, current.ratio);
             const width = Math.max(240, size.width - padding);
             const height = Math.round(width / current.ratio);
-            current.host.style.setProperty('width', `${width}px`, 'important');
-            current.host.style.setProperty('height', `${height}px`, 'important');
+            setWinPx(current.host, 'width', width);
+            setWinPx(current.host, 'height', height);
             for (const node of current.widened) {
-                if (node.isConnected) node.style.setProperty('width', `${width}px`, 'important');
+                if (node.isConnected) setWinPx(node, 'width', width);
             }
         };
         apply(0);
@@ -7788,19 +8008,83 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function javDbMovieDetailUrl(id) {
         return `${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(String(id))}`;
     }
+    const JAVDB_WEB_BASE = 'https://javdb.com';
+    const javDbIdMemo = new Map();
+    function javDbIdFromHref(href) {
+        const text = String(href || '');
+        const local = text.match(/^\/v\/([a-zA-Z0-9_-]+)/);
+        if (local) return local[1];
+        const remote = text.match(/javdb\.com\/v\/([a-zA-Z0-9_-]+)/i);
+        return remote ? remote[1] : '';
+    }
+    async function searchJavDbMovieViaApi(code) {
+        const key = javDbCodeKey(code);
+        if (!key) return null;
+        const raw = await jdApiFetch(javDbSearchUrl(code));
+        const body = raw ? JSON.parse(raw) : null;
+        if (!body || body.success === 0 || !Array.isArray(body?.data?.movies)) return null;
+        return body.data.movies.find(item => javDbCodeKey(item?.number) === key) || null;
+    }
+    async function searchJavDbMovieViaWeb(code) {
+        const key = javDbCodeKey(code);
+        if (!key) return null;
+        const url = `${JAVDB_WEB_BASE}/search?` + new URLSearchParams({ q: String(code || ''), f: 'all' });
+        const html = await fetchHtml(url, { timeout: 4500, skipProxy: true });
+        const doc = parseHtmlDocument(html);
+        if (!doc) return null;
+        const anchors = [...doc.querySelectorAll('a[href^="/v/"]')];
+        let fallbackId = '';
+        for (const anchor of anchors) {
+            const id = javDbIdFromHref(anchor.getAttribute('href'));
+            if (!id) continue;
+            if (!fallbackId) fallbackId = id;
+            const title = anchor.querySelector('.video-title strong')?.textContent
+                || anchor.querySelector('strong')?.textContent
+                || anchor.querySelector('.video-title')?.textContent
+                || '';
+            if (title && javDbCodeKey(title).includes(key)) return { id };
+        }
+        if (anchors.length === 1 && fallbackId) return { id: fallbackId };
+        return null;
+    }
+    async function findIndexedJavDbMovie(code) {
+        const key = javDbCodeKey(code);
+        if (!key) return null;
+        const query = `site:javdb.com/v/ "${code}"`;
+        const engines = [
+            `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+            `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
+            `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+        ];
+        for (const url of engines) {
+            const html = await fetchHtml(url, { timeout: 4000, skipProxy: true });
+            if (!html) continue;
+            const found = [];
+            for (const match of html.matchAll(/javdb\.com\/v\/([a-zA-Z0-9_-]+)/gi)) {
+                if (!found.includes(match[1])) found.push(match[1]);
+            }
+            if (found.length) return { id: found[0] };
+        }
+        return null;
+    }
     async function searchJavDbMovie(code) {
         const key = javDbCodeKey(code);
         if (!key) return null;
-        let body = null;
-        try {
-            const raw = await jdApiFetch(javDbSearchUrl(code));
-            body = raw ? JSON.parse(raw) : null;
-        } catch (error) {
-            debugLog(error, 'javdb-search');
-            return null;
+        const cached = javDbIdMemo.get(key);
+        if (cached) return cached;
+        let movie = null;
+        for (const attempt of [searchJavDbMovieViaApi, searchJavDbMovieViaWeb, findIndexedJavDbMovie]) {
+            try {
+                movie = await attempt(code);
+            } catch (error) {
+                debugLog(error, 'javdb-search');
+                movie = null;
+            }
+            if (movie?.id) break;
         }
-        const movies = Array.isArray(body?.data?.movies) ? body.data.movies : [];
-        return movies.find(item => javDbCodeKey(item?.number) === key) || null;
+        if (!movie?.id) return null;
+        javDbIdMemo.set(key, movie);
+        return movie;
     }
     async function fetchJavDbDetail(id) {
         if (!id) return null;
@@ -11482,30 +11766,86 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         return out;
     }
+    function parseJavDbMovieHtml(html, code) {
+        const out = { rating: undefined, stills: [], reviews: [] };
+        const doc = parseHtmlDocument(html);
+        if (!doc) return out;
+        const key = javDbCodeKey(code);
+        const titleText = (doc.querySelector('h2.title strong.current-title')
+            || doc.querySelector('h2.title strong')
+            || doc.querySelector('.current-title')
+            || doc.querySelector('h2.title'))?.textContent?.trim() || '';
+        if (key && titleText && !javDbCodeKey(titleText).includes(key)) return out;
+        const scoreBox = doc.querySelector('.movie-panel-info .score-stars')
+            || doc.querySelector('.score-stars')
+            || doc.querySelector('.score');
+        const valueNode = scoreBox?.querySelector('.value');
+        let score = Number.parseFloat(String(valueNode?.textContent || '').replace(/[^\d.]/g, ''));
+        if (!(Number.isFinite(score) && score > 0 && score <= 5) && scoreBox) {
+            score = scoreBox.querySelectorAll('.icon-star.gr').length
+                || scoreBox.querySelectorAll('.icon-star:not(.gray)').length;
+        }
+        if (Number.isFinite(score) && score > 0 && score <= 5) {
+            const votesText = (scoreBox?.querySelector('.votes, .count'))?.textContent || '';
+            const votes = Number(String(votesText).replace(/[^\d]/g, ''));
+            out.rating = { score: Number((score * 2).toFixed(1)), count: votes > 0 ? votes : undefined, source: 'JavDB' };
+        }
+        const pushStill = href => {
+            const raw = String(href || '').trim();
+            if (!raw || raw.startsWith('data:') || raw.startsWith('javascript:')) return;
+            const abs = resolveUrl(raw, JAVDB_WEB_BASE);
+            if (!abs || NOW_PRINTING_RE.test(abs) || out.stills.includes(abs)) return;
+            out.stills.push(abs);
+        };
+        for (const anchor of doc.querySelectorAll('.tile-images.preview-images a[href], .preview-images a[href], a.tile-item[href]')) {
+            pushStill(anchor.getAttribute('href'));
+        }
+        if (!out.stills.length) {
+            for (const img of doc.querySelectorAll('.tile-images.preview-images img[src], .preview-images img[src]')) {
+                pushStill(img.getAttribute('src'));
+            }
+        }
+        if (!out.stills.length) pushStill(doc.querySelector('.column-video-cover img.video-cover, img.video-cover')?.getAttribute('src') || '');
+        for (const item of [...doc.querySelectorAll('.review-items .review-item, .review-list .review-item, .review-item')].slice(0, 20)) {
+            const content = (item.querySelector('.content, .review-content, .javdb-api-review-content, .message-body p, p')?.textContent || '').trim();
+            if (content.length < 2) continue;
+            const user = (item.querySelector('.review-author, .author, .user-name, .name, .review-title a, a[href^="/users/"]')?.textContent || '').trim() || '匿名';
+            const dateText = (item.querySelector('.time, time, .review-date')?.textContent || '').trim();
+            const date = ((dateText.match(/\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/) || [])[0] || '').replace(/[/.]/g, '-');
+            const stars = item.querySelectorAll('.score-stars .icon-star.gr, .score-stars .icon-star:not(.gray)').length;
+            out.reviews.push({ user, date, content, score: stars > 0 ? stars : undefined });
+        }
+        return out;
+    }
+    async function fetchJavDbMovieHtml(code, movieId) {
+        if (!movieId) return null;
+        const html = await fetchHtml(`${JAVDB_WEB_BASE}/v/${encodeURIComponent(String(movieId))}`, { timeout: 4500, skipProxy: true });
+        if (!html) return null;
+        const parsed = parseJavDbMovieHtml(html, code);
+        if (!parsed.stills.length && !parsed.reviews.length && !parsed.rating) return null;
+        return parsed;
+    }
     async function fetchJavDbInfo(code, onPartial) {
         const empty = { rating: undefined, stills: [], reviews: [], lists: [], credits: null, javDbMovieId: '' };
         let movie = null;
         try {
             movie = await searchJavDbMovie(code);
-        } catch (_) {
+        } catch (error) {
+            debugLog(error, 'javdb-search');
             return empty;
         }
         if (!movie?.id) return empty;
-        const movieId = encodeURIComponent(movie.id);
-        const detailUrl = javDbMovieDetailUrl(movie.id);
-        const reviewsUrl = `${JDFORREPAM_API}/api/v1/movies/${movieId}/reviews?` +
+        const movieId = String(movie.id);
+        const once = url => jdApiFetch(url).catch(() => '').then(raw => raw || jdApiFetch(url).catch(() => ''));
+        const reviewsUrl = `${JDFORREPAM_API}/api/v1/movies/${encodeURIComponent(movieId)}/reviews?` +
             new URLSearchParams({ page: '1', sort_by: 'hotly', limit: '20' });
         const listsUrl = `${JDFORREPAM_API}/api/v1/lists/related?` +
-            new URLSearchParams({ movie_id: movie.id, page: '1', limit: '20' });
-        const once = url => jdApiFetch(url).catch(() => '').then(raw => raw || jdApiFetch(url).catch(() => ''));
-        const [detailRaw, reviewsRaw, listsRaw] = await Promise.all([once(detailUrl), once(reviewsUrl), once(listsUrl)]);
+            new URLSearchParams({ movie_id: movieId, page: '1', limit: '20' });
         let rating;
         let credits = null;
         const stills = [];
-        const reviews = [];
-        const lists = [];
         try {
-            const detail = JSON.parse(detailRaw)?.data?.movie;
+            const detail = JSON.parse(await once(javDbMovieDetailUrl(movieId)))?.data?.movie;
             if (detail) {
                 credits = javDbCreditsFrom(movie, detail);
                 rememberJavDbCredits(code, credits);
@@ -11526,34 +11866,37 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     push(img?.large_url || img?.thumb_url || (typeof img === 'string' ? img : ''));
                 }
                 if (!stills.length) {
-                    const samples = Array.isArray(detail.sample_images) ? detail.sample_images
-                        : (Array.isArray(detail.samples) ? detail.samples : []);
-                    for (const item of samples) push(typeof item === 'string' ? item : item?.url || item?.thumbnail);
+                    const samples = Array.isArray(detail.sample_images) ? detail.sample_images : (Array.isArray(detail.samples) ? detail.samples : []);
+                    for (const item of samples) push(typeof item === 'string' ? item : (item?.url || item?.thumbnail || item?.large_url));
                 }
                 if (!stills.length) push(detail.cover_url || detail.thumb_url);
             }
         } catch (error) {
-            debugLog(error);
+            debugLog(error, 'javdb-detail');
         }
+        onPartial?.({ rating, stills: stills.slice() });
+        const [reviewsRaw, listsRaw] = await Promise.all([once(reviewsUrl).catch(() => ''), once(listsUrl).catch(() => '')]);
+        const reviews = [];
         try {
             const body = JSON.parse(reviewsRaw);
-            const list = Array.isArray(body?.data?.reviews) ? body.data.reviews : [];
-            for (const item of list.slice(0, 20)) {
+            for (const item of (Array.isArray(body?.data?.reviews) ? body.data.reviews : []).slice(0, 20)) {
                 const content = String(item?.content ?? '').trim();
                 if (content.length < 2) continue;
+                const score = Number(item?.score);
                 reviews.push({
                     user: String(item?.username ?? '').trim() || '匿名',
                     date: String(item?.created_at ?? '').slice(0, 10),
                     content,
-                    score: Number.isFinite(Number(item?.score)) ? Number(item.score) : undefined
+                    score: Number.isFinite(score) && score > 0 ? score : undefined
                 });
             }
         } catch (error) {
-            debugLog(error);
+            debugLog(error, 'javdb-reviews');
         }
+        const lists = [];
         try {
             const body = JSON.parse(listsRaw);
-            for (const item of Array.isArray(body?.data?.lists) ? body.data.lists : []) {
+            for (const item of (Array.isArray(body?.data?.lists) ? body.data.lists : [])) {
                 if (!item?.id) continue;
                 lists.push({
                     id: String(item.id),
@@ -11566,19 +11909,45 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 });
             }
         } catch (error) {
-            debugLog(error);
+            debugLog(error, 'javdb-lists');
         }
-        const partial = { rating, stills, reviews, lists, credits, javDbMovieId: String(movie.id) };
+        if (!stills.length || !reviews.length || !rating) {
+            const parsed = await fetchJavDbMovieHtml(code, movieId).catch(() => null);
+            if (parsed) {
+                if (!rating && parsed.rating) rating = parsed.rating;
+                for (const url of parsed.stills) {
+                    if (!stills.includes(url)) stills.push(url);
+                }
+                for (const review of parsed.reviews) {
+                    if (!reviews.some(existing => existing.content.slice(0, 80) === review.content.slice(0, 80))) reviews.push(review);
+                }
+            }
+        }
+        const partial = { rating, stills, reviews, lists, credits, javDbMovieId: movieId };
         onPartial?.(partial);
         return partial;
     }
     async function fetchJavLibraryInfo(code, onPartial) {
-        let html = await fetchHtml(`${JC_ENDPOINT}${encodeURIComponent(code)}`, { timeout: 3000, skipProxy: true });
-        if (html && !html.includes('class="score"')) {
-            const first = html.match(/href=["']\.\/\?v=([a-z0-9]+)["']/i);
-            if (first?.[1]) {
-                html = await fetchHtml(`https://www.javlibrary.com/cn/?v=${first[1]}`, { timeout: 3000, skipProxy: true }).catch(() => '');
+        const wanted = javDbCodeKey(code);
+        const detailIdFrom = doc => {
+            if (!doc) return '';
+            const idText = doc.querySelector('#video_id .text')?.textContent?.trim() || '';
+            if (idText && javDbCodeKey(idText).includes(wanted)) return '';
+            for (const anchor of doc.querySelectorAll('a[href^="./?v="]')) {
+                const label = anchor.querySelector('.id')?.textContent?.trim() || anchor.textContent?.trim() || '';
+                if (!javDbCodeKey(label).includes(wanted)) continue;
+                const id = (anchor.getAttribute('href') || '').match(/^\.\/\?v=([a-z0-9]+)$/i)?.[1];
+                if (id) return id;
             }
+            return '';
+        };
+        let html = await fetchHtml(`${JC_ENDPOINT}${encodeURIComponent(code)}`, { timeout: 3000, skipProxy: true });
+        let detailId = detailIdFrom(parseHtmlDocument(html));
+        if (!detailId && html && !html.includes('class="score"')) {
+            detailId = html.match(/href=["']\.\/\?v=([a-z0-9]+)["']/i)?.[1] || '';
+        }
+        if (detailId) {
+            html = await fetchHtml(`https://www.javlibrary.com/cn/?v=${detailId}`, { timeout: 3000, skipProxy: true }).catch(() => '');
         }
         if (!html) return { rating: undefined, reviews: [] };
         if (!javLibraryCodeMatches(html, code)) {
@@ -11592,8 +11961,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     async function fetchJavBusInfo(code, onPartial) {
         const html = await fetchHtml(`${JB_ENDPOINT}${encodeURIComponent(code)}`, {
             headers: { Cookie: 'age=verified; existmag=all; dv=1' },
-            timeout: 8000,
-            skipProxy: true
+            timeout: 4000
         });
         const parsed = parseJavBusHtml(html);
         onPartial?.(parsed);
@@ -11887,8 +12255,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const cached = readCache(cacheKey);
         const cachedFilled = !!cached && !!(cached.rating || (cached.stills || []).length || (cached.reviews || []).length || (cached.lists || []).length);
         if (cachedFilled) {
-            state.infoData = cached;
-            if (session === state.infoSession) applyInfoToPage(cached);
+            stillState.current = usableStills(cached.stills ?? []);
+            stillState.fallbacks = [];
+            state.infoData = Object.assign({}, cached, { stills: stillState.current.slice() });
+            if (session === state.infoSession) applyInfoToPage(state.infoData);
             return cached;
         }
         if (cached) cacheForget(cacheKey);
@@ -11896,11 +12266,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const merged = [...pageReviews];
         const seenStills = [];
         const seenLists = [];
-        const acceptStills = incoming => {
-            for (const url of usableStills(incoming ?? [])) {
+        const acceptStills = incoming => offerStills(incoming, accepted => {
+            for (const url of accepted) {
                 if (!seenStills.includes(url)) seenStills.push(url);
             }
-        };
+        });
         const acceptLists = incoming => {
             for (const item of incoming ?? []) {
                 if (item?.id && !seenLists.some(existing => existing.id === item.id)) seenLists.push(item);
@@ -11913,7 +12283,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
             if (partial.stills?.length) {
                 acceptStills(partial.stills);
-                state.infoData.stills = [...seenStills];
+                state.infoData.stills = stillState.current.slice();
             }
             if (partial.reviews?.length) {
                 merged.push(...partial.reviews);
@@ -11944,7 +12314,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const finalData = {
             code,
             rating: javLib.rating || javDb.rating,
-            stills: [...seenStills],
+            stills: stillState.current.slice(),
             reviews: dedupeReviews(merged),
             lists: [...seenLists],
             credits: javDb.credits || state.infoData.credits || null,
@@ -12110,27 +12480,60 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         lists: '暂无收录该影片的精选影单'
     };
     const INFO_BLOCK_SELECTORS = ACTIVE_SELECTORS.infoBlock.slice();
-    let stillCode = '';
-    const stillFailed = new Set();
+    const stillState = { code: '', current: [], fallbacks: [], failed: new Set() };
     function beginStillSearch(code) {
-        if (stillCode === code) return;
-        stillCode = code;
-        stillFailed.clear();
+        if (stillState.code === code) return;
+        stillState.code = code;
+        stillState.current = [];
+        stillState.fallbacks = [];
+        stillState.failed.clear();
     }
     function usableStills(urls) {
-        return [...new Set(urls)].filter(url => url && !stillFailed.has(url) && !NOW_PRINTING_RE.test(url));
+        return [...new Set(urls ?? [])].filter(url => url && !stillState.failed.has(url) && !NOW_PRINTING_RE.test(url));
+    }
+    function offerStills(urls, onAccepted) {
+        const candidate = usableStills(urls);
+        if (!candidate.length) return;
+        if (!stillState.current.length) {
+            stillState.current = candidate;
+            onAccepted?.(candidate);
+            return;
+        }
+        if (stillState.current[0] === candidate[0]) return;
+        if (stillState.fallbacks.some(item => item[0] === candidate[0])) return;
+        stillState.fallbacks.push(candidate);
+    }
+    function syncStillCount(left) {
+        const refs = state.infoSection;
+        if (!refs) return;
+        const tab = refs.tabs.querySelector('[data-tab="stills"]');
+        if (tab) tab.textContent = `官方剧照 (${left})`;
+        const stat = [...refs.stats.querySelectorAll('.av-info-stat')].find(node => node.textContent.endsWith('剧照'));
+        if (stat) stat.textContent = `${left} 剧照`;
     }
     function reportStillError(url, figure) {
-        if (!url) return;
-        stillFailed.add(url);
+        if (url) stillState.failed.add(url);
         const info = state.infoData;
-        if (info && Array.isArray(info.stills)) info.stills = info.stills.filter(item => item !== url);
+        const before = Array.isArray(info?.stills) ? info.stills.join('\n') : '';
+        stillState.current = usableStills(stillState.current);
+        let promoted = false;
+        while (!stillState.current.length && stillState.fallbacks.length) {
+            const next = usableStills(stillState.fallbacks.shift());
+            if (!next.length) continue;
+            stillState.current = next;
+            promoted = true;
+        }
+        if (info) info.stills = stillState.current.slice();
+        const after = Array.isArray(info?.stills) ? info.stills.join('\n') : '';
+        if (promoted && after !== before && state.infoSection) {
+            renderInfoSection(info);
+            return;
+        }
         if (figure?.parentElement) figure.remove();
         const refs = state.infoSection;
         if (!refs) return;
         const left = refs.grid.querySelectorAll('.av-still-item').length;
-        const tab = refs.tabs.querySelector('[data-tab="stills"]');
-        if (tab) tab.textContent = `官方剧照 (${left})`;
+        syncStillCount(left);
         if (!left) {
             const p = document.createElement('p');
             p.className = 'av-hub-empty';
@@ -12138,8 +12541,23 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             refs.grid.replaceChildren(p);
         }
     }
+    function infoWideMount(anchor) {
+        if (!anchor) return null;
+        if (!(location.hostname || '').toLowerCase().includes('jable')) return null;
+        const hostSelectors = ['section.video-info', '.video-info', 'section.video-detail', '.video-detail'];
+        for (const selector of hostSelectors) {
+            const block = document.querySelector(selector);
+            if (!block || block === document.body || !block.parentElement) continue;
+            if (!block.contains(anchor)) continue;
+            const node = [...block.children].find(child => child.contains(anchor)) || block.firstElementChild || null;
+            return { host: block, node };
+        }
+        return null;
+    }
     function infoMount(anchor) {
         if (!anchor) return null;
+        const wide = infoWideMount(anchor);
+        if (wide) return wide;
         let node = anchor;
         while (node.parentElement && node.parentElement !== document.body) {
             const parent = node.parentElement;
@@ -12167,6 +12585,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return { host, node };
     }
     function buildInfoSection() {
+        const cachedRefs = state.infoSection;
+        if (cachedRefs && cachedRefs.root && cachedRefs.root.isConnected) return cachedRefs;
         if (!document.querySelector('.av-info-section')) {
             const anchor = infoAnchor();
             const mount = infoMount(anchor);
@@ -12241,6 +12661,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             root.append(head, body);
             mount.host.insertBefore(root, mount.node);
             clampMobileInjectedWidth();
+            INFO_RENDER_SIG.head = null;
+            INFO_RENDER_SIG.stills = null;
+            INFO_RENDER_SIG.reviews = null;
             state.infoSection = {
                 root, head, body, meta, stats, chevron, tabs, panes,
                 grid, reviews, lists, loading, activeTab: 'stills'
@@ -12255,9 +12678,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!viewport) return;
         const targets = Array.from(document.querySelectorAll('.av-info-section, .av-jable-meta'));
         if (!targets.length) return;
-        const measured = [];
         for (const el of targets) {
             if (el.style.maxWidth) el.style.maxWidth = '';
+        }
+        const measured = [];
+        for (const el of targets) {
             const rect = el.getBoundingClientRect();
             if (!rect.width) continue;
             measured.push({ el, width: rect.width, left: Math.max(0, rect.left) });
@@ -12290,6 +12715,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         document.querySelector('.av-info-section')?.remove();
         state.infoSection = null;
     }
+    const INFO_RENDER_SIG = { head: null, stills: null, reviews: null };
+    const infoSigKey = (list, pick) => list.map(pick).join('\u0001');
     function renderInfoSection(data) {
         if (!data) return;
         const stills = usableStills(data.stills ?? []);
@@ -12303,50 +12730,60 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!refs) return;
         if (refs.loading.parentElement) refs.loading.remove();
         const counts = { stills: stills.length, reviews: reviews.length, lists: lists.length };
-        for (const tab of refs.tabs.children) {
-            const key = tab.dataset?.tab;
-            const label = HUB_TABS.find(([name]) => name === key)?.[1] ?? '';
-            tab.textContent = `${label} (${counts[key] ?? 0})`;
+        const headSig = `${counts.stills}|${counts.reviews}|${counts.lists}`;
+        if (headSig !== INFO_RENDER_SIG.head) {
+            INFO_RENDER_SIG.head = headSig;
+            for (const tab of refs.tabs.children) {
+                const key = tab.dataset?.tab;
+                const label = HUB_TABS.find(([name]) => name === key)?.[1] ?? '';
+                tab.textContent = `${label} (${counts[key] ?? 0})`;
+            }
+            const statNodes = [];
+            if (counts.stills) statNodes.push(`${counts.stills} 剧照`);
+            if (counts.reviews) statNodes.push(`${counts.reviews} 讨论`);
+            if (counts.lists) statNodes.push(`${counts.lists} 影单`);
+            refs.stats.replaceChildren(...statNodes.map(text => {
+                const span = document.createElement('span');
+                span.className = 'av-info-stat';
+                span.textContent = text;
+                return span;
+            }));
         }
-        const statNodes = [];
-        if (counts.stills) statNodes.push(`${counts.stills} 剧照`);
-        if (counts.reviews) statNodes.push(`${counts.reviews} 讨论`);
-        if (counts.lists) statNodes.push(`${counts.lists} 影单`);
-        refs.stats.replaceChildren(...statNodes.map(text => {
-            const span = document.createElement('span');
-            span.className = 'av-info-stat';
-            span.textContent = text;
-            return span;
-        }));
         const empty = text => {
             const p = document.createElement('p');
             p.className = 'av-hub-empty';
             p.textContent = text;
             return p;
         };
-        const stillNodes = stills.slice(0, 40).map((url, index) => {
-            const figure = document.createElement('figure');
-            figure.className = 'av-still-item';
-            const open = document.createElement('button');
-            open.type = 'button';
-            open.className = 'av-still-open';
-            open.setAttribute('aria-label', `打开剧照 ${index + 1}`);
-            open.addEventListener('click', () => openLightbox(stills, index));
-            const img = document.createElement('img');
-            img.src = url;
-            img.loading = 'lazy';
-            img.decoding = 'async';
-            img.referrerPolicy = 'no-referrer';
-            img.alt = `剧照 ${index + 1}`;
-            img.addEventListener('error', () => {
-                if (!figure.isConnected) return;
-                reportStillError(url, figure);
+        refs.grid.__stills = stills;
+        const stillPage = stills.slice(0, 40);
+        const stillSig = stillPage.join('\u0001');
+        if (stillSig !== INFO_RENDER_SIG.stills) {
+            INFO_RENDER_SIG.stills = stillSig;
+            const stillNodes = stillPage.map((url, index) => {
+                const figure = document.createElement('figure');
+                figure.className = 'av-still-item';
+                const open = document.createElement('button');
+                open.type = 'button';
+                open.className = 'av-still-open';
+                open.setAttribute('aria-label', `打开剧照 ${index + 1}`);
+                open.addEventListener('click', () => openLightbox(refs.grid.__stills || stills, index));
+                const img = document.createElement('img');
+                img.src = url;
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                img.referrerPolicy = 'no-referrer';
+                img.alt = `剧照 ${index + 1}`;
+                img.addEventListener('error', () => {
+                    if (!figure.isConnected) return;
+                    reportStillError(url, figure);
+                });
+                open.appendChild(img);
+                figure.appendChild(open);
+                return figure;
             });
-            open.appendChild(img);
-            figure.appendChild(open);
-            return figure;
-        });
-        refs.grid.replaceChildren(...(stillNodes.length ? stillNodes : [empty(HUB_EMPTY.stills)]));
+            refs.grid.replaceChildren(...(stillNodes.length ? stillNodes : [empty(HUB_EMPTY.stills)]));
+        }
         if (state.reviewsCode !== data.code) {
             state.reviewsCode = data.code;
             state.reviewsPage = 1;
@@ -12354,50 +12791,56 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             state.reviewsLoadingMore = false;
         }
         const reviewTotal = reviews.length;
-        const reviewNodes = reviews.slice(0, 120).map(review => {
-            const card = document.createElement('article');
-            card.className = 'review-card';
-            const head = document.createElement('header');
-            head.className = 'av-review-head';
-            const user = document.createElement('strong');
-            user.className = 'av-review-user';
-            user.textContent = review.user || '匿名';
-            head.appendChild(user);
-            if (review.score) {
-                const score = document.createElement('span');
-                score.className = 'av-review-score';
-                score.textContent = `${review.score} 分`;
-                head.appendChild(score);
+        const reviewPage = reviews.slice(0, 120);
+        const reviewSig = `${reviewTotal}|${state.reviewsHasMore}|${state.reviewsLoadingMore}|` +
+            infoSigKey(reviewPage, review => `${review.user}\u0002${review.score}\u0002${review.date}\u0002${review.content}`);
+        if (reviewSig !== INFO_RENDER_SIG.reviews) {
+            INFO_RENDER_SIG.reviews = reviewSig;
+            const reviewNodes = reviewPage.map(review => {
+                const card = document.createElement('article');
+                card.className = 'review-card';
+                const head = document.createElement('header');
+                head.className = 'av-review-head';
+                const user = document.createElement('strong');
+                user.className = 'av-review-user';
+                user.textContent = review.user || '匿名';
+                head.appendChild(user);
+                if (review.score) {
+                    const score = document.createElement('span');
+                    score.className = 'av-review-score';
+                    score.textContent = `${review.score} 分`;
+                    head.appendChild(score);
+                }
+                if (review.date) {
+                    const time = document.createElement('time');
+                    time.className = 'av-review-date';
+                    time.textContent = review.date;
+                    head.appendChild(time);
+                }
+                const text = document.createElement('p');
+                text.className = 'av-review-text';
+                text.textContent = review.content;
+                card.append(head, text);
+                return card;
+            });
+            refs.reviews.replaceChildren(...(reviewNodes.length ? reviewNodes : [empty(HUB_EMPTY.reviews)]));
+            const footer = document.createElement('div');
+            footer.className = 'av-review-footer';
+            if (reviewNodes.length && (state.reviewsHasMore || state.reviewsLoadingMore)) {
+                const more = createButton(state.reviewsLoadingMore ? '正在加载更多短评…' : '加载更多短评', 'av-hub-more-btn');
+                more.disabled = state.reviewsLoadingMore;
+                more.addEventListener('click', loadMoreReviews);
+                footer.appendChild(more);
+            } else if (reviewNodes.length >= 20) {
+                const done = document.createElement('span');
+                done.className = 'av-hub-done';
+                done.textContent = reviewTotal > reviewNodes.length
+                    ? `已显示 ${reviewNodes.length} / 共 ${reviewTotal} 条短评`
+                    : `已加载全部短评 (共 ${reviewNodes.length} 条)`;
+                footer.appendChild(done);
             }
-            if (review.date) {
-                const time = document.createElement('time');
-                time.className = 'av-review-date';
-                time.textContent = review.date;
-                head.appendChild(time);
-            }
-            const text = document.createElement('p');
-            text.className = 'av-review-text';
-            text.textContent = review.content;
-            card.append(head, text);
-            return card;
-        });
-        refs.reviews.replaceChildren(...(reviewNodes.length ? reviewNodes : [empty(HUB_EMPTY.reviews)]));
-        const footer = document.createElement('div');
-        footer.className = 'av-review-footer';
-        if (reviewNodes.length && (state.reviewsHasMore || state.reviewsLoadingMore)) {
-            const more = createButton(state.reviewsLoadingMore ? '正在加载更多短评…' : '加载更多短评', 'av-hub-more-btn');
-            more.disabled = state.reviewsLoadingMore;
-            more.addEventListener('click', loadMoreReviews);
-            footer.appendChild(more);
-        } else if (reviewNodes.length >= 20) {
-            const done = document.createElement('span');
-            done.className = 'av-hub-done';
-            done.textContent = reviewTotal > reviewNodes.length
-                ? `已显示 ${reviewNodes.length} / 共 ${reviewTotal} 条短评`
-                : `已加载全部短评 (共 ${reviewNodes.length} 条)`;
-            footer.appendChild(done);
+            if (footer.childElementCount) refs.reviews.appendChild(footer);
         }
-        if (footer.childElementCount) refs.reviews.appendChild(footer);
         const listNodes = lists.slice(0, 20).map(item => buildListCard(item));
         refs.lists.replaceChildren(...(listNodes.length ? listNodes : [empty(HUB_EMPTY.lists)]));
     }
@@ -12543,6 +12986,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (body.parentElement) renderListMovies(item, body, state.listMovies[item.id]);
     }
     function renderListMovies(item, body, cache) {
+        const paintSig = cache.loading ? 'loading' : (cache.error ? `err:${cache.error}` : `ok:${cache.movies.length}`);
+        if (body.dataset.paint === paintSig) return;
+        body.dataset.paint = paintSig;
         const spinner = () => {
             const wrap = document.createElement('div');
             wrap.className = 'av-list-loading';
@@ -15223,14 +15669,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (pool.indexOf(title) < 0) pool.push(title);
         }
         const cardTop = card && card.getBoundingClientRect ? card.getBoundingClientRect().top : 0;
+        const rectOf = new Map();
+        for (const node of pool) rectOf.set(node, node.getBoundingClientRect ? node.getBoundingClientRect() : null);
         pool.sort((a, b) => {
-            const ra = a.getBoundingClientRect ? a.getBoundingClientRect() : null;
-            const rb = b.getBoundingClientRect ? b.getBoundingClientRect() : null;
+            const ra = rectOf.get(a);
+            const rb = rectOf.get(b);
             if (!ra || !rb) return 0;
             return ra.top - rb.top;
         });
         for (const header of pool) {
-            const rect = header.getBoundingClientRect ? header.getBoundingClientRect() : null;
+            const rect = rectOf.get(header) || null;
             if (!rect || rect.height < 1 || rect.width < 280) continue;
             if (cardTop > 0 && rect.top >= cardTop) continue;
             if (sectionHeaderSlot(header)) return header;
@@ -17339,13 +17787,14 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 
             const syncLayer = () => {
                 const rail = railOf();
-                if (!rail || !rail.isConnected) return;
+                if (!rail || !rail.isConnected) return 0;
                 const rr = rail.getBoundingClientRect();
                 const cr = layerTarget.getBoundingClientRect();
-                if (!rr.width) return;
+                if (!rr.width) return 0;
                 avxWriteStyle(host, 'left', `${rr.left - cr.left}px`);
                 avxWriteStyle(host, 'width', `${rr.width}px`);
                 avxWriteStyle(host, 'top', `${rr.top - cr.top + (rr.height - 14) / 2}px`);
+                return rr.width;
             };
             let ticksBox = null;
             let syncFrame = 0;
@@ -17355,9 +17804,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 syncFrame = requestAnimationFrame(() => {
                     syncFrame = 0;
                     ticksBox = null;
-                    syncLayer();
-                    const rail = railOf();
-                    const width = rail && rail.isConnected ? rail.getBoundingClientRect().width : 0;
+                    const width = syncLayer();
                     if (width && Math.abs(width - railWidthLast) > 24) {
                         railWidthLast = width;
                         renderTicks();
@@ -17712,11 +18159,17 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             installFramePreview(video, frames);
         });
     }
+    const MARKUP_TEMPLATE_CACHE = new Map();
     function setMarkup(el, markup) {
         if (!el || typeof markup !== 'string') return el;
         try {
-            const template = document.createElement('template');
-            template.innerHTML = markup;
+            let template = MARKUP_TEMPLATE_CACHE.get(markup);
+            if (!template) {
+                template = document.createElement('template');
+                template.innerHTML = markup;
+                if (MARKUP_TEMPLATE_CACHE.size > 60) MARKUP_TEMPLATE_CACHE.clear();
+                MARKUP_TEMPLATE_CACHE.set(markup, template);
+            }
             el.replaceChildren(template.content.cloneNode(true));
             return el;
         } catch (error) {
@@ -19246,11 +19699,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         'use strict';
 
     const HOST = location.hostname;
-    const IS_JABLE = /(^|\.)jable\.tv$/i.test(HOST);
     const CURRENT_SITE = IS_JABLE ? 'jable' : 'missav';
-
-    const JABLE_FAVORITES_PATH = '/my/favourites/videos/';
-    const MISSAV_SAVED_PATH = '/saved';
 
     const SITE_INFO = {
         missav: { label: 'MissAV', color: '#8fb2ff' },
@@ -19482,26 +19931,20 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return 0;
     }
 
-    async function mapPool(list, size, worker) {
-        const queue = list.slice();
-        const runners = [];
-        const count = Math.max(1, Math.min(size || 1, queue.length || 1));
-        for (let i = 0; i < count; i++) {
-            runners.push((async () => {
-                while (queue.length) {
-                    const item = queue.shift();
-                    try {
-                        await worker(item);
-                    } catch (error) { }
-                }
-            })());
-        }
-        await Promise.all(runners);
-    }
-
+    const FS_ICON_TEMPLATE_CACHE = new Map();
     function icon(paths, viewBox) {
         const span = el('span', 'fs-ico');
-        span.innerHTML = `<svg viewBox="${viewBox || '0 0 24 24'}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+        const box = viewBox || '0 0 24 24';
+        const cacheKey = `${box}|${paths}`;
+        let template = FS_ICON_TEMPLATE_CACHE.get(cacheKey);
+        if (!template) {
+            template = document.createElement('template');
+            template.innerHTML = `<svg viewBox="${box}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+            if (FS_ICON_TEMPLATE_CACHE.size > 260) FS_ICON_TEMPLATE_CACHE.clear();
+            FS_ICON_TEMPLATE_CACHE.set(cacheKey, template);
+        }
+        const node = template.content.firstElementChild;
+        if (node) span.appendChild(node.cloneNode(true));
         return span;
     }
 
@@ -19697,46 +20140,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return doc.body || doc.documentElement;
     }
 
-    const RECO_TEXT_RE = /推荐|推薦|猜你喜欢|猜你喜歡|相关推荐|相關推薦|热门|熱門|精选|精選|你可能|recommend|related|popular|trending|you may also/i;
-
-    function isRecommendAnchor(anchor) {
-        if (!anchor || !anchor.closest) return false;
-        if (anchor.closest('aside, footer, nav')) return true;
-        return Boolean(anchor.closest('[class*="recommend"], [class*="related"], [id*="recommend"], [id*="related"], [class*="sidebar"]'));
-    }
-
-    function recommendZones(doc) {
-        const zones = [];
-        if (!doc || !doc.querySelectorAll) return zones;
-        const pushZone = node => {
-            if (!node || zones.includes(node)) return;
-            if (node.querySelectorAll('a[href]').length < 2) return;
-            zones.push(node);
-        };
-        for (const heading of doc.querySelectorAll('h1, h2, h3, h4, h5, h6, .section-title, .title, .heading, .block-title')) {
-            const text = String(heading.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!text || text.length > 24) continue;
-            if (!RECO_TEXT_RE.test(text)) continue;
-            pushZone(heading.closest('section, article, .section, .block, .module, .row, .list, .grid') || heading.parentElement);
-        }
-        for (const leaf of doc.querySelectorAll('div, span, p, strong, b')) {
-            if (leaf.children.length) continue;
-            const text = String(leaf.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!text || text.length > 12) continue;
-            if (!RECO_TEXT_RE.test(text)) continue;
-            pushZone(leaf.closest('section, article, .section, .block, .module, .row, .list, .grid, div'));
-        }
-        if (!zones.length) return zones;
-        const allLinks = doc.querySelectorAll('a[href]').length;
-        return zones.filter(zone => zone.querySelectorAll('a[href]').length < Math.max(3, allLinks * 0.8));
-    }
-
     function collectCards(doc, site, baseUrl) {
         if (!doc || !doc.querySelectorAll) return [];
         const scope = listScope(doc, site) || doc;
         const out = [];
         const seen = new Set();
-        const recoZones = recommendZones(doc);
         const anchors = scope.querySelectorAll('a[href]');
         for (const anchor of anchors) {
             const raw = anchor.getAttribute('href') || '';
@@ -19750,8 +20158,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 continue;
             }
             if (!isVideoPath(parsed, site)) continue;
-            if (isRecommendAnchor(anchor)) continue;
-            if (recoZones.length && recoZones.some(zone => zone.contains(anchor))) continue;
             const href = `${parsed.origin}${parsed.pathname}`;
             if (seen.has(href)) continue;
 
@@ -20375,18 +20781,44 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function pushLog(text) {
         ui.logLines.push({ text, at: Date.now() });
         if (ui.logLines.length > MAX_LOG_LINES) ui.logLines.splice(0, ui.logLines.length - MAX_LOG_LINES);
-        paintLog();
+        paintLog(true);
     }
 
-    function paintLog() {
-        if (!ui.logBox) return;
+    let logPaintedBox = null;
+    let logPaintedFirst = null;
+    let logPaintedCount = 0;
+
+    function paintLog(appendOnly) {
+        if (!ui.logBox) {
+            logPaintedBox = null;
+            logPaintedFirst = null;
+            logPaintedCount = 0;
+            return;
+        }
+        const lines = ui.logLines;
+        if (
+            appendOnly &&
+            logPaintedBox === ui.logBox &&
+            logPaintedCount > 0 &&
+            lines.length === logPaintedCount + 1 &&
+            lines[0] === logPaintedFirst
+        ) {
+            const last = lines[lines.length - 1];
+            ui.logBox.appendChild(el('div', 'fs-log-line', last.text));
+            logPaintedCount += 1;
+            ui.logBox.scrollTop = ui.logBox.scrollHeight;
+            return;
+        }
         const fragment = document.createDocumentFragment();
-        for (const line of ui.logLines) {
+        for (const line of lines) {
             const row = el('div', 'fs-log-line', line.text);
             fragment.appendChild(row);
         }
         ui.logBox.replaceChildren(fragment);
         ui.logBox.scrollTop = ui.logBox.scrollHeight;
+        logPaintedBox = ui.logBox;
+        logPaintedFirst = lines.length ? lines[0] : null;
+        logPaintedCount = lines.length;
     }
 
     function setProgress(ratio, text) {
@@ -20472,18 +20904,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return location.origin;
     }
 
-    const SAVED_EMPTY_RE = /未有记录|未有紀錄|未有記錄|暂无记录|暫無記錄|暫無紀錄|還沒有收藏|还没有收藏|暂无收藏|暫無收藏|沒有收藏|没有收藏|尚未收藏|No records|No saved|Nothing saved|Nothing here yet/i;
-
-    function isSavedEmptyDoc(doc) {
-        if (!doc) return false;
-        const text = String((doc.body && doc.body.textContent) || '');
-        if (!SAVED_EMPTY_RE.test(text)) return false;
-        return !doc.querySelector('#list_videos_my_favourite_videos, .list_videos_my_favourite_videos');
-    }
-
     async function scrapeMissav(log, token) {
         const origin = siteOrigin();
-        const base = `${origin}${MISSAV_SAVED_PATH}`;
+        const base = `${origin}${MISSAV_FAVORITES_PATH}`;
         const sameOrigin = location.origin === origin;
         let frame = null;
         let useFrame = false;
@@ -20518,12 +20941,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                             useFrame = true;
                             doc = null;
                         } else if (!probe.length) {
-                            if (isSavedEmptyDoc(doc)) {
-                                state.meta[CURRENT_SITE] = Object.assign({}, state.meta[CURRENT_SITE] || {}, { emptyFavorites: true });
-                                log('📭 站点收藏为空（页面显示未有记录）');
-                            } else {
-                                log('⚠️ 没有解析到卡片：请确认已登录 MissAV 并停留在收藏页');
-                            }
+                            log('⚠️ 没有解析到卡片：请确认已登录 MissAV 并停留在收藏页');
                             break;
                         }
                     }
@@ -20554,15 +20972,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
             if (!doc) break;
 
-            if (page === 1 && isSavedEmptyDoc(doc)) {
-                state.meta[CURRENT_SITE] = Object.assign({}, state.meta[CURRENT_SITE] || {}, { emptyFavorites: true });
-                log('📭 站点收藏为空（页面显示未有记录）');
-                break;
-            }
-
             let cards = collectCards(doc, 'missav', url);
             let retried = 0;
-            while (!cards.length && retried < 2 && !isSavedEmptyDoc(doc)) {
+            while (!cards.length && retried < 2) {
                 retried++;
                 log(`↻ 第 ${page} 页没读到卡片，重试 ${retried}/2`);
                 await sleep(700 * retried);
@@ -20580,13 +20992,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 }
                 if (!doc) break;
                 cards = collectCards(doc, 'missav', url);
-            }
-            if (cards.length >= 4) {
-                const withCover = cards.filter(card => card.cover);
-                if (withCover.length >= Math.max(3, Math.ceil(cards.length * 0.6)) && withCover.length < cards.length) {
-                    log(`🩹 第 ${page} 页忽略 ${cards.length - withCover.length} 张无封面卡片（疑似推荐位）`);
-                    cards = withCover;
-                }
             }
             const signature = cards.slice(0, 12).map(card => card.path).join('|');
             const declared = detectMaxPage(doc);
@@ -20882,11 +21287,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 return { ok: false, totalNew: 0 };
             }
             const first = await waitForCards(frame, 'jable', 8000);
-            if (first && isSavedEmptyDoc(first)) {
-                state.meta[CURRENT_SITE] = Object.assign({}, state.meta[CURRENT_SITE] || {}, { emptyFavorites: true });
-                log('📭 站点收藏为空（页面显示未有记录）');
-                return { ok: true, totalNew: 0 };
-            }
             const firstCards = first ? collectCards(first, 'jable', frameUrl(frame) || entry) : [];
             if (!firstCards.length) {
                 log('⚠️ 后台框架里没有读到收藏卡片');
@@ -21123,33 +21523,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             state.meta[CURRENT_SITE] = metaNow;
             if (!token.cancelled && runStats.seen.size >= Math.max(5, Math.ceil(total * 0.5))) {
                 const stale = allItems().filter(item => !runStats.seen.has(item.href)).map(item => item.id);
-                const junk = stale.filter(id => {
-                    const item = state.items[id];
-                    return item && !item.cover;
-                });
-                for (const id of junk) delete state.items[id];
-                if (junk.length) pushLog(`🧹 已自动清理 ${formatNumber(junk.length)} 条无封面的残留条目`);
-                const rest = stale.filter(id => !junk.includes(id));
-                if (rest.length) metaNow.stale = rest;
+                if (stale.length) metaNow.stale = stale;
                 else delete metaNow.stale;
             } else {
                 delete metaNow.stale;
-            }
-            if (metaNow.emptyFavorites) {
-                const allIds = allItems().map(item => item.id);
-                if (!allIds.length) {
-                    pushLog('📭 站点收藏为 0，本地没有残留记录');
-                    delete metaNow.stale;
-                } else if (window.confirm(`站点收藏显示为 0 条。\n是否清空本地这 ${allIds.length} 条记录？\n（如果你刚退出登录，请选「取消」）`)) {
-                    for (const id of allIds) delete state.items[id];
-                    delete metaNow.stale;
-                    pushLog(`📭 站点收藏为 0，已清空本地 ${formatNumber(allIds.length)} 条残留记录`);
-                } else {
-                    metaNow.stale = allIds;
-                    pushLog(`📭 站点收藏为 0，本地 ${formatNumber(allIds.length)} 条已标记为未见，可在提示条手动清理`);
-                }
-            } else {
-                delete metaNow.emptyFavorites;
             }
             state.syncs.push({
                 at: Date.now(),
@@ -21455,38 +21832,50 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return removed;
     }
 
-    const PLAYBACK_KEY_PREFIX = 'avSub:analyticsRecords_v1@';
+    const PLAYBACK_KEY_PREFIX = `${STORAGE_PREFIX}${ANALYTICS_KEY_BASE}@`;
     const PLAYBACK_TTL = 8000;
-    const playbackCache = { at: 0, map: new Map() };
+    const playbackCache = { at: 0, map: new Map(), token: undefined };
 
-    function readPlaybackMap() {
+    function readPlaybackSource() {
         const key = `${PLAYBACK_KEY_PREFIX}${CURRENT_SITE}`;
         let gmRaw = null;
-        let localRaw = null;
         try {
             gmRaw = GM.get(key, null);
         } catch (error) { gmRaw = null; }
+        if (gmRaw && typeof gmRaw === 'object') {
+            return { token: gmRaw, read: () => gmRaw };
+        }
+        let localRaw = null;
         try {
             localRaw = localStorage.getItem(key);
         } catch (error) { localRaw = null; }
-        if (gmRaw && typeof gmRaw === 'object') return gmRaw;
         const gmText = typeof gmRaw === 'string' ? gmRaw : '';
         const localText = typeof localRaw === 'string' ? localRaw : '';
         const text = localText.length > gmText.length ? localText : gmText;
-        if (!text) return [];
-        try {
-            const parsed = JSON.parse(text);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch (error) {
-            return [];
-        }
+        if (!text) return { token: '', read: () => [] };
+        return {
+            token: text,
+            read: () => {
+                try {
+                    const parsed = JSON.parse(text);
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (error) {
+                    return [];
+                }
+            }
+        };
     }
 
     function playbackMap() {
         const now = Date.now();
         if (playbackCache.at && now - playbackCache.at < PLAYBACK_TTL) return playbackCache.map;
+        const source = readPlaybackSource();
+        if (playbackCache.token === source.token) {
+            playbackCache.at = now;
+            return playbackCache.map;
+        }
         const map = new Map();
-        for (const record of readPlaybackMap()) {
+        for (const record of source.read()) {
             const code = String((record && record.code) || '').toUpperCase();
             if (!code) continue;
             const duration = Number(record.duration) || 0;
@@ -21504,6 +21893,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         playbackCache.at = now;
         playbackCache.map = map;
+        playbackCache.token = source.token;
         return map;
     }
 
@@ -23278,8 +23668,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   padding: 16px 28px;
-  background: rgba(9,10,15,.88);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  background: rgba(9,10,15,.94);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
 .fs-brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
@@ -23336,6 +23726,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 .fs-ico svg { width: 16px; height: 16px; }
 .fs-main { position: relative; z-index: 1; max-width: 1560px; margin: 0 auto; padding: 22px 28px 80px; }
 .fs-card {
+  content-visibility: auto; contain-intrinsic-size: auto 340px;
   padding: 18px; border-radius: 16px;
   background: var(--card); border: 1px solid var(--line);
   margin-bottom: 16px;
@@ -23611,6 +24002,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; word-break: break-word; min-height: 34px;
 }
+:host(.is-full-title) .fs-poster-title { display: block; -webkit-line-clamp: unset; overflow: visible; }
 .fs-poster-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .fs-poster-actress { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fs-more { display: flex; margin: 16px auto 0; }
@@ -23962,7 +24354,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function dashboardUrl() {
         return CURRENT_SITE === 'jable'
             ? `${location.origin}${JABLE_FAVORITES_PATH}?favscreen=1#fav-screen`
-            : `${location.origin}${MISSAV_SAVED_PATH}?page=1&favscreen=1#fav-screen`;
+            : `${location.origin}${MISSAV_FAVORITES_PATH}?page=1&favscreen=1#fav-screen`;
     }
 
     function isDashboardRoute() {
@@ -24041,6 +24433,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         host.id = 'fav-screen-root';
         host.style.cssText = 'position:fixed;inset:0;z-index:2147483600;';
         ui.host = host;
+        host.classList.toggle('is-full-title', document.documentElement.classList.contains('av-full-title') || document.documentElement.classList.contains('av-full-title-detail'));
         ui.root = host.attachShadow({ mode: 'open' });
         applyShadowCss(ui.root, CSS);
         ui.page = buildPage();
@@ -24081,7 +24474,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (!ui.root) return;
             location.href = CURRENT_SITE === 'jable'
                 ? `${location.origin}${JABLE_FAVORITES_PATH}`
-                : `${location.origin}${MISSAV_SAVED_PATH}?page=1`;
+                : `${location.origin}${MISSAV_FAVORITES_PATH}?page=1`;
         }, 260);
     }
 
