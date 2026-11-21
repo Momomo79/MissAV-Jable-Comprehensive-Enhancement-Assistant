@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.10
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      16.11
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
 // @icon64       https://jable.tv/favicon.ico
@@ -1680,6 +1680,8 @@
         panelY: store.getNumber('panelY', 100, 0, 99999),
         pickerX: store.getNumber('pickerX', NaN, 0, 99999),
         pickerY: store.getNumber('pickerY', NaN, 0, 99999),
+        pickerW: store.getNumber('pickerW', NaN, 0, 99999),
+        pickerH: store.getNumber('pickerH', NaN, 0, 99999),
         isMinimized: store.getBool('isMinimized'),
         compactUi: store.getBool('compactUi'),
         panelWidth: store.getNumber('panelWidth', 372, 320, 520),
@@ -2819,6 +2821,22 @@
         .subtitle-picker-close:hover { color: #fff; }
         .subtitle-picker-row { padding: 8px; margin-top: 5px; border-bottom: 1px solid rgba(255,255,255,.1); cursor: pointer; word-break: break-all; }
         .subtitle-picker-row:hover { background: rgba(96,165,250,.16); }
+        .subtitle-picker-row.has-acts { display: flex; align-items: center; gap: 8px; padding: 7px 8px; }
+        .subtitle-picker-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: normal; }
+        .subtitle-picker-acts { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+        .subtitle-picker-act { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: auto; height: 26px; min-width: 46px; padding: 0 9px; margin: 0; border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: rgba(255,255,255,.06); color: #cbd5e1; font: 600 11.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; letter-spacing: .2px; white-space: nowrap; text-shadow: none; cursor: pointer; appearance: none; -webkit-appearance: none; transition: background-color .15s, border-color .15s, color .15s, opacity .15s; }
+        .subtitle-picker-act:hover { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.32); color: #fff; }
+        .subtitle-picker-act.is-primary { background: rgba(96,165,250,.2); border-color: rgba(96,165,250,.45); color: #bfdbfe; }
+        .subtitle-picker-act.is-primary:hover { background: rgba(96,165,250,.34); border-color: rgba(96,165,250,.68); color: #fff; }
+        .subtitle-picker-act[disabled] { opacity: .45; cursor: default; }
+        .subtitle-picker-act[disabled]:hover { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.18); color: #cbd5e1; }
+        .subtitle-picker-act.is-primary[disabled]:hover { background: rgba(96,165,250,.2); border-color: rgba(96,165,250,.45); color: #bfdbfe; }
+        .subtitle-picker.is-resizable { display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; }
+        .subtitle-picker-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 24px; }
+        .subtitle-picker-grip { position: absolute; right: 1px; bottom: 1px; width: 22px; height: 22px; display: flex; align-items: flex-end; justify-content: flex-end; padding: 0 3px 3px 0; box-sizing: border-box; color: rgba(255,255,255,.5); cursor: nwse-resize; touch-action: none; user-select: none; -webkit-user-select: none; transition: color .15s ease; }
+        .subtitle-picker-grip:hover, .subtitle-picker-grip.is-active { color: rgba(255,255,255,.85); }
+        .subtitle-picker-grip svg { display: block; pointer-events: none; }
+        .subtitle-picker.is-resizing { user-select: none; -webkit-user-select: none; }
         .av-audio-win { width: 322px; max-height: min(78vh, 560px); }
         .av-audio-site { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 4px; font-size: 12px; font-weight: 600; }
         .av-audio-site-name { color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3366,6 +3384,13 @@
             .lightbox-close { width: 40px; height: 40px; font-size: 16px; }
             .subtitle-picker-close { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; }
             .subtitle-picker-row { padding: 11px 9px; min-height: 40px; display: flex; align-items: center; }
+            .subtitle-picker-row.has-acts { padding: 9px; gap: 6px; }
+            .subtitle-picker-name { max-width: none; }
+            .subtitle-picker-acts { gap: 6px; }
+            .subtitle-picker-act { height: 30px; min-width: 52px; padding: 0 8px; font-size: 12px; }
+            .custom-control-panel.avx2 .avx-note.av-sub-hint { font-size: 11.5px; line-height: 1.55; }
+            .subtitle-picker.is-resizable .subtitle-picker-grip { width: 26px; height: 26px; padding: 0 4px 4px 0; }
+            .subtitle-picker.is-resizable .subtitle-picker-body { padding-bottom: 28px; }
             .subtitle-picker { --ui-bg-opacity: .88; }
             .av-fb-chip { min-height: 40px; padding: 7px 12px; }
             .av-fb-chip.av-fb-hide { min-width: 40px; padding: 7px 0; justify-content: center; font-size: 15px; }
@@ -4972,6 +4997,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     word-break: break-word;
     overflow-wrap: anywhere;
 }
+.avx2 .avx-note.av-sub-hint { font-size: 10.5px; line-height: 1.55; }
 .avx2 .avx-note + .avx-btns { margin-top: 2px; }
 
 .avx2 button.avx-sw.is-on,
@@ -5883,6 +5909,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             srcChips.appendChild(chip);
         }
         srcCard.appendChild(srcChips);
+        srcCard.appendChild(avxEl('div', 'avx-note av-sub-hint', '点源名即按当前番号搜索；「应用」加载显示，「下载」存到本地。SubHD / JavSub 只给详情页（按钮为「打开」）。<br>字幕名被截断时，拖动右下角斜纹手柄可拉宽拉高，双击复位。'));
         subPane.appendChild(srcCard);
 
         const styleCard = avxCard('样式与时间轴', '按站点独立记忆');
@@ -8295,6 +8322,169 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             state.subtitleLoading = false;
         }
     }
+    const SUBTITLE_FILE_EXT = ['srt', 'vtt', 'ass', 'ssa', 'zip'];
+    function subtitleExtFromText(text) {
+        const head = String(text || '').slice(0, 4096);
+        if (/^\s*\[Script Info\]/i.test(head)) return /\[V4 Styles\]/i.test(head) ? 'ssa' : 'ass';
+        if (/^\s*WEBVTT/.test(head)) return 'vtt';
+        if (/-->/.test(head)) return 'srt';
+        return '';
+    }
+    function subtitleExtFromName(value) {
+        const match = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(String(value || ''));
+        const ext = match ? match[1].toLowerCase() : '';
+        return SUBTITLE_FILE_EXT.includes(ext) ? ext : '';
+    }
+    async function downloadSubtitleFile(item, button) {
+        const url = item && item.url;
+        if (!url) return;
+        if (button && button.dataset.busy === '1') return;
+        const label = String(item.name || '').trim();
+        const reset = () => {
+            if (!button) return;
+            button.dataset.busy = '';
+            button.disabled = false;
+            button.textContent = '下载';
+        };
+        if (button) {
+            button.dataset.busy = '1';
+            button.disabled = true;
+            button.textContent = '···';
+        }
+        const host = hostOf(url);
+        log(`⬇️ 正在下载字幕文件${label ? `：${label}` : ''}…`);
+        try {
+            const payload = await fetchSubtitlePayload(url);
+            if (payload === null) {
+                log(`❌ 下载失败: 无法获取内容${host ? ` (${host})` : ''}，可换一个源再试`);
+                reset();
+                return;
+            }
+            const bytes = typeof payload === 'string'
+                ? new TextEncoder().encode(payload)
+                : payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+            if (!bytes.length) {
+                log('❌ 下载失败: 内容为空');
+                reset();
+                return;
+            }
+            const isZip = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+            let blob = null;
+            let ext = '';
+            if (isZip) {
+                const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+                    ? bytes.buffer
+                    : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+                const inner = await extractSubtitleFromZip(buffer);
+                if (inner) {
+                    ext = subtitleExtFromText(inner) || 'srt';
+                    blob = new Blob([inner], { type: 'text/plain;charset=utf-8' });
+                    log(`🧩 已从压缩包解出字幕，按 .${ext} 保存`);
+                } else {
+                    ext = 'zip';
+                    blob = new Blob([bytes], { type: 'application/zip' });
+                    log('🧩 压缩包内没有可读字幕，已按原文件保存');
+                }
+            } else {
+                const head = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 4096));
+                ext = subtitleExtFromText(head) || subtitleExtFromName(label) || subtitleExtFromName(url) || 'srt';
+                blob = new Blob([bytes], { type: 'application/octet-stream' });
+            }
+            const base = sanitizeBackupName(label.replace(/\.[a-z0-9]{2,5}$/i, ''), 'subtitle');
+            const filename = `${base}.${ext}`;
+            triggerBlobDownload(blob, filename);
+            log(`💾 已保存 ${filename}（${formatBytes(blob.size)}）`);
+        } catch (error) {
+            log(`❌ 下载失败: ${error && error.message ? error.message : error}`);
+        } finally {
+            reset();
+        }
+    }
+    const PICKER_MIN_W = 320;
+    const PICKER_MIN_H = 180;
+    const PICKER_DEFAULT_W = 346;
+    const pickerMaxWidth = () => Math.max(PICKER_MIN_W, Math.min(window.innerWidth * 0.92, 760));
+    const pickerMaxHeight = () => Math.max(PICKER_MIN_H, Math.round(AV_PLATFORM.isMobile ? window.innerHeight * 0.76 : window.innerHeight - 60));
+    function applyPickerSize(picker) {
+        if (!picker) return;
+        if (!AV_PLATFORM.isMobile) {
+            const width = Number(settings.pickerW);
+            const target = Number.isFinite(width) && width > 0 ? width : PICKER_DEFAULT_W;
+            picker.style.width = `${Math.round(clamp(target, PICKER_MIN_W, pickerMaxWidth()))}px`;
+            picker.style.maxWidth = 'none';
+        }
+        const height = Number(settings.pickerH);
+        if (Number.isFinite(height) && height > 0) {
+            picker.style.height = `${Math.round(clamp(height, PICKER_MIN_H, pickerMaxHeight()))}px`;
+            picker.style.maxHeight = 'none';
+        }
+    }
+    function buildPickerGrip() {
+        const grip = document.createElement('span');
+        grip.className = 'subtitle-picker-grip';
+        grip.title = '拖动调整窗口大小 · 双击复位';
+        grip.setAttribute('role', 'separator');
+        grip.setAttribute('aria-label', '拖动调整字幕列表大小');
+        grip.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M15 5.5 5.5 15M15 9.5 9.5 15M15 13.5l-1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+        return grip;
+    }
+    function setupPickerResize(picker, grip) {
+        let drag = null;
+        const finish = () => {
+            if (!drag) return;
+            const id = drag.id;
+            drag = null;
+            grip.classList.remove('is-active');
+            picker.classList.remove('is-resizing');
+            try { grip.releasePointerCapture(id); } catch (_) {}
+            const rect = picker.getBoundingClientRect();
+            if (!AV_PLATFORM.isMobile) {
+                settings.pickerW = Math.round(rect.width);
+                store.set('pickerW', settings.pickerW);
+            }
+            settings.pickerH = Math.round(rect.height);
+            store.set('pickerH', settings.pickerH);
+            clampPickerPosition(picker);
+        };
+        grip.addEventListener('pointerdown', event => {
+            if (event.button !== undefined && event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const rect = picker.getBoundingClientRect();
+            drag = { id: event.pointerId, x: event.clientX, y: event.clientY, w: rect.width, h: rect.height };
+            grip.classList.add('is-active');
+            picker.classList.add('is-resizing');
+            try { grip.setPointerCapture(event.pointerId); } catch (_) {}
+        });
+        grip.addEventListener('pointermove', event => {
+            if (!drag || event.pointerId !== drag.id) return;
+            event.preventDefault();
+            if (!AV_PLATFORM.isMobile) {
+                const width = clamp(drag.w + (event.clientX - drag.x), PICKER_MIN_W, pickerMaxWidth());
+                picker.style.width = `${Math.round(width)}px`;
+                picker.style.maxWidth = 'none';
+            }
+            const height = clamp(drag.h + (event.clientY - drag.y), PICKER_MIN_H, pickerMaxHeight());
+            picker.style.height = `${Math.round(height)}px`;
+            picker.style.maxHeight = 'none';
+        });
+        for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+            grip.addEventListener(type, finish);
+        }
+        grip.addEventListener('dblclick', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            settings.pickerW = PICKER_DEFAULT_W;
+            settings.pickerH = 0;
+            store.set('pickerW', PICKER_DEFAULT_W);
+            store.remove('pickerH');
+            picker.style.width = `${PICKER_DEFAULT_W}px`;
+            picker.style.height = '';
+            picker.style.maxHeight = '';
+            clampPickerPosition(picker);
+            log('🪟 字幕列表尺寸已复位');
+        });
+    }
     function closeSubtitlePicker() {
         state.subtitlePicker?.remove();
         state.subtitlePicker = null;
@@ -8302,7 +8492,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     function showSubtitlePicker(items) {
         closeSubtitlePicker();
         const list = document.createElement('div');
-        list.className = 'subtitle-picker';
+        list.className = 'subtitle-picker is-resizable';
         const header = document.createElement('div');
         header.className = 'subtitle-picker-header';
         const title = document.createElement('span');
@@ -8314,12 +8504,45 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         closeBtn.addEventListener('click', closeSubtitlePicker);
         header.append(title, closeBtn);
         list.appendChild(header);
+        const body = document.createElement('div');
+        body.className = 'subtitle-picker-body';
+        list.appendChild(body);
         for (const item of items) {
             const row = document.createElement('div');
-            row.className = 'subtitle-picker-row';
-            row.textContent = `${item.external ? '🌐' : '📄'} ${item.name}`;
-            row.title = item.external ? `${item.name} · 打开详情页` : item.name;
-            row.addEventListener('click', () => {
+            row.className = 'subtitle-picker-row has-acts';
+            const name = document.createElement('span');
+            name.className = 'subtitle-picker-name';
+            name.textContent = `${item.external ? '🌐' : '📄'} ${item.name}`;
+            name.title = item.external ? `${item.name} · 打开详情页` : item.name;
+            const acts = document.createElement('span');
+            acts.className = 'subtitle-picker-acts';
+            const makeAct = (text, primary, hint, onClick) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'subtitle-picker-act' + (primary ? ' is-primary' : '');
+                button.textContent = text;
+                button.title = hint;
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onClick();
+                });
+                button.addEventListener('pointerdown', event => event.stopPropagation());
+                return button;
+            };
+            if (item.external) {
+                acts.appendChild(makeAct('打开', true, '在新标签页打开字幕详情页', () => {
+                    closeSubtitlePicker();
+                    GM_openInTab(item.url, { active: true });
+                }));
+            } else {
+                acts.appendChild(makeAct('应用', true, '加载这条字幕并立即显示', () => loadRemoteSubtitle(item.url, item.name)));
+                const dlBtn = makeAct('下载', false, '把这条字幕保存到本地', () => downloadSubtitleFile(item, dlBtn));
+                acts.appendChild(dlBtn);
+            }
+            row.append(name, acts);
+            row.addEventListener('click', event => {
+                if (event.target && event.target.closest && event.target.closest('.subtitle-picker-acts')) return;
                 if (item.external) {
                     closeSubtitlePicker();
                     GM_openInTab(item.url, { active: true });
@@ -8327,13 +8550,17 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 }
                 loadRemoteSubtitle(item.url, item.name);
             });
-            list.appendChild(row);
+            body.appendChild(row);
         }
+        const grip = buildPickerGrip();
+        list.appendChild(grip);
         state.subtitlePicker = list;
         for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel']) {
             list.addEventListener(type, event => event.stopPropagation());
         }
+        applyPickerSize(list);
         getUiLayer(2147483647).appendChild(list);
+        setupPickerResize(list, grip);
         const useSavedPlacement = !AV_PLATFORM.isMobile && Number.isFinite(settings.pickerX) && Number.isFinite(settings.pickerY);
         if (!useSavedPlacement) {
             const rect = list.getBoundingClientRect?.() || { width: 0, height: 0 };
