@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.11
+// @version      16.12
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -1694,6 +1694,8 @@
         mediaSession: store.getBool('mediaSession', true),
         doubleTapSeek: store.getBool('doubleTapSeek', true),
         autoInfo: store.getBool('autoInfo', true),
+        infoHub: store.getBool('infoHub', true),
+        quickBar: store.getBool('quickBar', true),
         filterEnabled: store.getBool('filterEnabled', true),
         filterMinDuration: store.getNumber('filterMinDuration', 0, 0, 86400),
         filterHideWatched: store.getBool('filterHideWatched', false),
@@ -1751,6 +1753,8 @@
         store.set('mediaSession', settings.mediaSession);
         store.set('doubleTapSeek', settings.doubleTapSeek);
         store.set('autoInfo', settings.autoInfo);
+        store.set('infoHub', settings.infoHub);
+        store.set('quickBar', settings.quickBar);
         store.set('filterEnabled', settings.filterEnabled);
         store.set('filterMinDuration', settings.filterMinDuration);
         store.set('filterHideWatched', settings.filterHideWatched);
@@ -4335,7 +4339,7 @@
 
 :where(.avx2) .avx-body {
     padding: 12px 11px 11px; display: flex; flex-direction: column; gap: 10px;
-    max-height: clamp(196px, 48vh, 410px) !important;
+    max-height: clamp(190px, 44vh, 375px) !important;
     overflow-y: auto !important; overscroll-behavior: contain !important;
 }
 :where(.avx2) .avx-body::-webkit-scrollbar { width: 4px; }
@@ -5552,8 +5556,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const pad = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0);
             const box = viewportBox();
             const viewH = box.h || window.innerHeight || 0;
-            const floor = Math.round(Math.min(300, Math.max(196, viewH * 0.3))) + pad;
-            const ceil = Math.round(Math.min(410, Math.max(240, viewH * 0.48))) + pad;
+            const floor = Math.round(Math.min(280, Math.max(190, viewH * 0.28))) + pad;
+            const ceil = Math.round(Math.min(375, Math.max(232, viewH * 0.44))) + pad;
             const h = measurePlayHeight();
             const total = clamp(h > 0 ? Math.ceil(h + pad) : ceil, floor, ceil);
             body.style.setProperty('min-height', total + 'px', 'important');
@@ -6148,6 +6152,34 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             mobileCard.appendChild(mobilePanel);
             setupPane.appendChild(mobileCard);
         }
+        const moduleCard = avxCard('模块开关', '一键启停');
+        const infoHubRow = avxSwitchRow('官方剧照与社区短评', '关闭后不再抓取与显示情报面板', settings.infoHub !== false, on => {
+            settings.infoHub = on;
+            store.set('infoHub', on);
+            if (!on) {
+                state.infoSession += 1;
+                closeInfoSection();
+                log('🧩 已关闭官方剧照与社区短评');
+                return;
+            }
+            settings.autoInfo = true;
+            store.set('autoInfo', true);
+            log('🧩 已开启官方剧照与社区短评');
+            if (onPlayPage()) loadVideoInfo();
+        }, true);
+        const quickBarRow = avxSwitchRow('快捷条', '播放器上的快捷操作条', settings.quickBar !== false, on => {
+            settings.quickBar = on;
+            store.set('quickBar', on);
+            if (!on) {
+                teardownQuickControls();
+                log('🧩 已关闭快捷条');
+                return;
+            }
+            log('🧩 已开启快捷条');
+            if (state.video && state.container) bindPlayer(state.video, state.container, true);
+        }, true);
+        moduleCard.append(infoHubRow, quickBarRow);
+        setupPane.appendChild(moduleCard);
         const cacheCard = avxCard('缓存清理', '只清脚本缓存');
         const cacheBtn = avxBtn('清除', { variant: 'danger', small: true });
         cacheBtn.title = '清除本站的剧照、短评、评分、影单、关键帧、女优资料等脚本缓存，三个大屏的数据与全部设置都会保留';
@@ -7138,7 +7170,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.quickWatchTimer = trackInterval(setInterval(() => {
             if (isPageHidden()) return;
             if (!state.bound || isAnalyticsRoute()) return;
-            if (state.video?.isConnected && quickControlsAlive()) return;
+            if (!settings.quickBar) {
+                if (state.video?.isConnected) return;
+            } else if (state.video?.isConnected && quickControlsAlive()) return;
             const video = findMainVideo();
             if (!video) return;
             if (video !== state.video || !quickControlsAlive()) {
@@ -7148,7 +7182,24 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
         }, 1800));
     }
+    function teardownQuickControls() {
+        restoreDockPadding();
+        for (const stale of document.querySelectorAll('.custom-quick-controls')) stale.remove();
+        for (const stale of document.querySelectorAll('.loop-menu')) stale.remove();
+        state.quick = null;
+        state.quickDock = null;
+        state.playPauseBtn = null;
+        state.speedBtn = null;
+        state.loopBtn = null;
+        state.loopMenu = null;
+        state.moreBtn = null;
+        state.moreMenu = null;
+    }
     function createQuickControls() {
+        if (!settings.quickBar) {
+            teardownQuickControls();
+            return;
+        }
         const container = state.container;
         if (!container) return;
         if (container.closest(PREVIEW_HOST_SELECTOR)) return;
@@ -12467,6 +12518,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return fields;
     }
     async function loadVideoInfo() {
+        if (!settings.infoHub) {
+            closeInfoSection();
+            return null;
+        }
         const code = getPageVideoCode();
         if (!code) {
             closeInfoSection();
@@ -12945,7 +13000,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     const INFO_RENDER_SIG = { head: null, stills: null, reviews: null };
     const infoSigKey = (list, pick) => list.map(pick).join('\u0001');
     function renderInfoSection(data) {
-        if (!data) return;
+        if (!data || !settings.infoHub) return;
         const stills = usableStills(data.stills ?? []);
         const reviews = data.reviews ?? [];
         const lists = data.lists ?? [];
@@ -14073,7 +14128,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         updatePlayPauseButton();
         if (settings.autoInfo) {
             loadActressSocialFromPage();
-            loadVideoInfo();
+            if (settings.infoHub) loadVideoInfo();
         }
         startJableCreditsCard();
         log('🎬 播放器已就绪');
