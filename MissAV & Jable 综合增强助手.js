@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.12
+// @version      16.13
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -66,6 +66,41 @@
     try {
     const STORAGE_PREFIX = 'avSub:';
     const IS_JABLE = location.hostname.includes('jable');
+
+    const CF_TITLE_RE = /^(?:just a moment|attention required|请稍候|正在验证|verifying you are human|checking your browser|ddos protection)/i;
+    let cfProbeAt = 0;
+    let cfProbeHit = false;
+    function avIsCfChallengePage(force) {
+        const now = Date.now();
+        if (!force && now - cfProbeAt < 1200) return cfProbeHit;
+        cfProbeAt = now;
+        cfProbeHit = (() => {
+            try {
+                if (/^\/cdn-cgi\//.test(location.pathname)) return true;
+                if (document.getElementById('challenge-form')
+                    || document.getElementById('challenge-stage')
+                    || document.getElementById('cf-challenge-running')
+                    || document.getElementById('cf-wrapper')) return true;
+                const uw = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : null;
+                if (uw && uw._cf_chl_opt) return true;
+                const body = document.body;
+                if (body && body.className && /cf-browser-verification|cf-im-under-attack/i.test(body.className)) return true;
+                if (CF_TITLE_RE.test(String(document.title || '').trim())) return true;
+            } catch (_) {
+            }
+            return false;
+        })();
+        return cfProbeHit;
+    }
+
+    const CF_SAFE = (() => {
+        try {
+            return localStorage.getItem(`${STORAGE_PREFIX}noPagePatch`) === '1';
+        } catch (_) {
+            return false;
+        }
+    })();
+
     const DEBUG_KEY = `${STORAGE_PREFIX}debugLog`;
     const DEBUG_ENABLED = (() => {
         try {
@@ -1694,8 +1729,6 @@
         mediaSession: store.getBool('mediaSession', true),
         doubleTapSeek: store.getBool('doubleTapSeek', true),
         autoInfo: store.getBool('autoInfo', true),
-        infoHub: store.getBool('infoHub', true),
-        quickBar: store.getBool('quickBar', true),
         filterEnabled: store.getBool('filterEnabled', true),
         filterMinDuration: store.getNumber('filterMinDuration', 0, 0, 86400),
         filterHideWatched: store.getBool('filterHideWatched', false),
@@ -1753,8 +1786,6 @@
         store.set('mediaSession', settings.mediaSession);
         store.set('doubleTapSeek', settings.doubleTapSeek);
         store.set('autoInfo', settings.autoInfo);
-        store.set('infoHub', settings.infoHub);
-        store.set('quickBar', settings.quickBar);
         store.set('filterEnabled', settings.filterEnabled);
         store.set('filterMinDuration', settings.filterMinDuration);
         store.set('filterHideWatched', settings.filterHideWatched);
@@ -2017,11 +2048,26 @@
     }
     let cockpitSticky = ANALYTICS_ENTRY || cockpitFlagGet();
     let actressSticky = ACTRESS_ENTRY || actressFlagGet();
-    if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href) && !/^https:\/\/m\./.test(location.href)) {
+    if (/^https:\/\/(?:missav|thisav)\.com/.test(location.href) && !/^https:\/\/m\./.test(location.href) && !avIsCfChallengePage(true)) {
         location.replace(location.href.replace(/^https:\/\/(?:missav|thisav)\.com/, 'https://missav.live'));
         return;
     }
-    const PROTECTED_FRAME = /recaptcha|hcaptcha|turnstile|challenges\.cloudflare|accounts\.google|appleid|facebook\.com|stripe|paypal|oauth/i;
+    const PROTECTED_FRAME = /recaptcha|hcaptcha|turnstile|challenges\.cloudflare|cloudflare|challenge-platform|\/cdn-cgi\/|about:blank|accounts\.google|appleid|facebook\.com|stripe|paypal|oauth/i;
+
+    const AD_IFRAME_SRC_RE = new RegExp([
+        'doubleclick', 'googlesyndication', 'adservice', 'exoclick', 'trafficjunky', 'trafficfactory',
+        'adsterra', 'juicyads', 'popads', 'popcash', 'tsyndicate', 'twinrdengine', 'smartpop', 'snaptrckr',
+        'mavrtracktor', 'myavlive', 'wy2026', 'mayzaent', 'rallytrckr', 'rmishe', 'mgid', 'nativeads',
+        'revcontent', 'outbrain', 'taboola', 'adnxs', 'propellerads', 'hilltopads', 'clickadu', 'imasdk',
+        'labadena', 'adxadserv', 'greentrafsa', 'fluxtrck', 'javhd-trk', 'magsrv', 'rallytrck'
+    ].join('|'), 'i');
+    const iframeSrcOf = frame => {
+        try {
+            return String(frame.getAttribute('src') || frame.src || '');
+        } catch (_) {
+            return '';
+        }
+    };
     function isProtectedFrame(element) {
         if (!element || element.tagName !== 'IFRAME') return false;
         return PROTECTED_FRAME.test(element.getAttribute('src') || element.src || '');
@@ -2239,23 +2285,71 @@
         reportVisibilityGuard(win);
         return true;
     };
-    for (const type of ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'freeze', 'resume', 'blur', 'focusout']) {
-        window.addEventListener(type, blockVisibilityEvents, { capture: true, passive: false });
-        document.addEventListener(type, blockVisibilityEvents, { capture: true, passive: false });
-    }
-    ensureVisibilityGuard(true);
-    window.addEventListener('load', () => {
-        ensureVisibilityGuard(true);
-        document.dispatchEvent(new Event('visibilitychange'));
-    }, { once: true });
+
+    const VISIBILITY_BLOCK_TYPES = ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focusout'];
+    let visibilityGuardArmed = false;
     let visibilityGuardTimer = 0;
-    visibilityGuardTimer = window.setInterval(() => {
-        try {
-            ensureVisibilityGuard(false);
-        } catch (error) {
-            debugLog(error);
+    function armVisibilityGuard() {
+        if (visibilityGuardArmed) return false;
+        if (CF_SAFE || avIsCfChallengePage(true)) return false;
+        visibilityGuardArmed = true;
+        for (const type of VISIBILITY_BLOCK_TYPES) {
+            window.addEventListener(type, blockVisibilityEvents, { capture: true, passive: false });
+            document.addEventListener(type, blockVisibilityEvents, { capture: true, passive: false });
         }
-    }, 6000);
+        ensureVisibilityGuard(true);
+        if (!visibilityGuardTimer) {
+            visibilityGuardTimer = window.setInterval(() => {
+                try {
+                    if (avIsCfChallengePage(false)) return;
+                    ensureVisibilityGuard(false);
+                } catch (error) {
+                    debugLog(error);
+                }
+            }, 6000);
+        }
+        return true;
+    }
+    function disarmVisibilityGuard() {
+        if (!visibilityGuardArmed) return false;
+        visibilityGuardArmed = false;
+        for (const type of VISIBILITY_BLOCK_TYPES) {
+            try { window.removeEventListener(type, blockVisibilityEvents, true); } catch (error) { debugLog(error); }
+            try { document.removeEventListener(type, blockVisibilityEvents, true); } catch (error) { debugLog(error); }
+        }
+        const win = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+        try { applyVisibilitySpoof(win, false); } catch (error) { debugLog(error); }
+        try { patchFocusApi(win, false); } catch (error) { debugLog(error); }
+        try { patchEventHandlers(win, false); } catch (error) { debugLog(error); }
+        if (visibilityGuardTimer) {
+            clearInterval(visibilityGuardTimer);
+            visibilityGuardTimer = 0;
+        }
+        return true;
+    }
+
+    const armVisibilityGuardOnReady = () => {
+        try {
+            armVisibilityGuard();
+        } catch (error) {
+            debugLog(error, 'visibility-arm');
+        }
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', armVisibilityGuardOnReady, { once: true });
+        window.addEventListener('load', armVisibilityGuardOnReady, { once: true });
+    } else {
+        armVisibilityGuardOnReady();
+    }
+
+    window.setInterval(() => {
+        try {
+            if (!avIsCfChallengePage(true)) return;
+            disarmVisibilityGuard();
+        } catch (error) {
+            debugLog(error, 'cf-watchdog');
+        }
+    }, 1500);
     const WINDOW_OPEN_PATCHED = Symbol.for('av-helper.windowOpenPatched');
     function isCrossSiteWindow(target) {
 
@@ -2267,6 +2361,7 @@
     }
     function patchWindowOpen(target, allowSameSite = false) {
         if (!target || target[WINDOW_OPEN_PATCHED]) return;
+        if (CF_SAFE || avIsCfChallengePage(false)) return;
         const original = target.open;
         try {
             target.open = function guardedWindowOpen(url, name, features) {
@@ -2294,7 +2389,20 @@
             debugLog(error);
         }
     }
-    patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+
+    const armWindowOpenPatch = () => {
+        try {
+            if (CF_SAFE || avIsCfChallengePage(true)) return;
+            patchWindowOpen(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+        } catch (error) {
+            debugLog(error, 'window-open-arm');
+        }
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', armWindowOpenPatch, { once: true });
+    } else {
+        armWindowOpenPatch();
+    }
     const patchedFrames = new WeakSet();
     let iframePatchAt = 0;
     function patchAllIframeWindows(force = false) {
@@ -2406,7 +2514,7 @@
         pruneAdNodes(root);
         if (isProtectedNode(root)) return;
         if (root.tagName === 'IFRAME') {
-            if (!isProtectedFrame(root)) root.remove();
+            if (!isProtectedFrame(root) && AD_IFRAME_SRC_RE.test(iframeSrcOf(root))) root.remove();
             return;
         }
         if (root.matches && root.matches(AD_SELECTORS)) hideAdNode(root);
@@ -4339,7 +4447,7 @@
 
 :where(.avx2) .avx-body {
     padding: 12px 11px 11px; display: flex; flex-direction: column; gap: 10px;
-    max-height: clamp(190px, 44vh, 375px) !important;
+    max-height: clamp(196px, 48vh, 410px) !important;
     overflow-y: auto !important; overscroll-behavior: contain !important;
 }
 :where(.avx2) .avx-body::-webkit-scrollbar { width: 4px; }
@@ -5176,6 +5284,22 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             GM_registerMenuCommand('完全隐藏菜单', () => setMenuHidden(true));
             GM_registerMenuCommand('显示菜单', () => setMenuHidden(false));
             GM_registerMenuCommand('重置面板', () => resetPanelLayout());
+            GM_registerMenuCommand('CF 排障：关闭页面级改写', () => {
+                try {
+                    localStorage.setItem(`${STORAGE_PREFIX}noPagePatch`, '1');
+                } catch (error) {
+                    debugLog(error, 'cf-safe-on');
+                }
+                location.reload();
+            });
+            GM_registerMenuCommand('CF 排障：恢复页面级改写', () => {
+                try {
+                    localStorage.removeItem(`${STORAGE_PREFIX}noPagePatch`);
+                } catch (error) {
+                    debugLog(error, 'cf-safe-off');
+                }
+                location.reload();
+            });
             panelMenusRegistered = true;
         } catch (error) {
             debugLog(error, 'panel-menu');
@@ -5556,8 +5680,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const pad = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0);
             const box = viewportBox();
             const viewH = box.h || window.innerHeight || 0;
-            const floor = Math.round(Math.min(280, Math.max(190, viewH * 0.28))) + pad;
-            const ceil = Math.round(Math.min(375, Math.max(232, viewH * 0.44))) + pad;
+            const floor = Math.round(Math.min(300, Math.max(196, viewH * 0.3))) + pad;
+            const ceil = Math.round(Math.min(410, Math.max(240, viewH * 0.48))) + pad;
             const h = measurePlayHeight();
             const total = clamp(h > 0 ? Math.ceil(h + pad) : ceil, floor, ceil);
             body.style.setProperty('min-height', total + 'px', 'important');
@@ -6152,34 +6276,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             mobileCard.appendChild(mobilePanel);
             setupPane.appendChild(mobileCard);
         }
-        const moduleCard = avxCard('模块开关', '一键启停');
-        const infoHubRow = avxSwitchRow('官方剧照与社区短评', '关闭后不再抓取与显示情报面板', settings.infoHub !== false, on => {
-            settings.infoHub = on;
-            store.set('infoHub', on);
-            if (!on) {
-                state.infoSession += 1;
-                closeInfoSection();
-                log('🧩 已关闭官方剧照与社区短评');
-                return;
-            }
-            settings.autoInfo = true;
-            store.set('autoInfo', true);
-            log('🧩 已开启官方剧照与社区短评');
-            if (onPlayPage()) loadVideoInfo();
-        }, true);
-        const quickBarRow = avxSwitchRow('快捷条', '播放器上的快捷操作条', settings.quickBar !== false, on => {
-            settings.quickBar = on;
-            store.set('quickBar', on);
-            if (!on) {
-                teardownQuickControls();
-                log('🧩 已关闭快捷条');
-                return;
-            }
-            log('🧩 已开启快捷条');
-            if (state.video && state.container) bindPlayer(state.video, state.container, true);
-        }, true);
-        moduleCard.append(infoHubRow, quickBarRow);
-        setupPane.appendChild(moduleCard);
         const cacheCard = avxCard('缓存清理', '只清脚本缓存');
         const cacheBtn = avxBtn('清除', { variant: 'danger', small: true });
         cacheBtn.title = '清除本站的剧照、短评、评分、影单、关键帧、女优资料等脚本缓存，三个大屏的数据与全部设置都会保留';
@@ -7170,9 +7266,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.quickWatchTimer = trackInterval(setInterval(() => {
             if (isPageHidden()) return;
             if (!state.bound || isAnalyticsRoute()) return;
-            if (!settings.quickBar) {
-                if (state.video?.isConnected) return;
-            } else if (state.video?.isConnected && quickControlsAlive()) return;
+            if (state.video?.isConnected && quickControlsAlive()) return;
             const video = findMainVideo();
             if (!video) return;
             if (video !== state.video || !quickControlsAlive()) {
@@ -7182,24 +7276,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
         }, 1800));
     }
-    function teardownQuickControls() {
-        restoreDockPadding();
-        for (const stale of document.querySelectorAll('.custom-quick-controls')) stale.remove();
-        for (const stale of document.querySelectorAll('.loop-menu')) stale.remove();
-        state.quick = null;
-        state.quickDock = null;
-        state.playPauseBtn = null;
-        state.speedBtn = null;
-        state.loopBtn = null;
-        state.loopMenu = null;
-        state.moreBtn = null;
-        state.moreMenu = null;
-    }
     function createQuickControls() {
-        if (!settings.quickBar) {
-            teardownQuickControls();
-            return;
-        }
         const container = state.container;
         if (!container) return;
         if (container.closest(PREVIEW_HOST_SELECTOR)) return;
@@ -12518,10 +12595,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return fields;
     }
     async function loadVideoInfo() {
-        if (!settings.infoHub) {
-            closeInfoSection();
-            return null;
-        }
         const code = getPageVideoCode();
         if (!code) {
             closeInfoSection();
@@ -13000,7 +13073,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     const INFO_RENDER_SIG = { head: null, stills: null, reviews: null };
     const infoSigKey = (list, pick) => list.map(pick).join('\u0001');
     function renderInfoSection(data) {
-        if (!data || !settings.infoHub) return;
+        if (!data) return;
         const stills = usableStills(data.stills ?? []);
         const reviews = data.reviews ?? [];
         const lists = data.lists ?? [];
@@ -14128,7 +14201,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         updatePlayPauseButton();
         if (settings.autoInfo) {
             loadActressSocialFromPage();
-            if (settings.infoHub) loadVideoInfo();
+            loadVideoInfo();
         }
         startJableCreditsCard();
         log('🎬 播放器已就绪');
@@ -14150,6 +14223,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return false;
     }
     function initPage() {
+        if (avIsCfChallengePage(true)) {
+            debugLog('skip-init-on-cf-challenge', 'initPage');
+            return;
+        }
         if (isAnalyticsRoute()) {
             mountAnalyticsPage();
             return;
@@ -24822,6 +24899,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
 
     function boot() {
+        if (avIsCfChallengePage(true)) return;
         if (isDashboardRoute()) {
             mountDashboard();
             return;
