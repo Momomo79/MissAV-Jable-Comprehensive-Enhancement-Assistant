@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.13
+// @version      16.14
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -1173,6 +1173,71 @@
     ].join(',');
     const PLAY_ENTRY_SELECTORS = ACTIVE_SELECTORS.playEntry.slice();
     const clamp = (value, min, max) => (value < min ? min : value > max ? max : value);
+    const runtime = (() => {
+        const timers = new Set();
+        const onceTimers = new Set();
+        const unbinders = [];
+        const wrap = (fn, label) => (...args) => {
+            try {
+                return fn(...args);
+            } catch (error) {
+                debugLog(error, label);
+            }
+            return undefined;
+        };
+        const cancel = id => {
+            timers.delete(id);
+            onceTimers.delete(id);
+            try { window.clearInterval(id); } catch (error) { debugLog(error); }
+            try { window.clearTimeout(id); } catch (error) { debugLog(error); }
+        };
+        return {
+            every(ms, fn, label) {
+                const id = window.setInterval(wrap(fn, label || 'interval'), ms);
+                timers.add(id);
+                return id;
+            },
+            after(ms, fn, label) {
+                const id = window.setTimeout(() => {
+                    onceTimers.delete(id);
+                    wrap(fn, label || 'timeout')();
+                }, ms);
+                onceTimers.add(id);
+                return id;
+            },
+            cancel,
+            on(target, type, fn, options) {
+                if (!target || typeof target.addEventListener !== 'function') return null;
+                const handler = wrap(fn, `on:${type}`);
+                target.addEventListener(type, handler, options);
+                unbinders.push(() => target.removeEventListener(type, handler, options));
+                return handler;
+            },
+            purge(selectors, root) {
+                const scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+                const list = Array.isArray(selectors) ? selectors : [selectors];
+                let removed = 0;
+                for (const selector of list) {
+                    for (const node of scope.querySelectorAll(selector)) {
+                        node.remove();
+                        removed += 1;
+                    }
+                }
+                return removed;
+            },
+            disposeAll() {
+                for (const id of [...timers]) cancel(id);
+                for (const id of [...onceTimers]) cancel(id);
+                while (unbinders.length) {
+                    try {
+                        unbinders.pop()();
+                    } catch (error) {
+                        debugLog(error, 'runtime-unbind');
+                    }
+                }
+            }
+        };
+    })();
     const pad2 = value => String(value).padStart(2, '0');
     const formatSeconds = seconds => (seconds >= 60 ? `${seconds / 60}分钟` : `${seconds}秒`);
     const formatSpan = seconds => (seconds >= 60 ? `${seconds / 60}m` : `${seconds}s`);
@@ -1729,6 +1794,8 @@
         mediaSession: store.getBool('mediaSession', true),
         doubleTapSeek: store.getBool('doubleTapSeek', true),
         autoInfo: store.getBool('autoInfo', true),
+        infoHub: store.getBool('infoHub', true),
+        quickBar: store.getBool('quickBar', true),
         filterEnabled: store.getBool('filterEnabled', true),
         filterMinDuration: store.getNumber('filterMinDuration', 0, 0, 86400),
         filterHideWatched: store.getBool('filterHideWatched', false),
@@ -2299,14 +2366,10 @@
         }
         ensureVisibilityGuard(true);
         if (!visibilityGuardTimer) {
-            visibilityGuardTimer = window.setInterval(() => {
-                try {
-                    if (avIsCfChallengePage(false)) return;
-                    ensureVisibilityGuard(false);
-                } catch (error) {
-                    debugLog(error);
-                }
-            }, 6000);
+            visibilityGuardTimer = runtime.every(6000, () => {
+                if (avIsCfChallengePage(false)) return;
+                ensureVisibilityGuard(false);
+            }, 'visibility-guard');
         }
         return true;
     }
@@ -2322,7 +2385,7 @@
         try { patchFocusApi(win, false); } catch (error) { debugLog(error); }
         try { patchEventHandlers(win, false); } catch (error) { debugLog(error); }
         if (visibilityGuardTimer) {
-            clearInterval(visibilityGuardTimer);
+            runtime.cancel(visibilityGuardTimer);
             visibilityGuardTimer = 0;
         }
         return true;
@@ -2342,14 +2405,10 @@
         armVisibilityGuardOnReady();
     }
 
-    window.setInterval(() => {
-        try {
-            if (!avIsCfChallengePage(true)) return;
-            disarmVisibilityGuard();
-        } catch (error) {
-            debugLog(error, 'cf-watchdog');
-        }
-    }, 1500);
+    runtime.every(1500, () => {
+        if (!avIsCfChallengePage(true)) return;
+        disarmVisibilityGuard();
+    }, 'cf-watchdog');
     const WINDOW_OPEN_PATCHED = Symbol.for('av-helper.windowOpenPatched');
     function isCrossSiteWindow(target) {
 
@@ -2635,7 +2694,7 @@
     }
     const LOG_LIMIT = 80;
     const pageLifecycle = [];
-    const trackInterval = (id, dispose = () => clearInterval(id)) => {
+    const trackInterval = (id, dispose = () => runtime.cancel(id)) => {
         pageLifecycle.push(dispose);
         return id;
     };
@@ -2643,7 +2702,7 @@
         pageLifecycle.push(dispose);
         return id;
     };
-    const trackTimeout = (id, dispose = () => clearTimeout(id)) => {
+    const trackTimeout = (id, dispose = () => runtime.cancel(id)) => {
         pageLifecycle.push(dispose);
         return id;
     };
@@ -6276,6 +6335,34 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             mobileCard.appendChild(mobilePanel);
             setupPane.appendChild(mobileCard);
         }
+        const moduleCard = avxCard('模块开关', '一键启停');
+        const infoHubRow = avxSwitchRow('官方剧照与社区短评', '关闭后不再抓取与显示情报面板', settings.infoHub !== false, on => {
+            settings.infoHub = on;
+            store.set('infoHub', on);
+            if (!on) {
+                state.infoSession += 1;
+                closeInfoSection();
+                log('🎬 已关闭官方剧照与社区短评');
+                return;
+            }
+            settings.autoInfo = true;
+            store.set('autoInfo', true);
+            log('🎬 已开启官方剧照与社区短评');
+            if (!onPlayPage()) loadVideoInfo();
+        }, true);
+        const quickBarRow = avxSwitchRow('快捷条', '播放器上的快捷操作条', settings.quickBar !== false, on => {
+            settings.quickBar = on;
+            store.set('quickBar', on);
+            if (!on) {
+                teardownQuickControls();
+                log('🎬 已关闭快捷条');
+                return;
+            }
+            log('🎬 已开启快捷条');
+            if (state.video && state.container) bindPlayer(state.video, state.container, true);
+        }, true);
+        moduleCard.append(infoHubRow, quickBarRow);
+        setupPane.appendChild(moduleCard);
         const cacheCard = avxCard('缓存清理', '只清脚本缓存');
         const cacheBtn = avxBtn('清除', { variant: 'danger', small: true });
         cacheBtn.title = '清除本站的剧照、短评、评分、影单、关键帧、女优资料等脚本缓存，三个大屏的数据与全部设置都会保留';
@@ -6778,6 +6865,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             else node.style.removeProperty('padding-bottom');
         }
     }
+    function teardownQuickControls() {
+        restoreDockPadding();
+        runtime.purge(['.custom-quick-controls', '.loop-menu']);
+        state.quick = null;
+        state.loopBtn = null;
+        state.loopMenu = null;
+        state.moreBtn = null;
+        state.moreMenu = null;
+        quickBarHover = false;
+    }
     function dockQuickControls(target) {
         const quick = state.quick;
         if (!quick || !target?.host?.isConnected || !target.after?.isConnected) return false;
@@ -7266,6 +7363,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.quickWatchTimer = trackInterval(setInterval(() => {
             if (isPageHidden()) return;
             if (!state.bound || isAnalyticsRoute()) return;
+            if (!settings.quickBar) return;
             if (state.video?.isConnected && quickControlsAlive()) return;
             const video = findMainVideo();
             if (!video) return;
@@ -7277,6 +7375,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }, 1800));
     }
     function createQuickControls() {
+        if (!settings.quickBar) return;
         const container = state.container;
         if (!container) return;
         if (container.closest(PREVIEW_HOST_SELECTOR)) return;
@@ -7285,8 +7384,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             fitQuickControls();
             return;
         }
-        for (const stale of document.querySelectorAll('.custom-quick-controls')) stale.remove();
-        for (const stale of document.querySelectorAll('.loop-menu')) stale.remove();
+        runtime.purge(['.custom-quick-controls', '.loop-menu']);
         ensurePositioned(container);
         const quick = document.createElement('div');
         quick.className = 'custom-quick-controls';
@@ -11797,7 +11895,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         actressRequested = false;
         actressSticky = false;
         if (actressGuard) {
-            clearInterval(actressGuard);
+            runtime.cancel(actressGuard);
             actressGuard = 0;
         }
         actressFlagClear();
@@ -11847,9 +11945,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
         else boot();
         if (!actressGuard) {
-            const guardTimer = setInterval(() => {
+            const guardTimer = runtime.every(500, () => {
                 if (!actressRequested) {
-                    clearInterval(guardTimer);
+                    runtime.cancel(guardTimer);
                     actressGuard = 0;
                     return;
                 }
@@ -11857,8 +11955,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                     state.actressPage = null;
                     if (document.body) buildActressPage();
                 }
-            }, 500);
-            actressGuard = trackInterval(guardTimer);
+            }, 'actress-guard');
+            actressGuard = guardTimer;
         }
     }
     const isActressRoute = () => actressSticky || actressRequested || /^#av-actress\b/.test(location.hash);
@@ -12595,6 +12693,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return fields;
     }
     async function loadVideoInfo() {
+        if (!settings.infoHub) return null;
         const code = getPageVideoCode();
         if (!code) {
             closeInfoSection();
@@ -19609,7 +19708,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         cockpitSticky = false;
         cockpitPinGuard = '';
         if (analyticsGuard) {
-            clearInterval(analyticsGuard);
+            runtime.cancel(analyticsGuard);
             analyticsGuard = 0;
         }
         cockpitFlagClear();
@@ -19900,15 +19999,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
         else boot();
         if (!analyticsGuard) {
-            const guardTimer = setInterval(() => {
+            const guardTimer = runtime.every(2000, () => {
                 if (!analyticsRequested) {
-                    clearInterval(guardTimer);
+                    runtime.cancel(guardTimer);
                     analyticsGuard = 0;
                     return;
                 }
                 ensureCockpit();
-            }, 2000);
-            analyticsGuard = trackInterval(guardTimer);
+            }, 'analytics-guard');
+            analyticsGuard = guardTimer;
         }
     }
     const isAnalyticsRoute = () => cockpitSticky || analyticsRequested || /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
@@ -19995,67 +20094,70 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             };
         }
     }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initPage, { once: true });
-    } else {
-        initPage();
-    }
-    if (!isAnalyticsRoute() && !isActressRoute()) installSpaWatch();
-    for (const type of ['click', 'auxclick', 'pointerdown', 'mousedown']) {
-        document.addEventListener(type, event => {
-            const target = event.target;
-            if (!target || typeof target.closest !== 'function') return;
-            const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
-            if (link) {
-                const url = analyticsUrl();
-                link.href = url;
-                event.stopImmediatePropagation();
-                if (type !== 'click' || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                event.preventDefault();
-                openCockpitTab(url);
-                return;
-            }
-            const recordLink = target.closest('.av-open-record');
-            if (recordLink) {
-                const url = String(recordLink.getAttribute('href') || recordLink.href || '');
-                if (!url) return;
-                event.stopImmediatePropagation();
-                if (type !== 'click' && type !== 'auxclick') return;
-                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-                    if (state.analyticsPage) quitCockpitMode();
-                    if (state.actressPage) closeActressPage();
+    function bootstrapPage() {
+        if (document.readyState === 'loading') {
+            runtime.on(document, 'DOMContentLoaded', initPage, { once: true });
+        } else {
+            initPage();
+        }
+        if (!isAnalyticsRoute() && !isActressRoute()) installSpaWatch();
+        for (const type of ['click', 'auxclick', 'pointerdown', 'mousedown']) {
+            runtime.on(document, type, event => {
+                const target = event.target;
+                if (!target || typeof target.closest !== 'function') return;
+                const link = target.closest('.av-fb-cockpit, .av-open-cockpit');
+                if (link) {
+                    const url = analyticsUrl();
+                    link.href = url;
+                    event.stopImmediatePropagation();
+                    if (type !== 'click' || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    openCockpitTab(url);
                     return;
                 }
-                event.preventDefault();
-                if (state.analyticsPage) leaveCockpitFor(url);
-                else location.assign(url);
-                return;
-            }
-            const cockpitAnchor = (type === 'click' || type === 'auxclick') && state.analyticsPage && target.closest('.av-analytics-page') && target.closest('a[href]:not([target="_blank"])');
-            if (cockpitAnchor) quitCockpitMode();
-            const actressAnchor = (type === 'click' || type === 'auxclick') && state.actressPage && target.closest('.av-actress-page') && target.closest('a[href]:not([target="_blank"])');
-            if (actressAnchor) closeActressPage();
-        }, true);
+                const recordLink = target.closest('.av-open-record');
+                if (recordLink) {
+                    const url = String(recordLink.getAttribute('href') || recordLink.href || '');
+                    if (!url) return;
+                    event.stopImmediatePropagation();
+                    if (type !== 'click' && type !== 'auxclick') return;
+                    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                        if (state.analyticsPage) quitCockpitMode();
+                        if (state.actressPage) closeActressPage();
+                        return;
+                    }
+                    event.preventDefault();
+                    if (state.analyticsPage) leaveCockpitFor(url);
+                    else location.assign(url);
+                    return;
+                }
+                const cockpitAnchor = (type === 'click' || type === 'auxclick') && state.analyticsPage && target.closest('.av-analytics-page') && target.closest('a[href]:not([target="_blank"])');
+                if (cockpitAnchor) quitCockpitMode();
+                const actressAnchor = (type === 'click' || type === 'auxclick') && state.actressPage && target.closest('.av-actress-page') && target.closest('a[href]:not([target="_blank"])');
+                if (actressAnchor) closeActressPage();
+            }, true);
+        }
+        runtime.on(document, 'keydown', event => {
+            if (event.key === 'Escape' && state.infoSection) setInfoExpanded(false);
+        });
+        runtime.on(window, 'beforeunload', () => {
+            state.adObserver?.disconnect();
+            state.filterObserver?.disconnect();
+            state.panelLayoutObserver?.disconnect();
+            analyticsObserver?.disconnect();
+            stopAnalyticsTracking();
+            resumeSaveCurrent(true);
+            hideResumeToast();
+            stopPlayerPoll();
+            clearInterval(state.quickWatchTimer);
+            cancelAnimationFrame(state.subtitleRAF);
+            clearTimeout(state.holdTimer);
+            disposePageLifecycle();
+            runtime.disposeAll();
+        }, { once: true });
     }
-    document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && state.infoSection) setInfoExpanded(false);
-    });
-    window.addEventListener('beforeunload', () => {
-        state.adObserver?.disconnect();
-        state.filterObserver?.disconnect();
-        state.panelLayoutObserver?.disconnect();
-        analyticsObserver?.disconnect();
-        stopAnalyticsTracking();
-        resumeSaveCurrent(true);
-        hideResumeToast();
-        stopPlayerPoll();
-        clearInterval(state.quickWatchTimer);
-        cancelAnimationFrame(state.subtitleRAF);
-        clearTimeout(state.holdTimer);
-        disposePageLifecycle();
-    }, { once: true });
+    bootstrapPage();
     const FavScreen = (function () {
-        'use strict';
 
     const HOST = location.hostname;
     const CURRENT_SITE = IS_JABLE ? 'jable' : 'missav';
@@ -24804,13 +24906,13 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         document.addEventListener('keydown', onShortcut, true);
         if (!allItems().length) runSync();
 
-        const guard = setInterval(() => {
+        const guard = runtime.every(1500, () => {
             if (!ui.root) {
-                clearInterval(guard);
+                runtime.cancel(guard);
                 return;
             }
             if (!document.getElementById('fav-screen-root')) document.body.appendChild(host);
-        }, 1500);
+        }, 'fav-screen-guard');
     }
 
     function onEscape(event) {
