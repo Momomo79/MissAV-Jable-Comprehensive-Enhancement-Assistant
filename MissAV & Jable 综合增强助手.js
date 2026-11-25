@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.14
+// @version      16.15
 // @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
@@ -1173,6 +1173,13 @@
     ].join(',');
     const PLAY_ENTRY_SELECTORS = ACTIVE_SELECTORS.playEntry.slice();
     const clamp = (value, min, max) => (value < min ? min : value > max ? max : value);
+    const styleQueue = [];
+    const queueStyle = css => { styleQueue.push(String(css)); };
+    const flushStyles = () => {
+        if (!styleQueue.length) return;
+        GM_addStyle(styleQueue.join('\n'));
+        styleQueue.length = 0;
+    };
     const runtime = (() => {
         const timers = new Set();
         const onceTimers = new Set();
@@ -1628,7 +1635,7 @@
             javdbDetailMemo.clear();
         } catch (_) {}
         try {
-            javdbIdMemo.clear();
+            javDbIdMemo.clear();
         } catch (_) {}
         try {
             whosFrameMemo = null;
@@ -2791,7 +2798,7 @@
         appendLogEntry(logEl, text, new Date());
         flushLogScroll(logEl);
     }
-    GM_addStyle(`
+    queueStyle(`
         .custom-ui-layer {
             position: fixed;
             inset: 0;
@@ -3363,7 +3370,7 @@
         .av-list-movie:hover strong { color: #93c5fd; }
         .quick-pip-btn { min-width: 32px; font-size: 15px; line-height: 1; }
     `);
-    GM_addStyle(`
+    queueStyle(`
         .avx2 .avx-chips.av-sub-srcs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; padding: 10px 11px 12px; flex-wrap: nowrap; }
         .avx2 .avx-chips.av-sub-srcs > .avx-chip { width: 100%; min-width: 0; flex: 0 1 auto; justify-content: center; padding: 6px 3px; font-size: 10.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .avx2.avx2 .avx-btn, .avx2.avx2 a.avx-btn { border-radius: 8px !important; font-family: inherit !important; text-transform: none !important; }
@@ -3375,7 +3382,7 @@
         .avx2.avx2 .avx-sw::before { content: ""; position: absolute; inset: -10px -8px; border-radius: 16px; }
     `);
     if (AV_PLATFORM.isMobile) {
-        GM_addStyle(`
+        queueStyle(`
             .custom-control-panel { max-width: calc(100vw - 12px); }
             .custom-control-panel .panel-collapse { width: ${PANEL_WIDTH - 2}px; max-width: calc(100vw - 14px); }
             .custom-control-panel .panel-collapse-inner {
@@ -3487,15 +3494,6 @@
                 overscroll-behavior: contain;
                 -webkit-overflow-scrolling: touch;
             }
-            .custom-quick-controls.quick-single { flex-wrap: nowrap !important; row-gap: 0; gap: 4px; padding: 6px 8px; border-radius: 22px; }
-            .custom-quick-controls.quick-single .quick-jump-group { flex-wrap: nowrap; }
-            .custom-quick-controls.quick-single .quick-btn { min-width: 44px; height: 40px; font-size: 14px; }
-            .custom-quick-controls.quick-single .quick-play-btn { min-width: 76px; margin: 0 2px; }
-            .custom-quick-controls.quick-single .quick-more-btn { min-width: 40px; }
-            .custom-quick-controls.quick-narrow-1 .quick-step-major { display: none !important; }
-            .custom-quick-controls.quick-narrow-2 .quick-group-right { display: none !important; }
-            .custom-quick-controls.quick-narrow-3 .quick-outer,
-            .custom-quick-controls.quick-narrow-3 .quick-divider { display: none !important; }
             .custom-quick-controls.quick-docked { position: static !important; left: auto !important; top: auto !important; right: auto !important; bottom: auto !important; width: auto !important; min-width: 0 !important; max-width: 100% !important; transform: none !important; contain: inline-size; box-sizing: border-box; padding: 5px 6px; border-radius: 14px; justify-content: center; }
             .custom-quick-controls.quick-docked .quick-btn { min-width: 42px; height: 40px; font-size: 13px; padding: 0 6px; border-radius: 10px; }
             .custom-quick-controls.quick-docked .quick-play-btn { min-width: 72px; margin: 0 2px; border-radius: 14px; }
@@ -3611,13 +3609,21 @@
         video.currentTime = clamp(video.currentTime + seconds, 0, duration);
     }
     const isPaused = () => !state.video || state.video.paused;
+    const QUICK_PLAY_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M8.6 5.2v13.6L19.4 12z" fill="currentColor"/></svg>';
+    const QUICK_PAUSE_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="7.1" y="5" width="3.5" height="14" rx="1.5" fill="currentColor"/><rect x="13.4" y="5" width="3.5" height="14" rx="1.5" fill="currentColor"/></svg>';
+    function paintPlayPauseGlyph(paused) {
+        const button = state.playPauseBtn;
+        if (!button) return;
+        const key = paused ? 'play' : 'pause';
+        if (button.dataset.glyph === key) return;
+        button.dataset.glyph = key;
+        button.innerHTML = paused ? QUICK_PLAY_SVG : QUICK_PAUSE_SVG;
+        button.title = paused ? '播放' : '暂停';
+        button.setAttribute('aria-label', paused ? '播放' : '暂停');
+    }
     function updatePlayPauseButton() {
         const paused = isPaused();
-        const button = state.playPauseBtn;
-        if (button) {
-            const text = paused ? '▶ 播放' : '⏸ 暂停';
-            if (button.textContent !== text) button.textContent = text;
-        }
+        paintPlayPauseGlyph(paused);
         if (state.capPlay) {
             const glyph = paused
                 ? '<path d="M8 5v14l11-7z"/>'
@@ -4077,15 +4083,26 @@
     function buildSeekButton(seconds, direction, extraClass = '') {
         const delta = direction === 'back' ? -seconds : seconds;
         const button = createButton('', extraClass ? `quick-btn ${extraClass}` : 'quick-btn');
-        const glyph = Object.assign(document.createElement('span'), {
-            className: 'quick-btn-glyph',
-            textContent: direction === 'back' ? '⏪' : '⏩'
-        });
-        const text = Object.assign(document.createElement('span'), {
-            className: 'quick-btn-label',
-            textContent: formatSpan(seconds)
-        });
-        button.append(...(direction === 'back' ? [glyph, text] : [text, glyph]));
+        button.dataset.seek = String(seconds);
+        button.dataset.dir = direction;
+        const sign = direction === 'back' ? '−' : '+';
+        if (AV_PLATFORM.isMobile) {
+            const label = Object.assign(document.createElement('span'), {
+                className: 'quick-btn-label',
+                textContent: `${sign}${formatSpan(seconds)}`
+            });
+            button.appendChild(label);
+        } else {
+            const glyph = Object.assign(document.createElement('span'), {
+                className: 'quick-btn-glyph',
+                textContent: sign
+            });
+            const text = Object.assign(document.createElement('span'), {
+                className: 'quick-btn-label',
+                textContent: formatSpan(seconds)
+            });
+            button.append(glyph, text);
+        }
         button.title = `${direction === 'back' ? '后退' : '前进'} ${seconds} 秒`;
         button.addEventListener('click', () => {
             seek(delta);
@@ -4329,7 +4346,7 @@
         for (const input of root.querySelectorAll('input[type="range"]')) syncRangeFill(input);
     }
     applyFullTitleMode();
-    GM_addStyle(`
+    queueStyle(`
         html.av-full-title .thumbnail h6,
         html.av-full-title .thumbnail .text-secondary,
         html.av-full-title .thumbnail .truncate,
@@ -4349,7 +4366,7 @@
             max-height: none !important;
         }
     `);
-    GM_addStyle(`
+    queueStyle(`
         html.av-full-title-detail h1.text-base,
         html.av-full-title-detail h1.text-lg,
         html.av-full-title-detail .video-info h1,
@@ -5617,7 +5634,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         panel.style.left = `${clamp(settings.panelX, startEdge, Math.max(startEdge, window.innerWidth - PANEL_WIDTH - startEdge))}px`;
         panel.style.top = `${clamp(settings.panelY, Math.max(startEdge, 72), Math.max(startEdge, window.innerHeight - 60))}px`;
         state.panel = panel;
-        const { header, gearBtn, pill, pillText } = buildPanelHeader('综合增强助手');
+        const { header, gearBtn, pillText } = buildPanelHeader('综合增强助手');
         state.panelPill = pillText;
 
         const capsule = document.createElement('div');
@@ -5926,7 +5943,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         gearBtn.addEventListener('click', () => togglePanel(!settings.isMinimized));
 
         const keysInfo = buildPanelKeysRow();
-        const { resetPosBtn, btnClearLib, btnPlatform, btnSave, btnBackup } = buildPanelActionRow(panel, layoutPanel);
+        const { resetPosBtn, btnClearLib, btnSave, btnBackup } = buildPanelActionRow(panel, layoutPanel);
         const subtitlePanel = buildSubtitlePanel(panel);
         setCollapsed(subtitlePanel, false);
         const sliderRow = buildPanelSliderRow();
@@ -6737,6 +6754,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     function attachQuickElement(node, host) {
         if (!node || !host) return false;
+        if (node.classList && node.classList.contains('more-menu--sheet')) return false;
         if (node.parentNode !== host) host.appendChild(node);
         return true;
     }
@@ -6807,37 +6825,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         paintQuickVisibility(true);
         showQuickControls();
     }
-    function quickContentWidth(quick) {
-        if (!quick) return 0;
-        let total = 0;
-        let count = 0;
-        for (const child of quick.children) {
-            const box = child.getBoundingClientRect?.();
-            if (!box || box.width <= 0) continue;
-            total += Math.max(Math.round(box.width), child.scrollWidth || 0);
-            count += 1;
-        }
-        let gap = 0;
-        let padX = 0;
-        try {
-            const style = getComputedStyle(quick);
-            gap = Number.parseFloat(style.columnGap) || 0;
-            padX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
-        } catch (error) {
-            debugLog(error);
-        }
-        const composed = Math.ceil(total + gap * Math.max(0, count - 1) + padX + 2);
-        return Math.max(composed, quick.scrollWidth || 0);
-    }
-    function autoNarrowQuick(quick, measure) {
-        if (!quick) return;
-        quick.classList.add('quick-single');
-        quick.classList.remove('quick-narrow-1', 'quick-narrow-2', 'quick-narrow-3');
-        for (const level of ['quick-narrow-1', 'quick-narrow-2', 'quick-narrow-3']) {
-            if (measure() <= quick.clientWidth) break;
-            quick.classList.add(level);
-        }
-    }
     function clearDockPadding(host) {
         const chain = [];
         let node = host;
@@ -6845,24 +6832,26 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             chain.push(node);
             node = node.parentElement;
         }
-        const pads = chain.map(item => Number.parseFloat(getComputedStyle(item).paddingBottom) || 0);
         const record = [];
-        chain.forEach((item, index) => {
-            if (pads[index] > 0) {
-                record.push([item, item.style.getPropertyValue('padding-bottom'), item.style.getPropertyPriority('padding-bottom')]);
-                item.style.setProperty('padding-bottom', '0px', 'important');
+        for (const item of chain) {
+            const style = getComputedStyle(item);
+            for (const prop of ['padding-bottom', 'margin-bottom']) {
+                const value = Number.parseFloat(style.getPropertyValue(prop)) || 0;
+                if (value <= 0) continue;
+                record.push([item, prop, item.style.getPropertyValue(prop), item.style.getPropertyPriority(prop)]);
+                item.style.setProperty(prop, '0px', 'important');
             }
-        });
+        }
         return record;
     }
     function restoreDockPadding() {
         const record = state.dockPadRestore;
         state.dockPadRestore = null;
         if (!Array.isArray(record)) return;
-        for (const [node, value, priority] of record) {
+        for (const [node, prop, value, priority] of record) {
             if (!node || !node.style) continue;
-            if (value) node.style.setProperty('padding-bottom', value, priority);
-            else node.style.removeProperty('padding-bottom');
+            if (value) node.style.setProperty(prop, value, priority);
+            else node.style.removeProperty(prop);
         }
     }
     function teardownQuickControls() {
@@ -6886,12 +6875,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const viewW = Math.max(160, Math.round(box.w));
         const hostRect = target.host.getBoundingClientRect();
         const hostW = Math.round(hostRect.width) || viewW;
-        const dockWidth = Math.max(160, Math.min(hostW, viewW) - 16);
+        const playerW = Math.round(target.after.getBoundingClientRect().width) || hostW;
+        const dockWidth = AV_PLATFORM.isMobile ? Math.max(160, Math.min(playerW, viewW)) : Math.max(160, Math.min(hostW, viewW) - 16);
         const desktopDock = !AV_PLATFORM.isMobile;
         if (quick.parentNode !== target.host || quick.previousElementSibling !== target.after) {
             target.host.insertBefore(quick, target.after.nextSibling);
         }
         const dockGap = desktopDock ? 10 : 8;
+        const hostRowGap = Number.parseFloat(getComputedStyle(target.host).rowGap) || 0;
+        const dockTopOffset = AV_PLATFORM.isMobile && hostRowGap > 0 ? -Math.round(hostRowGap) : 0;
         restoreDockPadding();
         state.dockPadRestore = clearDockPadding(target.host);
         setImportantStyle(quick, {
@@ -6900,10 +6892,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             top: 'auto',
             right: 'auto',
             bottom: 'auto',
-            margin: `${dockGap}px auto`,
+            margin: AV_PLATFORM.isMobile ? `${dockTopOffset}px auto 0` : `${dockGap}px auto`,
             transform: 'none',
             width: desktopDock ? 'fit-content' : `${dockWidth}px`,
-            height: 'auto',
+            height: AV_PLATFORM.isMobile ? '48px' : 'auto',
             'min-height': '0',
             'min-width': '0',
             'max-width': `${dockWidth}px`,
@@ -6916,7 +6908,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             'pointer-events': 'auto'
         });
         invalidateQuickRects();
-        if (!desktopDock) autoNarrowQuick(quick, () => quickContentWidth(quick));
         state.quickScale = '1';
         setImportantStyle(quick, { '--quick-scale': '1' });
         fitLoopMenu();
@@ -6953,7 +6944,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const quickVisible = quick.classList.contains('quick-visible');
         setImportantStyle(quick, {
             width: 'max-content',
-            height: 'auto',
+            height: AV_PLATFORM.isMobile ? (quick.classList.contains('quick-fullscreen') ? '40px' : '46px') : 'auto',
             'min-height': '0',
             'max-width': `${barLimit}px`,
             'box-sizing': 'border-box',
@@ -6966,7 +6957,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         quick.classList.remove('quick-compact');
         let scale = '1';
         if (mobileWrap) {
-            autoNarrowQuick(quick, () => quickContentWidth(quick));
+            quick.classList.remove('quick-single', 'quick-narrow-1', 'quick-narrow-2', 'quick-narrow-3');
             state.quickScale = scale;
             setImportantStyle(quick, { '--quick-scale': scale });
         } else {
@@ -7012,11 +7003,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     function quickTargetCenter(box) {
         ensureQuickPosLoaded();
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 0;
         if (state.quickPos) {
-            const vw = window.innerWidth || document.documentElement.clientWidth || 0;
-            const vh = window.innerHeight || document.documentElement.clientHeight || 0;
             if (vw > 0 && vh > 0) return { x: state.quickPos.rx * vw, y: state.quickPos.ry * vh };
         }
+        if (quickFullscreenRoot() && vw > 0 && vh > 0) return { x: vw / 2, y: vh - 72 };
         return { x: box.left + box.width / 2, y: quickBarCenterY(box) };
     }
     function clampQuickIntoViewport() {
@@ -7140,6 +7132,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         setImportantStyle(menu, { 'z-index': '2147483647', 'pointer-events': 'auto' });
     }
     function fitLoopMenu() {
+        if (AV_PLATFORM.isMobile) return;
         if (state.loopMenu?.classList.contains('show')) fitQuickMenu(state.loopMenu, state.loopBtn);
         if (state.moreMenu?.classList.contains('show')) fitQuickMenu(state.moreMenu, state.moreBtn);
     }
@@ -7222,10 +7215,27 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             host.addEventListener('mouseleave', forgetQuickPointer, { passive: true });
         }
     }
+    let quickFullscreenBound = false;
+    function bindQuickFullscreen() {
+        if (quickFullscreenBound) return;
+        quickFullscreenBound = true;
+        const sync = () => {
+            const quick = state.quick;
+            if (!quick) return;
+            const fullscreen = Boolean(quickFullscreenRoot());
+            const wasFullscreen = quick.classList.contains('quick-fullscreen');
+            quick.classList.toggle('quick-fullscreen', fullscreen);
+            if (fullscreen && !wasFullscreen) state.quickPos = null;
+            fitQuickControls();
+        };
+        runtime.on(document, 'fullscreenchange', sync);
+        runtime.on(document, 'webkitfullscreenchange', sync);
+    }
     function setupQuickAutoHide() {
         const { container, quick, video } = state;
         bindQuickHost(container);
         bindQuickPlayback(video);
+        bindQuickFullscreen();
         if (!quick) return;
         if (quick.dataset.quickHitProbe !== '1') {
             quick.dataset.quickHitProbe = '1';
@@ -7323,10 +7333,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.loopMenu?.classList.remove('show');
         if (state.loopBtn) {
             state.loopBtn.classList.add('active');
-            state.loopBtn.replaceChildren(
-                Object.assign(document.createElement('span'), { textContent: '循' }),
-                Object.assign(document.createElement('span'), { textContent: formatSpan(seconds) })
-            );
+            state.loopBtn.textContent = '↻';
+            state.loopBtn.title = `区间循环 ${formatSpan(seconds)}（点击关闭）`;
         }
         log(`🔂 已开启区间循环：从当前起 ${formatSeconds(seconds)}`);
     }
@@ -7335,10 +7343,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.loopMenu?.classList.remove('show');
         if (state.loopBtn) {
             state.loopBtn.classList.remove('active');
-            state.loopBtn.replaceChildren(
-                Object.assign(document.createElement('span'), { textContent: '循' }),
-                Object.assign(document.createElement('span'), { textContent: '环' })
-            );
+            state.loopBtn.textContent = '↻';
+            state.loopBtn.title = '区间循环';
         }
         log('⏹️ 已关闭区间循环');
     }
@@ -7387,7 +7393,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         runtime.purge(['.custom-quick-controls', '.loop-menu']);
         ensurePositioned(container);
         const quick = document.createElement('div');
-        quick.className = 'custom-quick-controls';
+        quick.className = AV_PLATFORM.isMobile ? 'custom-quick-controls quick-mobile' : 'custom-quick-controls';
         state.quick = quick;
         const leftGroup = createQuickGroup('quick-group-left');
         const midGroup = createQuickGroup('quick-group-mid');
@@ -7404,8 +7410,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         midGroup.appendChild(outerBack);
         midGroup.appendChild(createDivider());
         midGroup.appendChild(buildSeekButton(coreStep, 'back'));
-        state.playPauseBtn = createButton('▶ 播放', 'quick-btn quick-play-btn');
+        state.playPauseBtn = createButton('', 'quick-btn quick-play-btn');
         state.playPauseBtn.addEventListener('click', togglePlayPause);
+        paintPlayPauseGlyph(isPaused());
         midGroup.appendChild(state.playPauseBtn);
         midGroup.appendChild(buildSeekButton(coreStep, 'forward'));
         midGroup.appendChild(createDivider());
@@ -7413,21 +7420,18 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         state.pipBtn = createButton('⧉', 'quick-btn quick-pip-btn');
         state.pipBtn.title = '画中画 (P)';
         state.pipBtn.addEventListener('click', togglePictureInPicture);
-        rightGroup.appendChild(state.pipBtn);
         rightGroup.appendChild(createDivider());
         const loopWrapper = document.createElement('div');
         loopWrapper.className = 'quick-loop-wrapper';
         state.loopBtn = createButton('', 'quick-btn quick-loop-btn');
-        state.loopBtn.replaceChildren(
-            Object.assign(document.createElement('span'), { textContent: '循' }),
-            Object.assign(document.createElement('span'), { textContent: '环' })
-        );
+        state.loopBtn.textContent = '↻';
+        state.loopBtn.title = '区间循环';
         state.loopBtn.addEventListener('click', () => {
             if (state.loopActive) stopLoop();
             else toggleLoopMenu();
         });
         state.loopMenu = document.createElement('div');
-        state.loopMenu.className = 'loop-menu';
+        state.loopMenu.className = AV_PLATFORM.isMobile ? 'loop-menu more-menu--sheet' : 'loop-menu';
         const addMenuOption = (text, onClick) => {
             const option = createButton(text, 'loop-menu-btn');
             option.addEventListener('click', event => {
@@ -7447,40 +7451,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         addMenuOption('关闭循环', stopLoop);
         loopWrapper.append(state.loopBtn);
         rightGroup.appendChild(loopWrapper);
-        state.moreBtn = createButton('⏱', 'quick-btn quick-more-btn');
-        state.moreBtn.title = '更多操作';
-        state.moreBtn.addEventListener('click', () => {
-            if (!state.moreMenu) return;
-            state.loopMenu?.classList.remove('show');
-            const open = state.moreMenu.classList.toggle('show');
-            if (open) fitLoopMenu();
-        });
-        leftGroup.appendChild(state.moreBtn);
-        state.moreMenu = document.createElement('div');
-        state.moreMenu.className = 'loop-menu more-menu';
-        const addMoreOption = (text, onClick) => {
-            const option = createButton(text, 'loop-menu-btn');
-            option.addEventListener('click', event => {
-                event.stopPropagation();
-                state.moreMenu.classList.remove('show');
-                onClick();
-            });
-            state.moreMenu.appendChild(option);
-        };
-        for (const seconds of outerBackSteps) {
-            addMoreOption(`⏪ 后退 ${formatSeconds(seconds)}`, () => {
-                seek(-seconds);
-                log(`⏪ 跳转 ${Math.abs(seconds)} 秒`);
-            });
-        }
-        for (const seconds of outerForwardSteps) {
-            addMoreOption(`⏩ 前进 ${formatSeconds(seconds)}`, () => {
-                seek(seconds);
-                log(`⏩ 跳转 ${Math.abs(seconds)} 秒`);
-            });
-        }
-        addMoreOption(`${pipSupported(state.video) ? '退出' : '进入'}画中画`, () => togglePictureInPicture());
-        addMoreOption('区段循环…', () => toggleLoopMenu());
+        rightGroup.appendChild(state.pipBtn);
+        state.moreBtn = null;
+        state.moreMenu = null;
         const grip = document.createElement('span');
         grip.className = 'quick-grip';
         grip.textContent = '⠿';
@@ -7489,8 +7462,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         quick.append(grip, leftGroup, midGroup, rightGroup);
         setupQuickDrag(quick, grip);
         container.appendChild(quick);
-        container.appendChild(state.loopMenu);
-        container.appendChild(state.moreMenu);
+        (AV_PLATFORM.isMobile ? document.body : container).appendChild(state.loopMenu);
+        if (state.moreMenu) document.body.appendChild(state.moreMenu);
         freeQuickControls();
         bindQuickMenuOutsideClick();
         setupQuickAutoHide();
@@ -8846,7 +8819,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     function audioContextCtor() {
         if (typeof AudioContext === 'function') return AudioContext;
-        if (typeof webkitAudioContext === 'function') return webkitAudioContext;
+        if (typeof window.webkitAudioContext === 'function') return window.webkitAudioContext;
         return null;
     }
     const audioEngine = {
@@ -11865,7 +11838,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         badge.textContent = itemLabel(SITE_TAG);
         brandText.append(heading, badge);
         brand.append(logo, brandText);
-        const site = SITE_TAG;
         const actions = document.createElement('div');
         actions.className = 'av-cockpit-actions';
         const refresh = buildCockpitAction('<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/>', AV_PLATFORM.isMobile ? '刷新' : '', 'av-btn', '刷新', () => refreshActressPage());
@@ -14348,7 +14320,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }, delay));
         }
     }
-    GM_addStyle(`
+    queueStyle(`
         .av-card-hidden { display: none !important; }
         .av-card-dimmed { opacity: .28 !important; filter: grayscale(1) !important; transition: opacity .2s ease; }
         .av-card-dimmed:hover { opacity: .85 !important; filter: grayscale(0) !important; }
@@ -14376,6 +14348,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             padding: 10px 0;
             border-bottom: 1px solid rgba(255, 255, 255, .08);
         }
+        .av-filter-injected-title { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: #b4b4b4; white-space: nowrap; }
         .av-filter-bar {
             position: static;
             display: inline-flex;
@@ -14887,6 +14860,75 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             .av-heatmap-boxes { grid-template-rows: repeat(7, 13px); }
             .av-heatmap-box { width: 13px; height: 13px; }
             .av-heatmap-weekdays { grid-template-rows: repeat(7, 13px); }
+        }
+        .custom-quick-controls.quick-mobile { display: flex; align-items: center; gap: 8px; height: 46px !important; padding: 4px 10px; border: 0; border-radius: 0; background: #0a0a0a; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+        .custom-quick-controls.quick-mobile.quick-docked { position: static !important; left: auto !important; right: auto !important; top: auto !important; bottom: auto !important; transform: none !important; height: 48px !important; width: 100% !important; max-width: 100% !important; padding: 4px 10px; border-radius: 0; border-top: 1px solid #262626; background: #0a0a0a; }
+        .custom-quick-controls.quick-mobile:not(.quick-docked) { height: 46px !important; border: 1px solid #2a2a2a; border-radius: 10px; background: #0a0a0a; }
+        .custom-quick-controls.quick-mobile .quick-grip,
+        .custom-quick-controls.quick-mobile .quick-divider,
+        .custom-quick-controls.quick-mobile .quick-pip-btn,
+        .custom-quick-controls.quick-mobile .quick-loop-wrapper,
+        .custom-quick-controls.quick-mobile .quick-group-right,
+        .custom-quick-controls.quick-mobile .quick-group-left { display: none !important; }
+        .custom-quick-controls.quick-mobile .quick-group-mid { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; width: 100%; }
+        .custom-quick-controls.quick-mobile .quick-jump-group { gap: 0; }
+        .custom-quick-controls.quick-mobile .quick-outer { flex: 2 1 0; display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .custom-quick-controls.quick-mobile .quick-btn { flex: 1 1 0; min-width: 0; height: 34px; padding: 0 2px; border: 0; border-radius: 7px; background: transparent; color: #d0d0d0; font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: -.2px; transition: background-color .15s ease-out, color .15s ease-out; }
+        .custom-quick-controls.quick-mobile .quick-outer .quick-btn { flex: 1 1 0; }
+        .custom-quick-controls.quick-mobile .quick-btn-glyph { display: inline; font-size: 11px; opacity: .85; margin-right: 1px; }
+        .custom-quick-controls.quick-mobile .quick-play-btn { flex: 0 0 40px; width: 40px; min-width: 40px; height: 34px; margin: 0; padding: 0; border: 0; border-radius: 9px; background: #ededed; color: #0a0a0a; font-size: 14px; line-height: 0; box-shadow: 0 1px 2px rgba(0,0,0,.35); }
+        .custom-quick-controls.quick-mobile .quick-play-btn:hover { background: #ffffff; }
+        .custom-quick-controls.quick-mobile .quick-btn:active { background: #2b2b2b; color: #fff; }
+        .custom-quick-controls.quick-mobile [data-seek="300"] { display: none !important; }
+        .custom-quick-controls.quick-mobile.quick-fullscreen { height: 40px !important; padding: 4px 10px; gap: 4px; border: 1px solid #2a2a2a; border-radius: 10px; background: rgba(10, 10, 10, .88); }
+        .custom-quick-controls.quick-mobile.quick-fullscreen .quick-btn { height: 32px; padding: 0 6px; border: 0; background: transparent; color: #c4c4c4; font-size: 11.5px; }
+        .custom-quick-controls.quick-mobile.quick-fullscreen .quick-outer { gap: 2px; }
+        .custom-quick-controls.quick-mobile.quick-fullscreen .quick-grip { display: inline-flex !important; width: 14px; height: 30px; margin-right: 2px; opacity: .32; font-size: 11px; }
+        .custom-quick-controls.quick-mobile.quick-fullscreen .quick-play-btn { flex: 0 0 40px; width: 40px; min-width: 40px; height: 32px; margin: 0 2px; border: 0; border-radius: 8px; background: #ededed; color: #0a0a0a; }
+        @media (max-width: 380px) {
+            .custom-quick-controls.quick-fullscreen [data-seek="60"] { display: none !important; }
+        }
+        .loop-menu.more-menu--sheet { position: fixed !important; left: 10px; right: 10px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); top: auto; width: auto; max-width: none; max-height: 64vh; transform: none; display: none; grid-template-columns: 1fr 1fr; gap: 6px; padding: 12px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, .14); background: rgba(13, 17, 23, .97); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; z-index: 2147483600; }
+        .loop-menu.more-menu--sheet.show { display: grid; }
+        .loop-menu.more-menu--sheet .loop-menu-btn { display: flex; align-items: center; justify-content: center; width: 100%; height: 42px; padding: 0 6px; border-radius: 9px; background: rgba(255, 255, 255, .06); font-size: 12px; font-weight: 500; text-align: center; }
+        .loop-menu.more-menu--sheet .loop-menu-btn:hover,
+        .loop-menu.more-menu--sheet .loop-menu-btn:active { background: rgba(255, 255, 255, .14); color: #fff; }
+        .custom-quick-controls:not(.quick-mobile) { height: 48px !important; padding: 0 16px; gap: 5px; border: 1px solid rgba(255, 255, 255, .12); border-radius: 24px; background: rgba(15, 18, 26, .82); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+        .custom-quick-controls:not(.quick-mobile) .quick-grip { opacity: .3; transition: opacity .16s ease; }
+        .custom-quick-controls:not(.quick-mobile) .quick-grip:hover { opacity: .95; }
+        .custom-quick-controls:not(.quick-mobile) .quick-outer { opacity: .48; transition: opacity .16s ease; }
+        .custom-quick-controls:not(.quick-mobile) .quick-outer:hover { opacity: .88; }
+        .custom-quick-controls:not(.quick-mobile) .quick-btn { min-width: 38px; height: 32px; padding: 0 8px; font-size: 11px; border-radius: 8px; }
+        .custom-quick-controls:not(.quick-mobile) .quick-outer .quick-btn { min-width: 38px; }
+        .custom-quick-controls:not(.quick-mobile) .quick-outer .quick-btn-glyph { display: none; }
+        .custom-quick-controls:not(.quick-mobile) .quick-group-mid > .quick-btn:not(.quick-play-btn) { min-width: 64px; height: 36px; font-size: 13px; border-radius: 11px; background: rgba(255, 255, 255, .07); }
+        .custom-quick-controls:not(.quick-mobile) .quick-play-btn { width: 46px; min-width: 46px; height: 46px; margin: 0 8px; padding: 0; border-radius: 50%; background: #3567a8; color: #fff; font-size: 15px; line-height: 0; }
+        .custom-quick-controls:not(.quick-mobile) .quick-play-btn:hover { background: #4179c0; }
+        .custom-quick-controls:not(.quick-mobile) .quick-loop-btn,
+        .custom-quick-controls:not(.quick-mobile) .quick-pip-btn,
+        .custom-quick-controls:not(.quick-mobile) .quick-more-btn { width: 32px; min-width: 32px; height: 32px; padding: 0; border-radius: 9px; font-size: 15px; }
+        .custom-quick-controls:not(.quick-mobile) .quick-loop-wrapper { display: inline-flex; align-items: center; }
+        .custom-quick-controls:not(.quick-mobile).quick-fullscreen { height: 44px !important; padding: 0 10px; gap: 4px; border-color: #262626; background: rgba(10, 10, 10, .78); }
+        .custom-quick-controls:not(.quick-mobile) .quick-divider { height: 18px; margin: 0 7px; }
+        @media (max-width: 720px) {
+            .av-filter-host { display: block; width: 100%; max-width: 100%; flex: 1 1 100%; margin: 6px 0 10px !important; }
+            .av-filter-host.av-filter-inline { flex: 1 1 100%; margin: 6px 0 10px !important; }
+            :has(> .av-filter-host) { flex-wrap: wrap !important; gap: 8px !important; }
+            :has(> .av-filter-host) > :not(.av-filter-host) { flex: 0 0 auto; white-space: nowrap; }
+            :has(> .av-filter-host) > .av-filter-host { flex: 1 1 100% !important; width: 100% !important; max-width: 100% !important; margin: 6px 0 10px !important; }
+            .av-filter-slot { display: block; width: 100%; }
+            .av-filter-injected-header { row-gap: 8px; flex-wrap: wrap; }
+            .av-filter-bar { display: grid !important; grid-template-columns: repeat(6, minmax(0, 1fr)) !important; gap: 8px !important; width: 100% !important; max-width: 100% !important; align-items: stretch !important; }
+            .av-fb-chip { width: 100% !important; height: 36px !important; min-height: 36px !important; max-height: 36px !important; padding: 0 4px !important; gap: 4px !important; font-size: 12px !important; border-radius: 8px !important; justify-content: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+            .av-fb-chip.av-fb-toggle { order: 1; grid-column: span 2; }
+            .av-fb-chip.av-fb-watched { order: 2; grid-column: span 2; }
+            .av-fb-chip.av-fb-blacklist { order: 3; grid-column: span 2; }
+            .av-fb-chip.av-fb-select-wrap { order: 4; grid-column: span 3; padding-right: 18px; }
+            .av-fb-chip.av-fb-cockpit { order: 5; grid-column: span 3; }
+            .av-fb-chip.av-fb-hide { display: none !important; }
+            .av-fb-chip.av-fb-stat { order: 7; grid-column: 1 / -1; height: 28px; min-height: 28px; margin-top: 2px; font-size: 11.5px; }
+            .title-with-more, .title-with-avatar, .section-title, .section-header, .list-header, .video-list-header { row-gap: 8px; }
+            .title-with-more > :not(.av-filter-host), .title-with-avatar > :not(.av-filter-host), .section-title > :not(.av-filter-host), .section-header > :not(.av-filter-host), .list-header > :not(.av-filter-host), .video-list-header > :not(.av-filter-host) { flex: 0 0 auto; white-space: nowrap; }
         }
     `);
     const WATCHED_KEY_BASE = 'watchedList';
@@ -15631,10 +15673,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         watchedCache = new Set(historyWatchedList(historyStorageGet(WATCHED_KEY)));
         return watchedCache;
     }
-    function isWatched(code) {
-        if (!code) return false;
-        return watchedSet().has(normalizeVideoCode(code));
-    }
     function markWatched(code) {
         const key = normalizeVideoCode(code);
         if (!key) return;
@@ -16155,6 +16193,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (fallback) return fallback;
         fallback = document.createElement('div');
         fallback.className = 'av-filter-injected-header';
+        const title = document.createElement('div');
+        title.className = 'av-filter-injected-title';
+        title.textContent = /\/actress(?:es)?\//i.test(location.pathname) ? '出演作品' : '作品列表';
+        fallback.appendChild(title);
         if (holder === document.body) holder.insertBefore(fallback, holder.firstChild);
         else holder.insertBefore(fallback, grid);
         return fallback;
@@ -20156,10 +20198,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             runtime.disposeAll();
         }, { once: true });
     }
+    flushStyles();
     bootstrapPage();
     const FavScreen = (function () {
 
-    const HOST = location.hostname;
     const CURRENT_SITE = IS_JABLE ? 'jable' : 'missav';
 
     const SITE_INFO = {
@@ -22495,7 +22537,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             limit: 48
         },
         wallEl: null,
-        wallWrap: null,
         networkWrap: null,
         lastRender: null,
         observer: null,
