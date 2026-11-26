@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MissAV & Jable 综合增强助手
 // @namespace    http://tampermonkey.net/
-// @version      16.15
-// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、评分徽章、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
+// @version      16.16
+// @description  移动端/桌面端双识别：自动判断运行环境并切换到对应的策略。广告清理、进度条关键帧预览、字幕加载/偏移/字号高度、音量增强与声音设备路由、站点独立记忆与统计、自动最高清晰度播放、倍速与HUD、画面锐化、原生画中画、剧照画廊、短评聚合、女优社交直达、女优收藏管理、观影行为数据大屏、影片收藏大屏、断点续播、内容过滤与屏蔽、切屏检测屏蔽、站内自动登录、收藏批量备份、临时加速、快进倒退、区间循环、可拖拽可隐藏UI、实时日志、字幕文件下载到本地；移动端专属：屏幕常亮、锁屏与耳机键控制、双击视频左右两侧快进快退
 // @author       Momomo
 // @icon         https://jable.tv/favicon.ico
 // @icon64       https://jable.tv/favicon.ico
@@ -38,6 +38,8 @@
 // @connect      javlibrary.com
 // @connect      www.javlibrary.com
 // @connect      javdb.com
+// @connect      www.javdatabase.com
+// @connect      javdatabase.com
 // @connect      api.allorigins.win
 // @connect      api.codetabs.com
 // @connect      whos.tv
@@ -302,7 +304,6 @@
         persistHooked = true;
         try {
             window.addEventListener('pagehide', persistDrain, { passive: true });
-            window.addEventListener('beforeunload', persistDrain, { passive: true });
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'hidden') persistDrain();
             }, { passive: true });
@@ -1083,7 +1084,6 @@
     const COMMENT_BLOCK_RE = /<div[^>]+class=["'][^"']*(?:comment-content|comment-body|bubble-content)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
     const SAMPLE_BOX_RE = /<a[^>]+class=["'][^"']*sample-box[^"']*["'][^>]+href=["']([^"']+)["']/gi;
     const PHOTO_FRAME_RE = /<div[^>]+class=["'][^"']*photo-frame[^"']*["'][^>]*>\s*<img[^>]+src=["']([^"']+)["']/gi;
-    const JL_SCORE_RE = /class=["']score["'][^>]*>\s*\(?([0-9.]+)\)?\s*<\/span>/i;
     const JL_COMMENT_RE = /<table[^>]+class=["']comment["'][^>]*>([\s\S]*?)<\/table>/gi;
     const JD_ACTOR_PATH_RE = /href=["'](\/actors\/[a-zA-Z0-9_-]+)["']/gi;
     const JD_ACTOR_NAME_RE = /class=["']actor-section-name["'][^>]*>([^<]+)</i;
@@ -1186,7 +1186,11 @@
         const unbinders = [];
         const wrap = (fn, label) => (...args) => {
             try {
-                return fn(...args);
+                const result = fn(...args);
+                if (result && typeof result.then === 'function') {
+                    return Promise.resolve(result).catch(error => debugLog(error, label));
+                }
+                return result;
             } catch (error) {
                 debugLog(error, label);
             }
@@ -3190,8 +3194,6 @@
         .av-resume-toast-btn:hover { background: #2563eb; }
         .av-resume-toast-close { appearance: none; border: 0; background: transparent; color: #9ca3af; font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; }
         .av-resume-toast-close:hover { color: #e5e7eb; }
-        .info-rating-badge { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; padding: 2px 8px; border-radius: 9999px; background: rgba(245,158,11,.16); border: 1px solid rgba(245,158,11,.45); color: #fbbf24; font: 600 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; white-space: nowrap; vertical-align: middle; }
-        .info-rating-badge small { color: var(--avui-sub); font-weight: 500; font-size: 10px; }
         .social-badges { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
         .social-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.1); color: #e2e8f0; font-size: 11px; text-decoration: none; overflow: hidden; transition: background .15s ease; }
         .social-badge:hover { background: rgba(96,165,250,.4); }
@@ -4417,17 +4419,7 @@
     }
 
     let uiStylesApplied = false;
-    function applyUiStyles() {
-        const mobileSolid = AV_PLATFORM.isMobile ? Math.max(0.92, Number(settings.opacity) || 0) : null;
-        const mobileHoverSolid = AV_PLATFORM.isMobile ? Math.max(0.97, Number(settings.hoverOpacity) || 0) : null;
-        for (const target of [state.panel, state.subtitlePicker, state.filterBar, state.audioWin]) {
-            if (!target) continue;
-            target.style.setProperty('--ui-bg-opacity', mobileSolid === null ? settings.opacity : mobileSolid);
-            target.style.setProperty('--ui-blur', `${settings.blur}px`);
-            target.style.setProperty('--ui-hover-opacity', mobileHoverSolid === null ? settings.hoverOpacity : mobileHoverSolid);
-            target.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
-        }
-            if (!uiStylesApplied) GM_addStyle(`
+        const UI_THEME_CSS = `
 
 .avx2, .avx2 *, .avx2 *::before, .avx2 *::after { box-sizing: border-box; }
 .avx2 [hidden], .av-actress-page [hidden], .av-analytics-page [hidden], .custom-control-panel [hidden], .av-panel [hidden] { display: none !important; }
@@ -5214,7 +5206,18 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
 }
 .avx2 .avx-actions .avx-btn--primary:hover { filter: brightness(1.06); background: linear-gradient(135deg,#5b96ff,#4176ee); }
 .avx2 .avx-card > .avx-note { padding: 8px 11px 11px; }
-        `);
+        `;
+function applyUiStyles() {
+        const mobileSolid = AV_PLATFORM.isMobile ? Math.max(0.92, Number(settings.opacity) || 0) : null;
+        const mobileHoverSolid = AV_PLATFORM.isMobile ? Math.max(0.97, Number(settings.hoverOpacity) || 0) : null;
+        for (const target of [state.panel, state.subtitlePicker, state.filterBar, state.audioWin]) {
+            if (!target) continue;
+            target.style.setProperty('--ui-bg-opacity', mobileSolid === null ? settings.opacity : mobileSolid);
+            target.style.setProperty('--ui-blur', `${settings.blur}px`);
+            target.style.setProperty('--ui-hover-opacity', mobileHoverSolid === null ? settings.hoverOpacity : mobileHoverSolid);
+            target.style.setProperty('--ui-hover-blur', `${settings.hoverBlur}px`);
+        }
+            if (!uiStylesApplied) GM_addStyle(UI_THEME_CSS);
             uiStylesApplied = true;
     }
     function setCollapsed(node, collapsed) {
@@ -6382,7 +6385,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         setupPane.appendChild(moduleCard);
         const cacheCard = avxCard('缓存清理', '只清脚本缓存');
         const cacheBtn = avxBtn('清除', { variant: 'danger', small: true });
-        cacheBtn.title = '清除本站的剧照、短评、评分、影单、关键帧、女优资料等脚本缓存，三个大屏的数据与全部设置都会保留';
+        cacheBtn.title = '清除本站的剧照、短评、影单、关键帧、女优资料等脚本缓存，三个大屏的数据与全部设置都会保留';
         const cacheNote = avxEl('div', 'avx-note', '');
         const refreshCacheNote = () => {
             const stats = scriptCacheStats();
@@ -8235,7 +8238,23 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return `${JDFORREPAM_API}/api/v2/movies/${encodeURIComponent(String(id))}`;
     }
     const JAVDB_WEB_BASE = 'https://javdb.com';
+    const JAVDB_ID_PREFIX = 'jdId@';
     const javDbIdMemo = new Map();
+    function javDbIdCached(key) {
+        if (!key) return '';
+        const raw = store.get(JAVDB_ID_PREFIX + String(key).toLowerCase());
+        if (!raw) return '';
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && parsed.id ? String(parsed.id) : '';
+        } catch (_) {
+            return '';
+        }
+    }
+    function javDbIdRemember(key, id) {
+        if (!key || !id) return;
+        store.set(JAVDB_ID_PREFIX + String(key).toLowerCase(), JSON.stringify({ id: String(id), at: Date.now() }));
+    }
     function javDbIdFromHref(href) {
         const text = String(href || '');
         const local = text.match(/^\/v\/([a-zA-Z0-9_-]+)/);
@@ -8255,7 +8274,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const key = javDbCodeKey(code);
         if (!key) return null;
         const url = `${JAVDB_WEB_BASE}/search?` + new URLSearchParams({ q: String(code || ''), f: 'all' });
-        const html = await fetchHtml(url, { timeout: 4500, skipProxy: true });
+        const html = await fetchHtml(url, { timeout: 6000 });
         const doc = parseHtmlDocument(html);
         if (!doc) return null;
         const anchors = [...doc.querySelectorAll('a[href^="/v/"]')];
@@ -8283,7 +8302,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
         ];
         for (const url of engines) {
-            const html = await fetchHtml(url, { timeout: 4000, skipProxy: true });
+            const html = await fetchHtml(url, { timeout: 4500 });
             if (!html) continue;
             const found = [];
             for (const match of html.matchAll(/javdb\.com\/v\/([a-zA-Z0-9_-]+)/gi)) {
@@ -8298,6 +8317,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!key) return null;
         const cached = javDbIdMemo.get(key);
         if (cached) return cached;
+        const persisted = javDbIdCached(key);
+        if (persisted) {
+            const memo = { id: persisted };
+            javDbIdMemo.set(key, memo);
+            return memo;
+        }
         let movie = null;
         for (const attempt of [searchJavDbMovieViaApi, searchJavDbMovieViaWeb, findIndexedJavDbMovie]) {
             try {
@@ -8310,6 +8335,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         if (!movie?.id) return null;
         javDbIdMemo.set(key, movie);
+        javDbIdRemember(key, movie.id);
         return movie;
     }
     async function fetchJavDbDetail(id) {
@@ -9655,8 +9681,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return loose;
     }
 
-    function parseJavdbHtmlMovie(html, code, url) {
-        const doc = parseHtmlDocument(html);
+    function parseJavdbMovieDocument(doc, code, url) {
         if (!doc) return null;
         const text = node => String(node && node.textContent || '').replace(/\s+/g, ' ').trim();
         const valueOf = label => {
@@ -9711,7 +9736,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!detailUrl) return null;
         const detailHtml = await fetchHtml(detailUrl, { timeout: 12000 });
         if (!detailHtml) return null;
-        return parseJavdbHtmlMovie(detailHtml, clean, detailUrl);
+        return parseJavdbMovieDocument(parseHtmlDocument(detailHtml), clean, detailUrl);
     }
 
     async function fetchJavDbBackupInfo(code) {
@@ -9739,6 +9764,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (!oldest.done) JAVDB_BACKUP_CACHE.delete(oldest.value);
         }
         JAVDB_BACKUP_CACHE.set(clean, task);
+        void task.then(info => {
+            if (!info && JAVDB_BACKUP_CACHE.get(clean) === task) JAVDB_BACKUP_CACHE.delete(clean);
+        });
         return task;
     }
     function backupCleanTitle(raw, code) {
@@ -12139,15 +12167,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return String(titleBlock[1] || '').replace(/[^a-z0-9]/gi, '').toUpperCase().includes(wanted);
     }
     function parseJavLibraryHtml(html) {
-        let rating;
         const reviews = [];
-        const scoreMatch = html.match(JL_SCORE_RE);
-        if (scoreMatch?.[1]) {
-            const score = Number.parseFloat(scoreMatch[1]);
-            const countMatch = html.match(/\(?([0-9,]+)\s*(?:人評價|人评价|votes|reviews)\)?/i);
-            const count = countMatch?.[1] ? Number.parseInt(countMatch[1].replace(/,/g, ''), 10) : undefined;
-            if (score > 0) rating = { score, count, source: 'JAVLibrary' };
-        }
         let taken = 0;
         for (const block of html.matchAll(JL_COMMENT_RE)) {
             if (taken >= 12) break;
@@ -12165,7 +12185,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 taken++;
             }
         }
-        return { rating, reviews };
+        return { reviews };
     }
     function extractPageReviews() {
         const reviews = [];
@@ -12192,7 +12212,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         return out;
     }
     function parseJavDbMovieHtml(html, code) {
-        const out = { rating: undefined, stills: [], reviews: [] };
+        const out = { stills: [], reviews: [] };
         const doc = parseHtmlDocument(html);
         if (!doc) return out;
         const key = javDbCodeKey(code);
@@ -12201,20 +12221,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             || doc.querySelector('.current-title')
             || doc.querySelector('h2.title'))?.textContent?.trim() || '';
         if (key && titleText && !javDbCodeKey(titleText).includes(key)) return out;
-        const scoreBox = doc.querySelector('.movie-panel-info .score-stars')
-            || doc.querySelector('.score-stars')
-            || doc.querySelector('.score');
-        const valueNode = scoreBox?.querySelector('.value');
-        let score = Number.parseFloat(String(valueNode?.textContent || '').replace(/[^\d.]/g, ''));
-        if (!(Number.isFinite(score) && score > 0 && score <= 5) && scoreBox) {
-            score = scoreBox.querySelectorAll('.icon-star.gr').length
-                || scoreBox.querySelectorAll('.icon-star:not(.gray)').length;
-        }
-        if (Number.isFinite(score) && score > 0 && score <= 5) {
-            const votesText = (scoreBox?.querySelector('.votes, .count'))?.textContent || '';
-            const votes = Number(String(votesText).replace(/[^\d]/g, ''));
-            out.rating = { score: Number((score * 2).toFixed(1)), count: votes > 0 ? votes : undefined, source: 'JavDB' };
-        }
         const pushStill = href => {
             const raw = String(href || '').trim();
             if (!raw || raw.startsWith('data:') || raw.startsWith('javascript:')) return;
@@ -12231,7 +12237,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             }
         }
         if (!out.stills.length) pushStill(doc.querySelector('.column-video-cover img.video-cover, img.video-cover')?.getAttribute('src') || '');
-        for (const item of [...doc.querySelectorAll('.review-items .review-item, .review-list .review-item, .review-item')].slice(0, 20)) {
+        for (const item of [...doc.querySelectorAll('.review-items .review-item, .review-list .review-item, .review-item')].slice(0, 60)) {
             const content = (item.querySelector('.content, .review-content, .javdb-api-review-content, .message-body p, p')?.textContent || '').trim();
             if (content.length < 2) continue;
             const user = (item.querySelector('.review-author, .author, .user-name, .name, .review-title a, a[href^="/users/"]')?.textContent || '').trim() || '匿名';
@@ -12247,11 +12253,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const html = await fetchHtml(`${JAVDB_WEB_BASE}/v/${encodeURIComponent(String(movieId))}`, { timeout: 4500, skipProxy: true });
         if (!html) return null;
         const parsed = parseJavDbMovieHtml(html, code);
-        if (!parsed.stills.length && !parsed.reviews.length && !parsed.rating) return null;
+        if (!parsed.stills.length && !parsed.reviews.length) return null;
         return parsed;
     }
     async function fetchJavDbInfo(code, onPartial) {
-        const empty = { rating: undefined, stills: [], reviews: [], lists: [], credits: null, javDbMovieId: '' };
+        const empty = { stills: [], reviews: [], lists: [], credits: null, javDbMovieId: '', reviewsPageCount: 0, reviewsLimit: 20 };
         let movie = null;
         try {
             movie = await searchJavDbMovie(code);
@@ -12266,7 +12272,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             new URLSearchParams({ page: '1', sort_by: 'hotly', limit: '20' });
         const listsUrl = `${JDFORREPAM_API}/api/v1/lists/related?` +
             new URLSearchParams({ movie_id: movieId, page: '1', limit: '20' });
-        let rating;
         let credits = null;
         const stills = [];
         try {
@@ -12274,15 +12279,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             if (detail) {
                 credits = javDbCreditsFrom(movie, detail);
                 rememberJavDbCredits(code, credits);
-                const raw = Number(detail.score);
-                if (Number.isFinite(raw) && raw > 0 && raw <= 5) {
-                    const watched = Number(detail.watched_count);
-                    rating = {
-                        score: Number((raw * 2).toFixed(1)),
-                        count: Number.isFinite(watched) && watched > 0 ? watched : undefined,
-                        source: 'JavDB'
-                    };
-                }
                 const push = url => {
                     const abs = resolveUrl(url, JDFORREPAM_API);
                     if (abs && !NOW_PRINTING_RE.test(abs) && !stills.includes(abs)) stills.push(abs);
@@ -12299,12 +12295,15 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         } catch (error) {
             debugLog(error, 'javdb-detail');
         }
-        onPartial?.({ rating, stills: stills.slice() });
+        onPartial?.({ stills: stills.slice() });
         const [reviewsRaw, listsRaw] = await Promise.all([once(reviewsUrl).catch(() => ''), once(listsUrl).catch(() => '')]);
         const reviews = [];
+        let reviewsPageCount = 0;
         try {
             const body = JSON.parse(reviewsRaw);
-            for (const item of (Array.isArray(body?.data?.reviews) ? body.data.reviews : []).slice(0, 20)) {
+            const rawList = Array.isArray(body?.data?.reviews) ? body.data.reviews : [];
+            reviewsPageCount = rawList.length;
+            for (const item of rawList) {
                 const content = String(item?.content ?? '').trim();
                 if (content.length < 2) continue;
                 const score = Number(item?.score);
@@ -12336,10 +12335,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         } catch (error) {
             debugLog(error, 'javdb-lists');
         }
-        if (!stills.length || !reviews.length || !rating) {
+        if (!stills.length || !reviews.length) {
             const parsed = await fetchJavDbMovieHtml(code, movieId).catch(() => null);
             if (parsed) {
-                if (!rating && parsed.rating) rating = parsed.rating;
                 for (const url of parsed.stills) {
                     if (!stills.includes(url)) stills.push(url);
                 }
@@ -12348,7 +12346,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 }
             }
         }
-        const partial = { rating, stills, reviews, lists, credits, javDbMovieId: movieId };
+        const partial = { stills, reviews, lists, credits, javDbMovieId: movieId, reviewsPageCount, reviewsLimit: 20 };
         onPartial?.(partial);
         return partial;
     }
@@ -12374,10 +12372,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (detailId) {
             html = await fetchHtml(`https://www.javlibrary.com/cn/?v=${detailId}`, { timeout: 3000, skipProxy: true }).catch(() => '');
         }
-        if (!html) return { rating: undefined, reviews: [] };
+        if (!html) return { reviews: [] };
         if (!javLibraryCodeMatches(html, code)) {
             debugLog(new Error(`javlibrary mismatch: ${code}`), 'javlibrary-verify');
-            return { rating: undefined, reviews: [] };
+            return { reviews: [] };
         }
         const parsed = parseJavLibraryHtml(html);
         onPartial?.(parsed);
@@ -12676,10 +12674,10 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         beginStillSearch(code);
         const session = ++state.infoSession;
         const pageReviews = extractPageReviews();
-        state.infoData = { code, rating: undefined, stills: [], reviews: pageReviews, lists: [] };
+        state.infoData = { code, stills: [], reviews: pageReviews, lists: [] };
         const cacheKey = `${INFO_CACHE_PREFIX}${code}`;
         const cached = readCache(cacheKey);
-        const cachedFilled = !!cached && !!(cached.rating || (cached.stills || []).length || (cached.reviews || []).length || (cached.lists || []).length);
+        const cachedFilled = !!cached && !!((cached.stills || []).length || (cached.reviews || []).length || (cached.lists || []).length);
         if (cachedFilled) {
             stillState.current = usableStills(cached.stills ?? []);
             stillState.fallbacks = [];
@@ -12704,9 +12702,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         };
         const onPartial = partial => {
             if (session !== state.infoSession) return;
-            if (partial.rating) {
-                if (!state.infoData.rating || partial.rating.source === 'JAVLibrary') state.infoData.rating = partial.rating;
-            }
             if (partial.stills?.length) {
                 acceptStills(partial.stills);
                 state.infoData.stills = stillState.current.slice();
@@ -12729,8 +12724,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             fetchJavLibraryInfo(code, onPartial)
         ]);
         if (session !== state.infoSession) return null;
-        const javLib = results[2].status === 'fulfilled' ? results[2].value : { rating: undefined, reviews: [] };
-        const javDb = results[1].status === 'fulfilled' ? results[1].value : { rating: undefined, stills: [], reviews: [], lists: [] };
+        const javLib = results[2].status === 'fulfilled' ? results[2].value : { reviews: [] };
+        const javDb = results[1].status === 'fulfilled' ? results[1].value : { stills: [], reviews: [], lists: [] };
         const javBus = results[0].status === 'fulfilled' ? results[0].value : { stills: [], reviews: [] };
         for (const source of [javBus, javDb, javLib]) {
             acceptStills(source.stills);
@@ -12739,45 +12734,27 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         const finalData = {
             code,
-            rating: javLib.rating || javDb.rating,
             stills: stillState.current.slice(),
             reviews: dedupeReviews(merged),
             lists: [...seenLists],
             credits: javDb.credits || state.infoData.credits || null,
-            javDbMovieId: javDb.javDbMovieId || ''
+            javDbMovieId: javDb.javDbMovieId || '',
+            reviewsPageCount: javDb.reviewsPageCount || 0,
+            reviewsLimit: javDb.reviewsLimit || 20
         };
         state.infoData = finalData;
         applyInfoToPage(finalData);
-        if (finalData.rating || finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
+        if (finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
             writeCache(cacheKey, finalData);
         } else {
             cacheForget(cacheKey);
         }
-        if (finalData.rating || finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
+        if (finalData.stills.length || finalData.reviews.length || finalData.lists.length) {
             log(`✅ 情报加载完成：${finalData.stills.length} 剧照，${finalData.reviews.length} 短评，${finalData.lists.length} 影单`);
         } else {
             log('⚠️ 情报源均无返回（可能被站点拦截）');
         }
         return finalData;
-    }
-    function injectRatingBadge(rating) {
-        if (!rating?.score) return;
-        const existing = document.querySelector('.info-rating-badge');
-        const label = `★ ${rating.score.toFixed(1)} <small>${rating.source}</small>`;
-        const title = `${rating.source} 评分：${rating.score.toFixed(1)} / 10` +
-            (rating.count ? `（${rating.count} 人评价）` : '');
-        if (existing) {
-            setMarkup(existing, label);
-            existing.title = title;
-            return;
-        }
-        const titleEl = infoAnchor();
-        if (!titleEl) return;
-        const badge = document.createElement('span');
-        badge.className = 'info-rating-badge';
-        setMarkup(badge, label);
-        badge.title = title;
-        titleEl.insertBefore(badge, titleEl.firstChild);
     }
     const SOCIAL_ICON_X = 'https://x.com/apple-touch-icon.png';
     const SOCIAL_ICON_IG = 'https://static.cdninstagram.com/rsrc.php/yw/r/icwX0xAk0pz.webp';
@@ -13143,12 +13120,19 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     const INFO_RENDER_SIG = { head: null, stills: null, reviews: null };
     const infoSigKey = (list, pick) => list.map(pick).join('\u0001');
+    function reviewsHasNextPage({ hasSource, exhausted, lastPageCount, loaded, limit }) {
+        if (!hasSource) return false;
+        if (exhausted) return false;
+        const size = Number(limit) > 0 ? Number(limit) : 20;
+        if (Number.isFinite(lastPageCount) && lastPageCount > 0) return lastPageCount >= size;
+        return Number(loaded) >= size;
+    }
     function renderInfoSection(data) {
         if (!data) return;
         const stills = usableStills(data.stills ?? []);
         const reviews = data.reviews ?? [];
         const lists = data.lists ?? [];
-        if (!data.rating && !stills.length && !reviews.length && !lists.length) {
+        if (!stills.length && !reviews.length && !lists.length) {
             closeInfoSection();
             return;
         }
@@ -13210,14 +13194,24 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             });
             refs.grid.replaceChildren(...(stillNodes.length ? stillNodes : [empty(HUB_EMPTY.stills)]));
         }
+        const reviewLimit = Number(data.reviewsLimit) || 20;
         if (state.reviewsCode !== data.code) {
             state.reviewsCode = data.code;
-            state.reviewsPage = 1;
-            state.reviewsHasMore = reviews.length >= 20;
+            const inferred = Math.max(1, Math.ceil(reviews.length / reviewLimit));
+            state.reviewsPage = Math.max(1, Number(data.reviewsPage) || inferred);
             state.reviewsLoadingMore = false;
         }
+        const lastPageCount = Number(data.reviewsPageCount);
+        const hasReviewSource = Boolean(data.javDbMovieId);
+        state.reviewsHasMore = reviewsHasNextPage({
+            hasSource: hasReviewSource,
+            exhausted: Boolean(data.reviewsExhausted),
+            lastPageCount,
+            loaded: reviews.length,
+            limit: reviewLimit
+        });
         const reviewTotal = reviews.length;
-        const reviewPage = reviews.slice(0, 120);
+        const reviewPage = reviews.slice(0, 400);
         const reviewSig = `${reviewTotal}|${state.reviewsHasMore}|${state.reviewsLoadingMore}|` +
             infoSigKey(reviewPage, review => `${review.user}\u0002${review.score}\u0002${review.date}\u0002${review.content}`);
         if (reviewSig !== INFO_RENDER_SIG.reviews) {
@@ -13257,13 +13251,23 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 more.disabled = state.reviewsLoadingMore;
                 more.addEventListener('click', loadMoreReviews);
                 footer.appendChild(more);
-            } else if (reviewNodes.length >= 20) {
+                const count = document.createElement('span');
+                count.className = 'av-hub-done';
+                count.textContent = `已加载 ${reviewNodes.length} 条`;
+                footer.appendChild(count);
+            } else if (reviewNodes.length >= reviewLimit) {
                 const done = document.createElement('span');
                 done.className = 'av-hub-done';
                 done.textContent = reviewTotal > reviewNodes.length
                     ? `已显示 ${reviewNodes.length} / 共 ${reviewTotal} 条短评`
                     : `已加载全部短评 (共 ${reviewNodes.length} 条)`;
                 footer.appendChild(done);
+            }
+            if (reviewNodes.length && !hasReviewSource) {
+                const hint = document.createElement('span');
+                hint.className = 'av-hub-done';
+                hint.textContent = '未关联到 JavDB 条目，短评无法继续翻页';
+                footer.appendChild(hint);
             }
             if (footer.childElementCount) refs.reviews.appendChild(footer);
         }
@@ -13320,8 +13324,16 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             });
         }
         info.reviews = dedupeReviews(merged);
+        info.reviewsPage = nextPage;
+        info.reviewsPageCount = list.length;
         state.reviewsPage = nextPage;
-        if (list.length < 20 || info.reviews.length === before) state.reviewsHasMore = false;
+        if (list.length < 20 || info.reviews.length === before) {
+            state.reviewsHasMore = false;
+            info.reviewsExhausted = true;
+        }
+        if (info.code) {
+            writeCache(`${INFO_CACHE_PREFIX}${info.code}`, Object.assign({}, info, { reviews: info.reviews.slice(0, 300) }));
+        }
         renderInfoSection(info);
         log(`💬 已加载更多短评（共 ${info.reviews.length} 条）`);
     }
@@ -13839,7 +13851,6 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     function applyInfoToPage(data) {
         if (!data) return;
-        if (data.rating) injectRatingBadge(data.rating);
         renderInfoSection(data);
         startJableCreditsCard(data.code);
     }
@@ -17039,7 +17050,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (docTitle) found.push(docTitle);
         return found;
     }
-    const META_INJECTED_SELECTOR = '.info-rating-badge, .social-badges, .av-record-tag, .av-persona-tag';
+    const META_INJECTED_SELECTOR = '.social-badges, .av-record-tag, .av-persona-tag';
     function metaHeadingText(element) {
         if (typeof element.cloneNode === 'function') {
             const clone = element.cloneNode(true);
@@ -20054,10 +20065,17 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
     const isAnalyticsRoute = () => cockpitSticky || analyticsRequested || /^#av-analytics\b/.test(location.hash) || location.search.includes('av-analytics');
     function installSpaWatch() {
+        if (history.__avSpaPatched) return;
         let lastUrl = location.href;
+        let playerInitTimer = 0;
+        let routeTimer = 0;
         const handleRouteChange = () => {
             if (location.href === lastUrl) return;
             lastUrl = location.href;
+            if (playerInitTimer) {
+                runtime.cancel(playerInitTimer);
+                playerInitTimer = 0;
+            }
             if (isAnalyticsRoute()) {
                 mountAnalyticsPage();
                 return;
@@ -20081,49 +20099,58 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             videoProbeAt = 0;
             stopAnalyticsTracking();
             refreshFilters();
-            document.querySelector('.info-rating-badge')?.remove();
             state.player = null;
             state.video = null;
             state.bound = false;
             stopPlayerPoll();
-            setTimeout(() => {
+            const routeUrl = lastUrl;
+            playerInitTimer = runtime.after(600, () => {
+                playerInitTimer = 0;
+                if (location.href !== routeUrl) return;
                 initPlayer();
                 clickPlayEntry();
                 syncFilterBar();
                 injectJableModelFavButton();
                 scanMissavSavedActresses();
-            }, 600);
+            }, 'spa-player-init');
         };
-        const onRouteChange = debounce(handleRouteChange, 400);
+        const onRouteChange = () => {
+            if (routeTimer) runtime.cancel(routeTimer);
+            routeTimer = runtime.after(400, () => {
+                routeTimer = 0;
+                handleRouteChange();
+            }, 'spa-route-change');
+        };
         const analyticsKick = () => {
             if (!isAnalyticsRoute()) return;
             ensureCockpit();
         };
-        window.addEventListener('popstate', onRouteChange, { passive: true });
-        window.addEventListener('hashchange', onRouteChange, { passive: true });
-        window.addEventListener('hashchange', analyticsKick, { passive: true });
-        window.addEventListener('popstate', analyticsKick, { passive: true });
+        for (const type of ['popstate', 'hashchange']) {
+            runtime.on(window, type, onRouteChange, { passive: true });
+            runtime.on(window, type, analyticsKick, { passive: true });
+        }
         let watchPending = false;
         const watchHostChurn = () => {
             if (watchPending) return;
             watchPending = true;
-            setTimeout(() => {
+            runtime.after(250, () => {
                 watchPending = false;
                 if (!isAnalyticsRoute()) return;
                 ensureCockpit();
-            }, 250);
+            }, 'spa-host-churn');
         };
         const hostObserver = new MutationObserver(() => {
             if (isAnalyticsRoute()) watchHostChurn();
         });
         trackObserver(hostObserver, document.documentElement, { childList: true });
         if (document.body) trackObserver(hostObserver, document.body, { childList: true });
-        if (history.__avSpaPatched) return;
         history.__avSpaPatched = true;
+        pageLifecycle.push(() => { delete history.__avSpaPatched; });
         for (const method of ['pushState', 'replaceState']) {
             const original = history[method];
             if (typeof original !== 'function') continue;
-            history[method] = function (...args) {
+            const own = Object.prototype.hasOwnProperty.call(history, method);
+            const patched = function (...args) {
                 const next = typeof args[2] === 'string' ? args[2] : '';
                 if (next.includes('av-analytics')) {
                     cockpitSticky = true;
@@ -20134,6 +20161,12 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
                 else onRouteChange();
                 return result;
             };
+            history[method] = patched;
+            pageLifecycle.push(() => {
+                if (history[method] !== patched) return;
+                if (own) history[method] = original;
+                else delete history[method];
+            });
         }
     }
     function bootstrapPage() {
@@ -20182,7 +20215,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         runtime.on(document, 'keydown', event => {
             if (event.key === 'Escape' && state.infoSection) setInfoExpanded(false);
         });
-        runtime.on(window, 'beforeunload', () => {
+        runtime.on(window, 'pagehide', event => {
+            if (event.persisted) return;
             state.adObserver?.disconnect();
             state.filterObserver?.disconnect();
             state.panelLayoutObserver?.disconnect();
@@ -20196,10 +20230,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             clearTimeout(state.holdTimer);
             disposePageLifecycle();
             runtime.disposeAll();
-        }, { once: true });
+            persistFlush();
+        });
     }
-    flushStyles();
-    bootstrapPage();
     const FavScreen = (function () {
 
     const CURRENT_SITE = IS_JABLE ? 'jable' : 'missav';
@@ -20215,6 +20248,13 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     const MAX_LOG_LINES = 240;
     const ENRICH_TTL = 7 * 24 * 3600 * 1000;
     const ENRICH_VERSION = 10;
+    const ENRICH_LIMITS = [30, 60, 120, 300, 600];
+    const DEFAULT_ENRICH_LIMIT = 60;
+
+    function normalizeEnrichLimit(value) {
+        const limit = Number(value);
+        return ENRICH_LIMITS.includes(limit) ? limit : DEFAULT_ENRICH_LIMIT;
+    }
 
     const GM = {
         get(key, fallback) {
@@ -20255,7 +20295,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             enriched: {},
             meta: {},
             syncs: [],
-            settings: { enrichLimit: 60, sort: 'rank' }
+            settings: { enrichLimit: DEFAULT_ENRICH_LIMIT, sort: 'rank' }
         };
     }
 
@@ -20318,8 +20358,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             saved = null;
         }
         if (!saved) saved = migrateLegacy(site);
-        if (!saved || typeof saved !== 'object') return base;
-        const merged = Object.assign(base, saved);
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
+        const merged = { ...base, ...saved };
         merged.site = site;
         merged.items = saved.items && typeof saved.items === 'object' ? saved.items : {};
         merged.enriched = saved.enriched && typeof saved.enriched === 'object' ? saved.enriched : {};
@@ -20334,7 +20374,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         } catch (error) {
             savedSettings = null;
         }
-        merged.settings = Object.assign(base.settings, saved.settings || {}, savedSettings || {});
+        merged.settings = { ...base.settings, ...saved.settings, ...savedSettings };
+        merged.settings.enrichLimit = normalizeEnrichLimit(merged.settings.enrichLimit);
         merged.syncs = Array.isArray(saved.syncs) ? saved.syncs.slice(-60) : [];
         return merged;
     }
@@ -21093,6 +21134,9 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         const run = prev.then(() => task(), () => task());
         const tail = run.then(() => sleep(gap), () => sleep(gap));
         HOST_QUEUE.set(key, tail);
+        void tail.then(() => {
+            if (HOST_QUEUE.get(key) === tail) HOST_QUEUE.delete(key);
+        });
         return run;
     }
 
@@ -21340,6 +21384,28 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         }
         for (const button of ui.sourceButtons || []) button.disabled = busy;
         if (ui.stopBtn) ui.stopBtn.hidden = !busy;
+    }
+
+    async function runCollectionTask(label, work) {
+        if (running) return;
+        const token = { cancelled: false };
+        runToken = token;
+        try {
+            setBusy(true);
+            ui.logLines = [];
+            paintLog();
+            await work(token);
+        } catch (error) {
+            pushLog(`❌ ${label}出错：${error?.message || error}`);
+        } finally {
+            runToken = null;
+            runStats = null;
+            try {
+                setBusy(false);
+            } finally {
+                commitData();
+            }
+        }
     }
 
     function mergeCards(cards, site, pageIndex, log) {
@@ -21998,17 +22064,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
     }
 
     async function runSync() {
-        if (running) return;
-        const token = { cancelled: false };
-        runToken = token;
-        runStats = { added: 0, updated: 0, seen: new Set() };
-        setBusy(true);
-        ui.logLines = [];
-        paintLog();
-        pushLog(`🚀 开始同步 ${SITE_INFO[CURRENT_SITE].label} 收藏`);
-        if (!allItems().length) pushLog('👋 首次使用：正在抓取收藏，抓完可点「深度补全」补齐女优/题材');
-        setProgress(0.02, '准备中…');
-        try {
+        return runCollectionTask('同步', async token => {
+            runStats = { added: 0, updated: 0, seen: new Set() };
+            pushLog(`🚀 开始同步 ${SITE_INFO[CURRENT_SITE].label} 收藏`);
+            if (!allItems().length) pushLog('👋 首次使用：正在抓取收藏，抓完可点「深度补全」补齐女优/题材');
+            setProgress(0.02, '准备中…');
             if (CURRENT_SITE === 'missav') await scrapeMissav(pushLog, token);
             else await scrapeJable(pushLog, token);
             const total = allItems().length;
@@ -22037,77 +22097,93 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             });
             if (state.syncs.length > 60) state.syncs = state.syncs.slice(-60);
             setProgress(1, `共收录 ${formatNumber(allItems().length)} 部`);
-        } catch (error) {
-            pushLog(`❌ 同步出错：${error && error.message ? error.message : error}`);
-        } finally {
-            bumpData();
-            persist(true);
-            runToken = null;
-            runStats = null;
-            setBusy(false);
-            refreshAll();
-        }
+        });
     }
 
-    async function fetchDetailWithFallback(item, code) {
-        const attempts = [];
-        if (item && item.href) attempts.push(item.href);
-        if (CURRENT_SITE === 'jable') {
-            const canonical = `${location.origin}/videos/${String(code || '').toLowerCase()}/`;
-            if (!attempts.includes(canonical)) attempts.push(canonical);
-        }
-        let lastError = '无数据';
-        for (const url of attempts) {
-            try {
-                const html = await withHostLimit('site', 120, () => fetchWithRetry(() => httpGet(url, 20000), 2, 700));
-                if (isBlockedHtml(html)) {
-                    lastError = '页面被拦截';
-                    continue;
-                }
-                const parsed = parseDetail(toDoc(html), url);
-                if (parsed && (parsed.actress.length || parsed.genre.length || parsed.maker)) {
-                    return { parsed, url };
-                }
-                lastError = '详情页没有元数据';
-            } catch (error) {
-                lastError = error && error.message ? error.message : String(error);
-            }
-        }
+    function enrichPause(message) {
+        return Object.assign(new Error(message), { pauseEnrich: true });
+    }
 
+    async function fetchEnrichPage(url, token) {
+        return withHostLimit('site', 120, async () => {
+            if (token.cancelled) throw new Error('已停止');
+            const target = new URL(url, location.href);
+            if (target.origin !== location.origin) throw new Error('收藏链接不在当前域名，请重新同步本站收藏');
+            const response = await fetch(target.href, {
+                mode: 'same-origin',
+                credentials: 'same-origin',
+                signal: AbortSignal.timeout(20000)
+            });
+            if (response.status === 429) throw enrichPause('站点限制请求频率（HTTP 429），请稍后再试');
+            if (response.status === 401 || response.status === 403) {
+                throw enrichPause(`站点拒绝请求（HTTP ${response.status}），请在本站确认登录或完成页面验证后再试`);
+            }
+            if (response.headers.get('cf-mitigated')?.toLowerCase() === 'challenge') {
+                throw enrichPause('站点返回验证页，请在本站完成验证后再试');
+            }
+            if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
+            const finalUrl = new URL(response.url || target.href);
+            if (response.redirected && /\/(?:login|log-in|sign-in|signin|email)\/?$/i.test(finalUrl.pathname)) {
+                throw enrichPause('站点跳转到登录页，请在本站登录后再试');
+            }
+            const html = await response.text();
+            if (!html.trim()) throw new Error('站点返回空响应');
+            if (isBlockedHtml(html)) throw enrichPause('站点返回验证页，请在本站完成验证后再试');
+            return { doc: toDoc(html), url: response.url || target.href };
+        });
+    }
+
+    async function fetchDetailWithFallback(item, code, token) {
+        const tried = new Set();
+        const slug = encodeURIComponent(String(code).toLowerCase());
+        let lastError = new Error('缺少详情链接');
+        let missingMetadata = false;
+        const tryDetail = async href => {
+            try {
+                const target = new URL(href, location.href);
+                target.hash = '';
+                if (tried.has(target.href)) return null;
+                tried.add(target.href);
+                const { doc, url } = await fetchEnrichPage(target.href, token);
+                const parsed = parseDetail(doc, url);
+                if (parsed && (parsed.actress.length || parsed.genre.length || parsed.maker)) return { parsed, url };
+                missingMetadata = true;
+            } catch (error) {
+                if (token.cancelled || error.pauseEnrich) throw error;
+                lastError = error;
+            }
+            return null;
+        };
+
+        if (item?.href) {
+            const result = await tryDetail(item.href);
+            if (result) return result;
+        }
+        const path = CURRENT_SITE === 'jable' ? `/videos/${slug}/` : `/${slug}`;
+        const canonical = await tryDetail(path);
+        if (canonical) return canonical;
         if (CURRENT_SITE === 'jable') {
             try {
-                const searchUrl = `${location.origin}/search/${encodeURIComponent(String(code || ''))}/`;
-                const listHtml = await withHostLimit('site', 120, () => fetchWithRetry(() => httpGet(searchUrl, 20000), 2, 700));
-                if (isBlockedHtml(listHtml)) throw new Error(lastError === '无数据' ? '页面被拦截' : lastError);
-                const listDoc = toDoc(listHtml);
-                const target = String(code || '').toLowerCase();
-                let href = '';
-                for (const anchor of listDoc.querySelectorAll('a[href*="/videos/"]')) {
-                    const url = absUrl(anchor.getAttribute('href'), searchUrl);
-                    if (!url) continue;
-                    const slug = (url.split('/videos/')[1] || '').toLowerCase();
-                    if (!target || slug.indexOf(target) === 0) {
-                        href = url;
-                        break;
-                    }
+                const searchUrl = `/search/${encodeURIComponent(String(code))}/`;
+                const { doc, url } = await fetchEnrichPage(searchUrl, token);
+                let found = false;
+                for (const anchor of doc.querySelectorAll('a[href*="/videos/"]')) {
+                    const href = absUrl(anchor.getAttribute('href'), url);
+                    if (!href) continue;
+                    const target = new URL(href, url);
+                    if (target.origin !== location.origin || `${target.pathname.toLowerCase().replace(/\/+$/, '')}/` !== path) continue;
+                    found = true;
+                    const detail = await tryDetail(target.href);
+                    if (detail) return detail;
                 }
-                if (!href) {
-                    lastError = lastError === '详情页没有元数据' ? lastError : '站内没有这个番号';
-                } else {
-                    const pageHtml = await withHostLimit('site', 120, () => fetchWithRetry(() => httpGet(href, 20000), 2, 700));
-                    if (!isBlockedHtml(pageHtml)) {
-                        const parsed = parseDetail(toDoc(pageHtml), href);
-                        if (parsed && (parsed.actress.length || parsed.genre.length || parsed.maker)) {
-                            return { parsed, url: href };
-                        }
-                        lastError = '详情页没有元数据';
-                    }
-                }
+                if (!found && lastError.status === 404) lastError = new Error('站内没有找到这个番号');
             } catch (error) {
-                lastError = error && error.message ? error.message : lastError;
+                if (token.cancelled || error.pauseEnrich) throw error;
+                lastError = error;
             }
         }
-        throw new Error(lastError);
+        if (missingMetadata) throw new Error('详情页已打开，但没有可补全的女优、题材或片商资料');
+        throw lastError;
     }
 
     async function runEnrich() {
@@ -22125,91 +22201,163 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const stale = !cached || !cached.checkedAt || now - cached.checkedAt > ENRICH_TTL;
             const thin = !cached || !cached.actress || !cached.actress.length;
             const oldParse = cached && cached.v !== ENRICH_VERSION;
-            const recentFailure = cached && cached.failed && !oldParse && now - (cached.checkedAt || 0) < 30 * 60 * 1000;
-            if (recentFailure) continue;
+            if (cached?.wallEnrichFailedAt && now - cached.wallEnrichFailedAt < 30 * 60 * 1000) continue;
             const fromExternal = cached && cached.source && cached.source !== '站内';
-            if (stale || thin || fromExternal || oldParse) targets.push({ code, item });
+            if (stale || thin || fromExternal || oldParse || cached?.failed || cached?.wallEnrichFailedAt) {
+                targets.push({ code, item, lastAttempt: Math.max(cached?.checkedAt || 0, cached?.wallEnrichFailedAt || 0) });
+            }
         }
-        const limit = Math.max(1, Number(state.settings.enrichLimit) || 60);
+        targets.sort((a, b) => a.lastAttempt - b.lastAttempt);
+        const limit = normalizeEnrichLimit(state.settings.enrichLimit);
         const slice = targets.slice(0, limit);
         if (!slice.length) {
             ui.logLines = [];
             pushLog('✨ 没有需要补全的番号');
             return;
         }
-        const token = { cancelled: false };
-        runToken = token;
-        setBusy(true);
-        ui.logLines = [];
-        pushLog(`✨ 开始补全：${slice.length} / ${targets.length} 个番号（只走站内详情页）`);
-        let done = 0;
-        try {
-            let warned = 0;
+        return runCollectionTask('补全', async token => {
+            pushLog(`✨ 开始补全：${slice.length} / ${targets.length} 个番号（只走站内详情页）`);
+            let done = 0;
             let failedCount = 0;
-            await mapPool(slice, 3, async entry => {
-                if (token.cancelled) return;
-                const code = entry.code;
-                let detail = null;
-                let reason = '';
-
+            let paused = false;
+            const failures = new Map();
+            setProgress(0, `补全 0/${slice.length}`);
+            for (const { code, item } of slice) {
+                if (token.cancelled) break;
                 try {
-                    if (!entry.item.href && CURRENT_SITE !== 'jable') throw new Error('缺少详情链接');
-                    const resolved = await fetchDetailWithFallback(entry.item, code);
-                    detail = resolved.parsed;
-                    if (resolved.url && entry.item.href !== resolved.url) entry.item.href = resolved.url;
-                } catch (error) {
-                    reason = error && error.message ? error.message : '无数据';
-                    detail = null;
-                }
-
-                if (!detail) {
-                    failedCount++;
+                    const { parsed: detail, url } = await fetchDetailWithFallback(item, code, token);
+                    if (token.cancelled) break;
+                    const prev = state.enriched[code] || {};
                     state.enriched[code] = {
-                        actress: [],
-                        genre: [],
-                        maker: '',
-                        failed: true,
-                        v: ENRICH_VERSION,
-                        checkedAt: Date.now()
-                    };
-                    if (warned < 5) {
-                        warned++;
-                        pushLog(`⚠️ ${code} 补全失败：${reason || '无数据'}`);
-                    }
-                } else {
-                    state.enriched[code] = {
-                        actress: detail.actress,
-                        genre: detail.genre,
-                        maker: detail.maker,
-                        title: detail.title,
-                        cover: detail.cover,
+                        ...prev,
+                        actress: detail.actress.length ? detail.actress : (prev.actress || []),
+                        genre: detail.genre.length ? detail.genre : (prev.genre || []),
+                        maker: detail.maker || prev.maker || '',
+                        title: detail.title || prev.title || '',
+                        cover: detail.cover || prev.cover || '',
                         source: '站内',
                         v: ENRICH_VERSION,
                         checkedAt: Date.now()
                     };
-                    if (detail.cover && entry.item && !entry.item.cover) entry.item.cover = detail.cover;
+                    if (prev.publicMetaSources) {
+                        const sources = { ...prev.publicMetaSources };
+                        if (detail.actress.length) delete sources.actress;
+                        if (detail.genre.length) delete sources.genre;
+                        if (detail.maker) delete sources.maker;
+                        state.enriched[code].publicMetaSources = sources;
+                    }
+                    delete state.enriched[code].failed;
+                    delete state.enriched[code].wallEnrichFailedAt;
+                    if (url) item.href = url;
+                    if (detail.cover && !item.cover) item.cover = detail.cover;
+                } catch (error) {
+                    if (token.cancelled) break;
+                    const reason = error?.message || '无数据';
+                    if (error?.pauseEnrich) {
+                        paused = true;
+                        pushLog(`⏸ ${code}：${reason}`);
+                        break;
+                    }
+                    failedCount++;
+                    const group = failures.get(reason);
+                    if (group) group.count++;
+                    else failures.set(reason, { count: 1, code });
+                    state.enriched[code] = { ...state.enriched[code], wallEnrichFailedAt: Date.now() };
                 }
                 done++;
                 setProgress(done / slice.length, `补全 ${done}/${slice.length} · ${code}`);
-                if (done % 5 === 0) {
-                    persistEnriched();
-                    pushLog(`🧾 已补全 ${done}/${slice.length} · 成功 ${done - failedCount}${failedCount ? ` · 失败 ${failedCount}` : ''}`);
-                }
-            });
-            pushLog(`✅ 详情补全完成：成功 ${done - failedCount} · 失败 ${failedCount}`);
-            setProgress(1, `补全 ${done} 个番号`);
-        } catch (error) {
-            pushLog(`❌ 补全出错：${error && error.message ? error.message : error}`);
-        } finally {
-            bumpData();
-            persist(true);
-            runToken = null;
-            setBusy(false);
-            refreshAll();
-        }
+                if (done % 5 === 0) persistEnriched();
+            }
+            for (const [reason, { count, code }] of failures) {
+                pushLog(`⚠️ ${reason}：${count} 条（例如 ${code}）`);
+            }
+            const status = paused ? '已暂停' : token.cancelled ? '已停止' : '已完成';
+            const remaining = slice.length - done;
+            pushLog(`详情补全${status}：成功 ${done - failedCount} · 失败 ${failedCount}${remaining ? ` · 未处理 ${remaining}` : ''}`);
+            setProgress(done / slice.length, `${status} · ${done}/${slice.length}`);
+        });
     }
 
-    async function runJavdbEnrich() {
+    const PUBLIC_META_FIELDS = ['actress', 'genre', 'maker'];
+    const publicMetaAttempts = new Map();
+    const hasPublicMeta = (value, field) => field === 'maker'
+        ? typeof value === 'string' && Boolean(value.trim())
+        : Array.isArray(value) && value.length > 0;
+
+    async function fetchPublicMetadataDoc(url, host) {
+        const response = await withHostLimit(`public-meta:${host}`, 500, () => gmSend(url, { anonymous: true, timeout: 10000 }));
+        const final = new URL(response.finalUrl || url);
+        const html = String(response.responseText || '');
+        if (final.protocol !== 'https:' || final.hostname.replace(/^www\./, '') !== host ||
+            /\/(?:login|sign[-_]?in|sessions\/new)\/?$/i.test(final.pathname)) {
+            throw new Error('已跳转到登录页或其他域名');
+        }
+        if (/^cf-mitigated:\s*challenge\b/im.test(response.responseHeaders || '') || (html && isBlockedHtml(html))) {
+            throw new Error('站点要求验证');
+        }
+        if (response.status === 404) return null;
+        if (response.status < 200 || response.status >= 300 || !html.trim()) {
+            throw new Error(response.status && response.status !== 200 ? `HTTP ${response.status}` : '响应为空');
+        }
+        return toDoc(html);
+    }
+
+    async function fetchPublicJavDb(code, token) {
+        const host = 'javdb.com';
+        const codeKey = javDbCodeKey(code);
+        const query = new URLSearchParams({ q: code, f: 'all' });
+        const search = await fetchPublicMetadataDoc(`https://${host}/search?${query}`, host);
+        if (!search || token.cancelled) return null;
+        const cards = search.querySelectorAll('a[href^="/v/"]');
+        const matches = new Set();
+        for (const card of cards) {
+            const path = card.getAttribute('href');
+            if (/^\/v\/[A-Za-z0-9_-]+$/.test(path) && javDbCodeKey(card.querySelector('.video-title strong')?.textContent) === codeKey) {
+                matches.add(path);
+            }
+        }
+        if (matches.size !== 1) return null;
+        const url = `https://${host}${matches.values().next().value}`;
+        const detail = await fetchPublicMetadataDoc(url, host);
+        if (!detail) return null;
+        const number = Array.from(detail.querySelectorAll('.panel-block strong')).find(node =>
+            /^(?:番號|番号|識別碼|识别码|ID|DVD ID|Code)\s*[:：]?$/i.test(node.textContent.trim()));
+        const actual = number?.closest('.panel-block')?.querySelector('.value')?.textContent;
+        if (!actual) return { unverified: true };
+        if (javDbCodeKey(actual) !== codeKey) return null;
+        return { info: parseJavdbMovieDocument(detail, code, url) };
+    }
+
+    async function fetchPublicJavDatabase(code) {
+        const host = 'javdatabase.com';
+        const slug = encodeURIComponent(code.toLowerCase());
+        const doc = await fetchPublicMetadataDoc(`https://www.${host}/movies/${slug}/`, host);
+        if (!doc) return null;
+        const root = doc.querySelector('main, #primary, article') || doc.body;
+        const labels = Array.from(root.querySelectorAll('strong, b, dt, th'));
+        const findRow = pattern => {
+            const label = labels.find(node => pattern.test(node.textContent.replace(/[:：]\s*$/, '').trim()));
+            if (!label) return null;
+            if (label.matches('dt, th')) return label.nextElementSibling;
+            return label.closest('p, li, tr') || label.parentElement;
+        };
+        const numberRow = findRow(/^DVD ID$/i);
+        const actual = numberRow?.textContent.replace(/^\s*DVD ID\s*[:：]?\s*/i, '').trim();
+        if (!actual) return { unverified: true };
+        if (javDbCodeKey(actual) !== javDbCodeKey(code)) return null;
+        const values = (row, prefix) => [...new Set(Array.from(row?.querySelectorAll('a[href]') || [], anchor => {
+            const link = new URL(anchor.getAttribute('href'), `https://www.${host}/`);
+            if (link.protocol !== 'https:' || link.hostname.replace(/^www\./, '') !== host || !link.pathname.startsWith(prefix)) return '';
+            return anchor.textContent.replace(/\s+/g, ' ').trim();
+        }).filter(Boolean))].slice(0, 20);
+        return { info: {
+            actress: values(findRow(/^Idol(?:\(s\)|s)?\s*\/\s*Actress(?:\(es\)|es)?$/i), '/idols/'),
+            genre: values(findRow(/^Genre(?:\(s\)|s)?$/i), '/genres/'),
+            maker: values(findRow(/^Studio$/i), '/studios/')[0] || ''
+        } };
+    }
+
+    async function runPublicEnrich() {
         if (running) return;
         const pending = [];
         const seen = new Set();
@@ -22217,9 +22365,7 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             const code = String(item.code || '').toUpperCase();
             if (!code || seen.has(code)) continue;
             const meta = state.enriched[code] || {};
-            const actress = meta.actress || [];
-            const genre = meta.genre || [];
-            if (actress.length && genre.length) continue;
+            if (PUBLIC_META_FIELDS.every(field => hasPublicMeta(meta[field], field))) continue;
             seen.add(code);
             pending.push(code);
         }
@@ -22228,61 +22374,72 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             pushLog('✅ 当前没有待补全的条目');
             return;
         }
-        const token = { cancelled: false };
-        runToken = token;
-        setBusy(true);
-        ui.logLines = [];
-        pushLog(`🧭 JavDB 补全：共 ${formatNumber(pending.length)} 个待补全条目（缺女优或题材）`);
-        pushLog('🧭 只覆盖这些条目的女优 / 题材 / 片商，数据以 JavDB 为准；其余条目不受影响');
-        setProgress(0.02, '准备中…');
-        let done = 0;
-        let ok = 0;
-        let fail = 0;
-        try {
-            await mapPool(pending, 3, async code => {
-                if (token.cancelled) return;
-                await sleep(120 + Math.floor(Math.random() * 180));
-                let info = null;
-                try {
-                    info = await fetchJavDbBackupInfo(code);
-                } catch (error) {
-                    info = null;
+        return runCollectionTask('公开资料补全', async token => {
+            pending.sort((a, b) => (publicMetaAttempts.get(a) || 0) - (publicMetaAttempts.get(b) || 0));
+            const batch = pending.slice(0, normalizeEnrichLimit(state.settings.enrichLimit));
+            const sources = [['JavDB', fetchPublicJavDb], ['JAV Database', fetchPublicJavDatabase]];
+            const unavailable = new Set();
+            const counts = { complete: 0, partial: 0, missing: 0, noFields: 0, deferred: 0 };
+            let done = 0;
+            pushLog(`公开资料补全：本轮 ${batch.length} / ${pending.length} 个番号（匿名查询，只补缺失字段）`);
+            setProgress(0, `公开资料补全 0/${batch.length}`);
+            for (const code of batch) {
+                if (token.cancelled || unavailable.size === sources.length) break;
+                const prev = state.enriched[code] || {};
+                const next = { ...prev, publicMetaSources: { ...prev.publicMetaSources } };
+                let matched = false;
+                let unverified = false;
+                let changed = false;
+                const used = new Set();
+                for (const [name, lookup] of sources) {
+                    if (token.cancelled || PUBLIC_META_FIELDS.every(field => hasPublicMeta(next[field], field))) break;
+                    if (unavailable.has(name)) continue;
+                    let result;
+                    try {
+                        result = await lookup(code, token);
+                    } catch (error) {
+                        unavailable.add(name);
+                        pushLog(`⚠️ ${name} 暂不可用，本轮停止查询此来源：${error?.message || '请求失败'}`);
+                        continue;
+                    }
+                    if (token.cancelled || !result) continue;
+                    if (result.unverified) {
+                        unverified = true;
+                        continue;
+                    }
+                    matched = true;
+                    for (const field of PUBLIC_META_FIELDS) {
+                        const value = result.info?.[field];
+                        if (hasPublicMeta(next[field], field) || !hasPublicMeta(value, field)) continue;
+                        next[field] = value;
+                        next.publicMetaSources[field] = name;
+                        used.add(name);
+                        changed = true;
+                    }
                 }
-                const hasData = Boolean(info && ((info.actress && info.actress.length) || (info.genre && info.genre.length) || info.maker));
-                if (!hasData) {
-                    fail++;
-                    if (fail <= 3) pushLog(`⚠️ JavDB 未找到：${code}`);
-                } else {
-                    const prev = state.enriched[code] || {};
-                    state.enriched[code] = Object.assign({}, prev, {
-                        actress: info.actress && info.actress.length ? info.actress : (prev.actress || []),
-                        genre: info.genre && info.genre.length ? info.genre : (prev.genre || []),
-                        maker: info.maker || prev.maker || '',
-                        source: 'JavDB',
-                        failed: false,
-                        v: ENRICH_VERSION,
-                        checkedAt: Date.now()
-                    });
-                    ok++;
+                if (changed) {
+                    next.source = prev.source || (used.size === 1 ? used.values().next().value : '公开资料');
+                    next.failed = false;
+                    next.v = ENRICH_VERSION;
+                    next.checkedAt = Date.now();
+                    state.enriched[code] = next;
                 }
+                if (token.cancelled) break;
+                if (publicMetaAttempts.size >= MAX_ITEMS) publicMetaAttempts.delete(publicMetaAttempts.keys().next().value);
+                publicMetaAttempts.set(code, Date.now());
+                if (changed && PUBLIC_META_FIELDS.every(field => hasPublicMeta(next[field], field))) counts.complete++;
+                else if (changed) counts.partial++;
+                else if (unavailable.size || unverified) counts.deferred++;
+                else if (matched) counts.noFields++;
+                else counts.missing++;
                 done++;
-                setProgress(done / pending.length, `JavDB 补全 ${done}/${pending.length}`);
-                if (done % 5 === 0) {
-                    persistEnriched();
-                    pushLog(`🧾 JavDB 补全 ${done}/${pending.length} · 成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
-                }
-            });
-            pushLog(`✅ JavDB 补全完成：成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
-            setProgress(1, `JavDB 补全 ${done} 个番号`);
-        } catch (error) {
-            pushLog(`❌ JavDB 补全出错：${error && error.message ? error.message : error}`);
-        } finally {
-            bumpData();
-            persist(true);
-            runToken = null;
-            setBusy(false);
-            refreshAll();
-        }
+                setProgress(done / batch.length, `公开资料补全 ${done}/${batch.length}`);
+                if (changed && done % 5 === 0) persistEnriched();
+            }
+            const status = token.cancelled ? '已停止' : unavailable.size === sources.length ? '已暂停' : '完成';
+            pushLog(`公开资料补全${status}：补齐 ${counts.complete} · 部分补齐 ${counts.partial} · 未匹配 ${counts.missing} · 缺所需字段 ${counts.noFields} · 暂未确认 ${counts.deferred} · 本轮未处理 ${batch.length - done}`);
+            setProgress(done / batch.length, `${status} · ${done}/${batch.length}`);
+        });
     }
 
     function isJunkEntry(item) {
@@ -22786,29 +22943,28 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
             runEnrich();
         });
 
-        const javdb = el('button', 'fs-btn');
-        javdb.type = 'button';
-        javdb.dataset.always = '1';
-        javdb.appendChild(icon(ICONS.external));
-        javdb.appendChild(el('span', '', 'JavDB 补全'));
-        javdb.title = '只重抓「待补全」的条目（缺女优或题材），数据以 JavDB 为准；部分内容需登录 JavDB 才能查看，请先登录；批量请求有封号风险，建议隔一段时间再跑';
-        javdb.addEventListener('click', () => {
+        const publicEnrich = el('button', 'fs-btn');
+        publicEnrich.type = 'button';
+        publicEnrich.appendChild(icon(ICONS.external));
+        publicEnrich.appendChild(el('span', '', '公开资料补全'));
+        publicEnrich.title = '无需登录；按完整番号查询公开页面，只填写缺失的女优、题材、片商';
+        publicEnrich.addEventListener('click', () => {
             if (running) return;
-            runJavdbEnrich();
+            runPublicEnrich();
         });
 
         const range = el('div', 'fs-enrich-range');
         range.appendChild(el('span', '', '每轮补全'));
         const select = el('select', 'fs-select');
-        for (const value of [30, 60, 120, 300, 600]) {
+        for (const value of ENRICH_LIMITS) {
             const option = el('option', '', String(value));
             option.value = String(value);
             if (Number(state.settings.enrichLimit) === value) option.selected = true;
             select.appendChild(option);
         }
         select.addEventListener('change', () => {
-            state.settings.enrichLimit = Number(select.value) || 60;
-            persist();
+            state.settings.enrichLimit = normalizeEnrichLimit(select.value);
+            persistSettings();
         });
         range.appendChild(select);
         range.appendChild(el('span', '', '个番号'));
@@ -22824,11 +22980,11 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         });
         ui.stopBtn = stop;
 
-        tools.append(enrich, javdb, range, stop);
-        ui.actionButtons.push(enrich, javdb);
+        tools.append(enrich, publicEnrich, range, stop);
+        ui.actionButtons.push(enrich, publicEnrich);
 
-        const syncNote = el('div', 'fs-sync-note', 'JavDB 补全只重抓「待补全」的条目（缺女优或题材），用 JavDB 的女优 / 题材 / 片商覆盖；同步与「深度补全详情」仍走站内详情页。');
-        const syncWarn = el('div', 'fs-sync-note fs-sync-warn', '⚠️ 部分条目需要登录 JavDB 才能查阅，请先登录再补全；补全会连续发起大量请求，短时间内频繁操作有封号风险，建议少量多次、隔一段时间再跑。');
+        const syncNote = el('div', 'fs-sync-note', '「公开资料补全」匿名查询 JavDB 和 JAV Database，只补缺失的女优 / 题材 / 片商；同步与「深度补全详情」仍走站内详情页。');
+        const syncWarn = el('div', 'fs-sync-note fs-sync-warn', '公开来源遇到验证或限流时，本轮停止查询该来源。未查到的条目可稍后重试，已有资料不受影响。');
 
         const progress = el('div', 'fs-progress-wrap');
         const bar = el('div', 'fs-progress');
@@ -23321,48 +23477,44 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         if (!window.confirm(`即将取消 ${items.length} 部影片的收藏：\n· 会到 ${label} 逐个取消收藏\n· 成功后再删除大屏本地记录\n\n确定继续？`)) return;
         if (!window.confirm(`再次确认：这 ${items.length} 部会从站点收藏中移除，只能重新手动收藏。\n\n真的要执行吗？`)) return;
 
-        const token = { cancelled: false };
-        runToken = token;
-        setBusy(true);
-        ui.logLines = [];
-        pushLog(`🗑️ 开始取消收藏：${items.length} 部（站点 + 本地）`);
-        setProgress(0.02, '准备中…');
-        const frame = createHiddenFrame();
-        let ok = 0;
-        let fail = 0;
-        try {
-            for (let index = 0; index < items.length; index++) {
-                if (token.cancelled) break;
-                const item = items[index];
-                const result = await unfavoriteOne(frame, item);
-                if (result.ok) {
-                    delete state.items[item.id];
-                    ui.selected.delete(item.id);
-                    ok++;
-                    if (result.note) pushLog(`ℹ️ ${item.code || item.id}：${result.note}`);
-                } else {
-                    fail++;
-                    if (fail <= 5) pushLog(`⚠️ ${item.code || item.id} 取消失败：${result.reason}`);
+        await runCollectionTask('取消收藏', async token => {
+            pushLog(`🗑️ 开始取消收藏：${items.length} 部（站点 + 本地）`);
+            setProgress(0.02, '准备中…');
+            let frame;
+            let ok = 0;
+            let fail = 0;
+            let processed = 0;
+            try {
+                frame = createHiddenFrame();
+                for (const item of items) {
+                    if (token.cancelled) break;
+                    const result = await unfavoriteOne(frame, item);
+                    if (result.ok) {
+                        delete state.items[item.id];
+                        ui.selected.delete(item.id);
+                        ok++;
+                        if (result.note) pushLog(`ℹ️ ${item.code || item.id}：${result.note}`);
+                    } else {
+                        fail++;
+                        if (fail <= 5) pushLog(`⚠️ ${item.code || item.id} 取消失败：${result.reason}`);
+                    }
+                    processed++;
+                    setProgress(processed / items.length, `取消收藏 ${processed}/${items.length}`);
+                    if (processed % 5 === 0) {
+                        commitData();
+                        pushLog(`🧾 已处理 ${processed}/${items.length} · 成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
+                    }
+                    if (!token.cancelled && processed < items.length) await sleep(320);
                 }
-                setProgress((index + 1) / items.length, `取消收藏 ${index + 1}/${items.length}`);
-                if ((index + 1) % 5 === 0) {
-                    commitData();
-                    pushLog(`🧾 已处理 ${index + 1}/${items.length} · 成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
-                }
-                await sleep(320);
+                const status = processed === items.length ? '完成' : '已停止';
+                pushLog(`取消收藏${status}：成功 ${ok} · 失败 ${fail} · 未处理 ${items.length - processed}`);
+                setProgress(processed / items.length, `${status} · ${processed}/${items.length}`);
+            } finally {
+                frame?.remove();
             }
-            pushLog(`✅ 取消收藏完成：成功 ${ok}${fail ? ` · 失败 ${fail}` : ''}`);
-            setProgress(1, `取消收藏 ${ok} 部`);
-        } catch (error) {
-            pushLog(`❌ 取消收藏出错：${error && error.message ? error.message : error}`);
-        } finally {
-            frame.remove();
-            runToken = null;
-            setBusy(false);
-            commitData();
-            if (!ui.selected.size) setSelectMode(false);
-            else updateSelectBar();
-        }
+        });
+        if (!ui.selected.size) setSelectMode(false);
+        else updateSelectBar();
     }
 
     function matchQuery(item, query) {
@@ -25070,6 +25222,8 @@ html.av-theater-mode .custom-subtitle { max-width: 88% !important; }
         window.__avFavScreen = FavScreen;
     } catch (error) { }
 
+    flushStyles();
+    bootstrapPage();
     registerPanelMenus();
     } catch (error) {
         console.error('[av-helper] 初始化失败:', error && error.message ? error.message : error);
